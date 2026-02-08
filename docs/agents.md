@@ -51,7 +51,34 @@ Módulo sencillo para interactuar con Qiskit. Se encarga de:
 
 **Dependencias principales:** `qiskit >= 2.0`, `qiskit-aer`, `qiskit-ibm-runtime`
 
-> ⚠️ **NOTA IMPORTANTE sobre Qiskit:** Este proyecto usa **Qiskit 2.3.0** (nueva arquitectura unificada, post Qiskit 1.0). La API cambió significativamente respecto a Qiskit 0.x (Terra/Aer/Ignis separados). No usar imports del tipo `qiskit.terra.*`. Consultar la [guía de migración](https://docs.quantum.ibm.com/migration-guides).
+> ⚠️ **CRÍTICO: Protocolo de Versión Qiskit 2.3.0 (Qiskit 1.0+)**
+> 
+> Este proyecto opera bajo **Qiskit 2.3.0**. Las versiones 1.0+ introdujeron "breaking changes" masivos. El código generado por conocimiento previo a 2024 suele fallar.
+>
+> **REGLAS ABSOLUTAS E INVIOLABLES DE QISKIT:**
+> 1. **Estructura de Paquetes (The Monolith is Gone):** 
+>    - ❌ NUNCA importar: `qiskit.terra`, `qiskit.aer` (paquete legacy), `qiskit.ignis`, `qiskit.aqua`, `qiskit.finance`, `qiskit.optimization`, `qiskit.ml`.
+>    - ✅ IMPORTAR ASÍ: `import qiskit`, `from qiskit import QuantumCircuit`, `from qiskit.transpiler import ...`.
+>    - ✅ Simulador: `import qiskit_aer` (¡con guion bajo!).
+> 
+> 2. **Ejecución y Backend:**
+>    - ❌ NUNCA usar: `qiskit.execute()`, `QuantumInstance`, `qiskit.providers.ibmq`.
+>    - ✅ USAR: `backend.run(transpiled_circuit)` o Primitivas (`SamplerV2`, `EstimatorV2`).
+> 
+> 3. **Circuitos y Operadores:**
+>    - ❌ Métodos obsoletos: `circuit.qasm()` (usar `qasm2` module), `bind_parameters` (ciertos contextos), `snapshot`.
+>    - ✅ Parametrización: Usar `assign_parameters()`.
+>
+> 4. **Algoritmos:**
+>    - Todo `qiskit.algorithms` está **DEPRECADO/ELIMINADO**. Usar librerías específicas (o `scipy` + primitivas si es necesario reimplementar).
+>
+> **Si dudas, consulta la [Guía de Migración a Qiskit 1.0](https://docs.quantum.ibm.com/migration-guides). El código que no cumpla esto será rechazado sistemáticamente.**
+
+#### Política de Backends (Sin API Keys)
+**IMPORTANTE:** No se utilizarán backends reales ni claves de API (IBM Quantum Token). 
+- Se utilizarán exclusivamente **Fake Backends** (e.g., `FakeTorino`, `FakeSherbrooke`, `FakeBrisbane`) disponibles en `qiskit_ibm_runtime.fake_provider` o generados artificialmente.
+- El objetivo es simular la topología, conectividad y conjunto de puertas de un dispositivo real para la transpilación.
+- **No se envía ningún circuito a ejecución remota**. Solo buscamos los **resultados de la transpilación** y sus **métricas** (profundidad, CNOTs, etc.).
 
 ### Módulo 2 — Aprendizaje por Refuerzo (`rl_module/`)
 
@@ -179,6 +206,7 @@ TFG-Quantum-Transpiler/
 | **Qiskit IBM Transpiler** | 0.16.0 | AI transpiler passes de IBM |
 | **TensorBoard** | 2.20.0 | Logging de entrenamiento RL |
 
+
 ---
 
 ## Pipeline Conceptual
@@ -188,7 +216,7 @@ Circuito Cuántico Abstracto
          │
          ▼
  ┌───────────────────┐
- │ Módulo 1: Qiskit  │  Extraer info del circuito y del backend destino
+ │ Módulo 1: Qiskit  │  Extraer info e info del backend (FakeBackend)
  │ (Interfaz)        │  (coupling map, puertas nativas, métricas iniciales)
  └────────┬──────────┘
           │
@@ -217,26 +245,19 @@ Circuito Cuántico Abstracto
 
 ---
 
-## Referencias Bibliográficas
-
-1. Nielsen, M.A. & Chuang, I.L. — *Quantum Computation and Quantum Information* (2010)
-2. Visconti et al. — *AI-driven circuit synthesis with reinforcement learning* (arXiv:2405.13196, 2024)
-3. Blank & Deb — *pymoo: Multi-objective Optimization in Python* (IEEE Access, 2020)
-4. IBM Quantum — *Qiskit AI Transpiler Passes Documentation* (2024)
-5. Qiskit Contributors — *Qiskit IBM Transpiler Service* (GitHub, 2024)
-6. Towers et al. — *Gymnasium: A Standard Interface for RL Environments* (Farama Foundation, 2023)
-7. Paszke et al. — *PyTorch: An Imperative Style, High-Performance Deep Learning Library* (NeurIPS, 2019)
-8. Raffin et al. — *Stable Baselines3: Reliable RL Implementations* (JMLR, 2021)
-
----
-
 ## Convenciones para Agentes IA
 
 - **Lenguaje de código**: Python 3.10+
 - **Gestor de paquetes**: pip con virtualenv (`.venv/`)
 - **Ejecutar Python**: usar `C:/Users/Eduardo/Desktop/universidad/TFG-Quantum-Transpiler/.venv/Scripts/python.exe`
-- **Qiskit 2.x**: NO usar imports legacy (`qiskit.terra`, `qiskit.ignis`). Usar directamente `from qiskit import QuantumCircuit`, `from qiskit.transpiler import ...`, etc.
+- **Qiskit 2.x ENFORCEMENT (Estricto):**
+    - **Prohibido**: `qiskit.terra`, `qiskit.ibmq` (usar `qiskit_ibm_runtime`), `qiskit.execute()`, `QuantumInstance`.
+    - **Aer**: Usar `import qiskit_aer` (paquete separado).
+    - **Transpilador**: Estructura modular en `qiskit.transpiler`. Uso intensivo de `PassManager`.
+    - **Validación**: Verificar siempre compatibilidad con Qiskit 2.0 antes de sugerir código.
 - **Entornos RL**: usar `gymnasium` (NO `gym` antiguo de OpenAI)
+- **NO API KEYS**: Todo el desarrollo y pruebas debe ser local usando Fake Backends (ej. `FakeTorino`). Simulación de hardware sin conexión.
+- **Metas**: Obtener métricas de transpilación (calidad del circuito), no ejecutar algoritmos cuánticos reales.
 - **GPU**: disponible (CUDA 12.1, RTX 3060). Usar `torch.device('cuda')` cuando sea beneficioso
 - **Estilo de código**: PEP 8, type hints recomendados, docstrings en español o inglés
 - **Tests**: pytest como framework de testing
