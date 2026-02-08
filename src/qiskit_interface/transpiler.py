@@ -1,0 +1,655 @@
+"""
+transpiler.py — Transpilación estándar de Qiskit (baseline)
+============================================================
+
+Módulo 1 del TFG: Interfaz con Qiskit.
+
+Este fichero implementa la transpilación estándar de Qiskit como
+**línea base (baseline)** contra la que se comparará el enfoque
+híbrido MO+RL del TFG.
+
+Funcionalidades principales:
+  - Transpilación estándar a los 4 niveles de optimización de Qiskit (0–3).
+  - Transpilación con layout inicial personalizado (para recibir los
+    layouts del módulo MO).
+  - Comparación pre/post transpilación con métricas detalladas.
+  - Transpilación batch de múltiples circuitos.
+  - Generación de resultados de benchmark tabulados.
+
+Decisiones de diseño:
+  1. **Solo transpilación, no ejecución** — Según la política del
+     proyecto, NO se ejecutan circuitos ni se envían a backends reales.
+     Solo se aplica ``qiskit.transpile()`` y se analizan las métricas
+     del resultado.
+
+  2. **qiskit.transpile()** — Se usa la función de alto nivel
+     ``qiskit.transpile()`` que internamente ejecuta el StagedPassManager
+     de Qiskit. Los niveles 0–3 activan pases de optimización
+     progresivamente más agresivos:
+       - Nivel 0: solo mapeo básico (sin optimización).
+       - Nivel 1: mapeo + optimización ligera (cancelación de CNOT inversos).
+       - Nivel 2: + Layout heurístico (SABRE) + síntesis básica.
+       - Nivel 3: + Layout denso + resíntesis + todas las optimizaciones.
+
+  3. **TranspilationResult dataclass** — Los resultados se devuelven
+     como objetos tipados que incluyen tanto el circuito transpilado
+     como sus métricas y las del circuito original, facilitando la
+     comparación directa.
+
+  4. **Soporte de layout inicial** — Se permite pasar un ``initial_layout``
+     (lista de qubits físicos) para inyectar los layouts del módulo MO.
+     Esto es el puente entre la optimización multiobjetivo y la
+     transpilación.
+
+  5. **Seed de transpilación** — Se propaga siempre una seed para
+     garantizar la reproducibilidad de los resultados (esencial para
+     benchmarking científico).
+
+Autor: Eduardo González Bautista
+Fecha: 2026-02-08
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Optional, Union
+
+# ---------------------------------------------------------------------------
+# Imports de Qiskit 2.3.0
+# ---------------------------------------------------------------------------
+from qiskit import QuantumCircuit, transpile  # Circuito + transpilación
+from qiskit.transpiler import CouplingMap     # Para layouts manuales
+
+# ---------------------------------------------------------------------------
+# Imports internos del módulo
+# ---------------------------------------------------------------------------
+from .circuit_utils import CircuitMetrics, extract_metrics
+from .backend_info import (
+    BackendInfo,
+    extract_backend_info,
+    get_backend,
+)
+
+# ---------------------------------------------------------------------------
+# Logger del módulo
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+
+# ===========================================================================
+#  Constantes
+# ===========================================================================
+
+# Niveles de optimización disponibles en Qiskit.
+# Se documentan para referencia rápida.
+OPTIMIZATION_LEVELS: dict[int, str] = {
+    0: "Sin optimización — solo mapeo trivial y descomposición a basis gates",
+    1: "Optimización ligera — cancelación de puertas inversas + SABRE layout",
+    2: "Optimización media — resíntesis de bloques 2Q + heurísticas avanzadas",
+    3: "Optimización máxima — resíntesis completa + layout denso + todas las técnicas",
+}
+
+# Seed por defecto para reproducibilidad.
+DEFAULT_SEED = 42
+
+
+# ===========================================================================
+#  Dataclass para resultados de transpilación
+# ===========================================================================
+
+@dataclass
+class TranspilationResult:
+    """Resultado completo de una transpilación.
+
+    Almacena el circuito original, el transpilado, las métricas de ambos,
+    y metadatos del proceso (nivel de optimización, tiempo, layout usado).
+
+    Attributes:
+        original_circuit:
+            Circuito tal como se proporcionó (antes de transpilar).
+        transpiled_circuit:
+            Circuito después de transpilar al backend.
+        original_metrics:
+            Métricas del circuito original.
+        transpiled_metrics:
+            Métricas del circuito transpilado.
+        optimization_level:
+            Nivel de optimización usado (0–3).
+        backend_name:
+            Nombre del backend usado para la transpilación.
+        initial_layout:
+            Layout inicial proporcionado (None si se usó el por defecto).
+        final_layout:
+            Layout final aplicado por el transpilador.
+        elapsed_time_s:
+            Tiempo de transpilación en segundos.
+        seed:
+            Seed usada para reproducibilidad.
+    """
+
+    original_circuit: Optional[QuantumCircuit] = None
+    transpiled_circuit: Optional[QuantumCircuit] = None
+    original_metrics: Optional[CircuitMetrics] = None
+    transpiled_metrics: Optional[CircuitMetrics] = None
+    optimization_level: int = 1
+    backend_name: str = ""
+    initial_layout: Optional[list[int]] = None
+    final_layout: Optional[list[int]] = None
+    elapsed_time_s: float = 0.0
+    seed: int = DEFAULT_SEED
+
+    # ----- Propiedades derivadas -----
+
+    @property
+    def depth_reduction(self) -> float:
+        """Ratio de reducción de profundidad (valores > 0 indican mejora).
+
+        Fórmula: (depth_original - depth_transpiled) / depth_original
+        Un valor de 0.3 significa 30% de reducción de profundidad.
+        Valores negativos indican que la transpilación aumentó la profundidad
+        (normal cuando se añaden SWAPs y descomposición a basis gates).
+        """
+        if self.original_metrics and self.transpiled_metrics:
+            orig = self.original_metrics.depth
+            trans = self.transpiled_metrics.depth
+            return (orig - trans) / orig if orig > 0 else 0.0
+        return 0.0
+
+    @property
+    def two_qubit_gate_overhead(self) -> float:
+        """Overhead de puertas 2Q introducido por la transpilación.
+
+        Fórmula: transpiled_2q / original_2q
+        Un valor de 2.0 significa que se duplicaron las puertas 2Q.
+        """
+        if self.original_metrics and self.transpiled_metrics:
+            orig = self.original_metrics.two_qubit_gates
+            trans = self.transpiled_metrics.two_qubit_gates
+            return trans / orig if orig > 0 else float(trans)
+        return 0.0
+
+    def summary(self) -> str:
+        """Devuelve un resumen legible del resultado de la transpilación."""
+        om = self.original_metrics
+        tm = self.transpiled_metrics
+
+        lines = [
+            f"  Backend:           {self.backend_name}",
+            f"  Nivel optim.:      {self.optimization_level} "
+            f"({OPTIMIZATION_LEVELS.get(self.optimization_level, '?')})",
+            f"  Seed:              {self.seed}",
+            f"  Tiempo transpi.:   {self.elapsed_time_s:.3f} s",
+            "",
+            "  --- Métricas originales ---",
+        ]
+        if om:
+            lines += [
+                f"    Profundidad:     {om.depth}",
+                f"    Puertas 2Q:      {om.two_qubit_gates}",
+                f"    Total puertas:   {om.total_gates}",
+                f"    Qubits:          {om.num_qubits}",
+            ]
+        lines += ["", "  --- Métricas transpiladas ---"]
+        if tm:
+            lines += [
+                f"    Profundidad:     {tm.depth}",
+                f"    Puertas 2Q:      {tm.two_qubit_gates}",
+                f"    Total puertas:   {tm.total_gates}",
+                f"    Qubits:          {tm.num_qubits}",
+            ]
+        lines += [
+            "",
+            f"  Reducción depth:   {self.depth_reduction:+.1%}",
+            f"  Overhead 2Q:       {self.two_qubit_gate_overhead:.2f}x",
+        ]
+
+        if self.initial_layout is not None:
+            lines.append(f"  Layout inicial:    {self.initial_layout}")
+
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        """Convierte el resultado a diccionario (para pandas/JSON)."""
+        result = {
+            "backend_name": self.backend_name,
+            "optimization_level": self.optimization_level,
+            "seed": self.seed,
+            "elapsed_time_s": self.elapsed_time_s,
+            "depth_reduction": self.depth_reduction,
+            "two_qubit_gate_overhead": self.two_qubit_gate_overhead,
+        }
+        if self.original_metrics:
+            for key, val in self.original_metrics.to_dict().items():
+                result[f"orig_{key}"] = val
+        if self.transpiled_metrics:
+            for key, val in self.transpiled_metrics.to_dict().items():
+                result[f"trans_{key}"] = val
+        if self.initial_layout is not None:
+            result["initial_layout"] = self.initial_layout
+        return result
+
+
+# ===========================================================================
+#  Funciones de transpilación
+# ===========================================================================
+
+def transpile_circuit(
+    circuit: QuantumCircuit,
+    backend=None,
+    backend_name: str = "fake_torino",
+    optimization_level: int = 1,
+    initial_layout: Optional[list[int]] = None,
+    seed: int = DEFAULT_SEED,
+    routing_method: Optional[str] = None,
+    layout_method: Optional[str] = None,
+) -> TranspilationResult:
+    """Transpila un circuito cuántico al conjunto de puertas de un backend.
+
+    Esta es la función principal de transpilación. Envuelve
+    ``qiskit.transpile()`` añadiendo:
+      - Extracción automática de métricas pre y post transpilación.
+      - Medición del tiempo de transpilación.
+      - Soporte para layout inicial personalizado (del módulo MO).
+      - Empaquetado del resultado en ``TranspilationResult``.
+
+    Args:
+        circuit:
+            Circuito a transpilar.
+        backend:
+            Instancia de backend. Si es None, se usa ``backend_name``
+            para instanciar uno.
+        backend_name:
+            Nombre del backend a usar si ``backend`` es None.
+            Valores válidos: ``"fake_torino"``, ``"fake_sherbrooke"``,
+            ``"fake_brisbane"``.
+        optimization_level:
+            Nivel de optimización (0–3). Ver ``OPTIMIZATION_LEVELS``.
+        initial_layout:
+            Layout inicial como lista de qubits físicos.
+            ``initial_layout[i]`` = qubit físico para el qubit lógico ``i``.
+            Si es None, el transpilador elige automáticamente (SABRE/trivial).
+        seed:
+            Semilla para el transpilador (reproducibilidad).
+        routing_method:
+            Método de routing explícito (e.g., ``"sabre"``, ``"stochastic"``).
+            Si es None, Qiskit elige según el nivel de optimización.
+        layout_method:
+            Método de layout explícito (e.g., ``"sabre"``, ``"trivial"``,
+            ``"dense"``).
+            Si es None, Qiskit elige según el nivel de optimización.
+
+    Returns:
+        TranspilationResult con el circuito transpilado y métricas.
+    """
+    # --- Obtener backend si no se proporcionó ---
+    if backend is None:
+        backend = get_backend(backend_name)
+
+    actual_backend_name = getattr(backend, "name", backend_name)
+
+    # --- Métricas del circuito original ---
+    original_metrics = extract_metrics(circuit)
+
+    logger.info(
+        "Transpilando circuito '%s' (%d qubits, depth=%d) → backend '%s' "
+        "(nivel=%d, layout=%s)",
+        circuit.name or "?",
+        circuit.num_qubits,
+        circuit.depth(),
+        actual_backend_name,
+        optimization_level,
+        initial_layout,
+    )
+
+    # --- Construir kwargs para qiskit.transpile() ---
+    transpile_kwargs = {
+        "circuits": circuit,
+        "backend": backend,
+        "optimization_level": optimization_level,
+        "seed_transpiler": seed,
+    }
+
+    # Añadir layout inicial si se proporcionó
+    if initial_layout is not None:
+        transpile_kwargs["initial_layout"] = initial_layout
+
+    # Añadir métodos de routing/layout si se especificaron
+    if routing_method is not None:
+        transpile_kwargs["routing_method"] = routing_method
+    if layout_method is not None:
+        transpile_kwargs["layout_method"] = layout_method
+
+    # --- Ejecutar transpilación con medición de tiempo ---
+    t_start = time.perf_counter()
+    transpiled = transpile(**transpile_kwargs)
+    t_end = time.perf_counter()
+    elapsed = t_end - t_start
+
+    # --- Métricas del circuito transpilado ---
+    transpiled_metrics = extract_metrics(transpiled)
+
+    # --- Intentar extraer el layout final aplicado ---
+    final_layout = None
+    try:
+        # En Qiskit 2.x, el layout final se almacena en los metadatos
+        # de transpilación del circuito
+        if hasattr(transpiled, "layout") and transpiled.layout is not None:
+            layout_obj = transpiled.layout
+            # Extraer el mapeo inicial del TranspileLayout
+            if hasattr(layout_obj, "initial_layout") and layout_obj.initial_layout is not None:
+                il = layout_obj.initial_layout
+                # Obtener la lista de qubits lógicos → físicos
+                final_layout = [
+                    il[circuit.qubits[i]]
+                    for i in range(circuit.num_qubits)
+                ]
+    except Exception as e:
+        logger.debug("No se pudo extraer el layout final: %s", e)
+
+    # --- Construir resultado ---
+    result = TranspilationResult(
+        original_circuit=circuit,
+        transpiled_circuit=transpiled,
+        original_metrics=original_metrics,
+        transpiled_metrics=transpiled_metrics,
+        optimization_level=optimization_level,
+        backend_name=actual_backend_name,
+        initial_layout=initial_layout,
+        final_layout=final_layout,
+        elapsed_time_s=elapsed,
+        seed=seed,
+    )
+
+    logger.info(
+        "Transpilación completada en %.3f s — "
+        "depth: %d→%d, 2Q gates: %d→%d",
+        elapsed,
+        original_metrics.depth,
+        transpiled_metrics.depth,
+        original_metrics.two_qubit_gates,
+        transpiled_metrics.two_qubit_gates,
+    )
+
+    return result
+
+
+def transpile_all_levels(
+    circuit: QuantumCircuit,
+    backend=None,
+    backend_name: str = "fake_torino",
+    initial_layout: Optional[list[int]] = None,
+    seed: int = DEFAULT_SEED,
+) -> dict[int, TranspilationResult]:
+    """Transpila un circuito a los 4 niveles de optimización (0–3).
+
+    Permite comparar rápidamente el efecto de cada nivel de optimización
+    sobre las métricas del circuito. Es la función principal para
+    establecer la baseline.
+
+    Args:
+        circuit:
+            Circuito a transpilar.
+        backend:
+            Backend a usar. Si es None, se instancia con ``backend_name``.
+        backend_name:
+            Nombre del backend (usado si ``backend`` es None).
+        initial_layout:
+            Layout inicial (opcional). Se usa el mismo en todos los niveles
+            para una comparación justa.
+        seed:
+            Semilla para reproducibilidad.
+
+    Returns:
+        Diccionario ``{nivel: TranspilationResult}``.
+    """
+    # Instanciar backend una sola vez para reusar
+    if backend is None:
+        backend = get_backend(backend_name)
+
+    results: dict[int, TranspilationResult] = {}
+
+    for level in range(4):
+        logger.info("--- Transpilando nivel %d/3 ---", level)
+        results[level] = transpile_circuit(
+            circuit=circuit,
+            backend=backend,
+            optimization_level=level,
+            initial_layout=initial_layout,
+            seed=seed,
+        )
+
+    return results
+
+
+def transpile_batch(
+    circuits: dict[str, QuantumCircuit],
+    backend=None,
+    backend_name: str = "fake_torino",
+    optimization_level: int = 1,
+    seed: int = DEFAULT_SEED,
+) -> dict[str, TranspilationResult]:
+    """Transpila un lote de circuitos al mismo backend y nivel.
+
+    Útil para ejecutar suites de benchmark completas.
+
+    Args:
+        circuits:
+            Diccionario ``{nombre: QuantumCircuit}``. Se puede generar
+            con ``circuit_utils.circuits_from_library()``.
+        backend:
+            Backend a usar.
+        backend_name:
+            Nombre del backend (usado si ``backend`` es None).
+        optimization_level:
+            Nivel de optimización.
+        seed:
+            Semilla para reproducibilidad.
+
+    Returns:
+        Diccionario ``{nombre: TranspilationResult}``.
+    """
+    if backend is None:
+        backend = get_backend(backend_name)
+
+    results: dict[str, TranspilationResult] = {}
+
+    for name, circuit in circuits.items():
+        logger.info("Transpilando circuito '%s'...", name)
+        results[name] = transpile_circuit(
+            circuit=circuit,
+            backend=backend,
+            optimization_level=optimization_level,
+            seed=seed,
+        )
+
+    logger.info("Batch completado: %d circuitos transpilados.", len(results))
+    return results
+
+
+# ===========================================================================
+#  Comparación y análisis
+# ===========================================================================
+
+def compare_transpilation_results(
+    results: dict[Union[int, str], TranspilationResult],
+) -> list[dict]:
+    """Genera una tabla comparativa de múltiples transpilaciones.
+
+    Acepta resultados indexados por nivel de optimización (int) o por
+    nombre de circuito (str). Devuelve una lista de diccionarios que
+    se puede convertir directamente a un DataFrame de pandas.
+
+    Args:
+        results: Diccionario de resultados de transpilación.
+
+    Returns:
+        Lista de diccionarios con las métricas de cada resultado,
+        listos para ``pandas.DataFrame(lista)``.
+
+    Example:
+        >>> results = transpile_all_levels(circuit, backend)
+        >>> import pandas as pd
+        >>> df = pd.DataFrame(compare_transpilation_results(results))
+        >>> print(df)
+    """
+    rows = []
+
+    for key, result in results.items():
+        row = {"label": str(key)}
+        row.update(result.to_dict())
+        rows.append(row)
+
+    return rows
+
+
+def print_transpilation_comparison(
+    results: dict[Union[int, str], TranspilationResult],
+) -> None:
+    """Imprime una comparación formateada de transpilaciones en consola.
+
+    Muestra una tabla con profundidad, puertas 2Q, total de puertas
+    y tiempo para cada resultado.
+
+    Args:
+        results: Diccionario de resultados de transpilación.
+    """
+    print(f"\n{'=' * 80}")
+    print(f"  COMPARACIÓN DE TRANSPILACIONES")
+    print(f"{'=' * 80}")
+    print(
+        f"  {'Label':<20} {'Depth':>8} {'2Q Gates':>10} {'Total':>8} "
+        f"{'Time (s)':>10} {'Δ Depth':>10}"
+    )
+    print(f"  {'-' * 70}")
+
+    for key, result in results.items():
+        tm = result.transpiled_metrics
+        if tm is None:
+            continue
+
+        print(
+            f"  {str(key):<20} {tm.depth:>8} {tm.two_qubit_gates:>10} "
+            f"{tm.total_gates:>8} {result.elapsed_time_s:>10.3f} "
+            f"{result.depth_reduction:>+10.1%}"
+        )
+
+    print(f"{'=' * 80}\n")
+
+
+def transpile_with_custom_layout(
+    circuit: QuantumCircuit,
+    layout: list[int],
+    backend=None,
+    backend_name: str = "fake_torino",
+    optimization_level: int = 1,
+    seed: int = DEFAULT_SEED,
+) -> TranspilationResult:
+    """Transpila un circuito con un layout inicial específico.
+
+    Esta función es el **puente principal** entre el módulo MO y la
+    transpilación: el optimizador multiobjetivo genera layouts candidatos
+    y esta función los evalúa transpilando el circuito con cada layout
+    propuesto.
+
+    Decisión: se usa ``layout_method="trivial"`` cuando se proporciona
+    un layout inicial para evitar que Qiskit lo sobreescriba con SABRE.
+    El layout ya fue optimizado por el módulo MO, así que queremos
+    preservarlo exactamente.
+
+    Args:
+        circuit: Circuito a transpilar.
+        layout: Lista de qubits físicos.
+        backend: Backend a usar.
+        backend_name: Nombre del backend.
+        optimization_level: Nivel de optimización.
+        seed: Semilla.
+
+    Returns:
+        TranspilationResult con las métricas resultantes.
+    """
+    return transpile_circuit(
+        circuit=circuit,
+        backend=backend,
+        backend_name=backend_name,
+        optimization_level=optimization_level,
+        initial_layout=layout,
+        seed=seed,
+        # No forzamos layout_method para permitir que Qiskit
+        # aplique routing (SABRE) sobre el layout dado
+    )
+
+
+# ===========================================================================
+#  Pipeline de baseline completo
+# ===========================================================================
+
+def run_baseline(
+    circuit: QuantumCircuit,
+    backend_names: Optional[list[str]] = None,
+    optimization_levels: Optional[list[int]] = None,
+    seed: int = DEFAULT_SEED,
+) -> list[dict]:
+    """Ejecuta un benchmark baseline completo.
+
+    Transpila el circuito dado en múltiples combinaciones de backend
+    y nivel de optimización, recopilando todas las métricas.
+
+    Decisión: el resultado es una lista de diccionarios «flat» que
+    se puede convertir directamente a un DataFrame de pandas para
+    análisis estadístico con el módulo de integración.
+
+    Args:
+        circuit:
+            Circuito a analizar.
+        backend_names:
+            Lista de nombres de backends. Por defecto todos los
+            disponibles (Torino, Sherbrooke, Brisbane).
+        optimization_levels:
+            Lista de niveles de optimización. Por defecto [0, 1, 2, 3].
+        seed:
+            Semilla para reproducibilidad.
+
+    Returns:
+        Lista de diccionarios con métricas de cada combinación
+        (backend × nivel), listos para ``pd.DataFrame(lista)``.
+
+    Example:
+        >>> import pandas as pd
+        >>> from src.qiskit_interface.circuit_utils import create_ghz_circuit
+        >>> ghz = create_ghz_circuit(5)
+        >>> rows = run_baseline(ghz)
+        >>> df = pd.DataFrame(rows)
+        >>> print(df[["backend_name", "optimization_level", "trans_depth", "trans_two_qubit_gates"]])
+    """
+    if backend_names is None:
+        backend_names = ["fake_torino", "fake_sherbrooke", "fake_brisbane"]
+    if optimization_levels is None:
+        optimization_levels = [0, 1, 2, 3]
+
+    all_rows: list[dict] = []
+
+    for bname in backend_names:
+        logger.info("=== Baseline en backend '%s' ===", bname)
+        backend = get_backend(bname)
+
+        for level in optimization_levels:
+            result = transpile_circuit(
+                circuit=circuit,
+                backend=backend,
+                optimization_level=level,
+                seed=seed,
+            )
+            row = {"circuit_name": circuit.name or "unnamed"}
+            row.update(result.to_dict())
+            all_rows.append(row)
+
+    logger.info(
+        "Baseline completado: %d combinaciones (backends=%d × niveles=%d)",
+        len(all_rows),
+        len(backend_names),
+        len(optimization_levels),
+    )
+
+    return all_rows
