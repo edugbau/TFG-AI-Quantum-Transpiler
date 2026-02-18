@@ -40,7 +40,7 @@ src/
 └── integration/        # Módulo 4: Pipeline híbrido y experimentación
 ```
 
-Para más detalles sobre la arquitectura, ver [agents.md](agents.md).
+Para más detalles sobre la arquitectura, ver [agents.md](docs/agents.md).
 
 ## Entorno Tecnológico
 
@@ -53,7 +53,7 @@ Para más detalles sobre la arquitectura, ver [agents.md](agents.md).
 | pymoo | 0.6.1.6 |
 | GPU | NVIDIA RTX 3060 (CUDA 12.1) |
 
-Ver detalles completos en [ENVIRONMENT.md](ENVIRONMENT.md).
+Ver detalles completos en [ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ## Referencias
 
