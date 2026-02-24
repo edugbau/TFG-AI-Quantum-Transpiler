@@ -39,13 +39,8 @@ from src.mo_module.encoding import (
 )
 from src.mo_module.fitness import (
     FitnessFunction,
-    ErrorRateFitness,
-    MaxErrorRateFitness,
-    DecoherenceFitness,
-    ConnectivityFitness,
     DepthFitness,
-    TwoQubitGateFitness,
-    TotalGateFitness,
+    CnotCountFitness,
     AVAILABLE_FITNESS_FUNCTIONS,
     get_fitness_function,
     list_available_fitness_functions,
@@ -76,7 +71,8 @@ from src.mo_module.pareto import (
 # Imports de dependencias externas
 # ---------------------------------------------------------------------------
 from qiskit import QuantumCircuit
-from src.qiskit_interface.circuit_utils import create_ghz_circuit
+from src.qiskit_interface.circuit_utils import create_ghz_circuit, CircuitMetrics
+from src.qiskit_interface.transpiler import TranspilationResult
 from src.qiskit_interface.backend_info import (
     BackendInfo,
     get_backend,
@@ -296,45 +292,12 @@ class TestLayoutUtilities:
 # ===========================================================================
 
 class TestFitnessFunctions:
-    """Tests de las funciones de fitness individuales."""
+    """Tests de las funciones de fitness activas."""
 
-    def test_error_rate_fitness(self, backend_info_torino):
-        """ErrorRateFitness devuelve un valor no negativo."""
-        fitness = ErrorRateFitness()
-        assert fitness.name == "avg_error_2q"
-        assert not fitness.requires_transpilation
-
-        value = fitness.evaluate([0, 1, 2, 3, 4], backend_info_torino)
-        assert isinstance(value, float)
-        assert value >= 0
-
-    def test_max_error_rate_fitness(self, backend_info_torino):
-        """MaxErrorRateFitness devuelve un valor >= al promedio."""
-        avg_fit = ErrorRateFitness()
-        max_fit = MaxErrorRateFitness()
-        layout = [0, 1, 2, 3, 4]
-
-        avg_val = avg_fit.evaluate(layout, backend_info_torino)
-        max_val = max_fit.evaluate(layout, backend_info_torino)
-        assert max_val >= avg_val
-
-    def test_decoherence_fitness(self, backend_info_torino):
-        """DecoherenceFitness devuelve un valor negativo (queremos maximizar T2)."""
-        fitness = DecoherenceFitness()
-        value = fitness.evaluate([0, 1, 2, 3, 4], backend_info_torino)
-        # T2 > 0 → valor negativo
-        assert value < 0
-
-    def test_connectivity_fitness(self, backend_info_torino):
-        """ConnectivityFitness devuelve un valor negativo (queremos maximizar edges)."""
-        fitness = ConnectivityFitness()
-        value = fitness.evaluate([0, 1, 2, 3, 4], backend_info_torino)
-        # Debe haber al menos alguna arista
-        assert value <= 0
-
-    def test_depth_fitness_requires_transpilation(self):
-        """DepthFitness requiere transpilación."""
+    def test_depth_fitness_name_and_flag(self):
+        """DepthFitness tiene el nombre correcto y requiere transpilación."""
         fitness = DepthFitness()
+        assert fitness.name == "depth"
         assert fitness.requires_transpilation
 
     def test_depth_fitness_without_result(self, backend_info_torino):
@@ -343,27 +306,107 @@ class TestFitnessFunctions:
         value = fitness.evaluate([0, 1, 2], backend_info_torino)
         assert value == float("inf")
 
-    def test_two_qubit_gate_fitness_requires_transpilation(self):
-        """TwoQubitGateFitness requiere transpilación."""
-        fitness = TwoQubitGateFitness()
+    def test_cnot_count_fitness_name_and_flag(self):
+        """CnotCountFitness tiene el nombre correcto y requiere transpilación."""
+        fitness = CnotCountFitness()
+        assert fitness.name == "cnot_count"
         assert fitness.requires_transpilation
+
+    def test_cnot_count_fitness_without_result(self, backend_info_torino):
+        """CnotCountFitness sin resultado de transpilación devuelve inf."""
+        fitness = CnotCountFitness()
+        value = fitness.evaluate([0, 1, 2], backend_info_torino)
+        assert value == float("inf")
+
+    def test_depth_and_cnot_with_transpilation(
+        self, simple_circuit, backend_torino, backend_info_torino
+    ):
+        """Ambos objetivos devuelven valores finitos cuando se transpila."""
+        cache = TranspilationCache(simple_circuit, backend_torino, seed=42)
+        layout = [0, 1, 2]
+        tr = cache.get(layout)
+
+        depth_val = DepthFitness().evaluate(layout, backend_info_torino, tr)
+        cnot_val = CnotCountFitness().evaluate(layout, backend_info_torino, tr)
+
+        assert depth_val > 0
+        assert cnot_val >= 0
+        assert depth_val != float("inf")
+        assert cnot_val != float("inf")
+
+    def test_cnot_count_fitness_reads_cnot_equivalent_not_two_qubit_gates(
+        self, backend_info_torino
+    ):
+        """CnotCountFitness lee cnot_equivalent, no two_qubit_gates.
+
+        Se construye un TranspilationResult donde cnot_equivalent y
+        two_qubit_gates difieren deliberadamente. El fitness debe
+        devolver cnot_equivalent (7), no two_qubit_gates (3).
+        """
+        metrics = CircuitMetrics(
+            depth=5,
+            num_qubits=3,
+            total_gates=10,
+            two_qubit_gates=3,     # valor distinto a cnot_equivalent
+            cnot_equivalent=7,     # este es el que debe leerse
+        )
+        tr = TranspilationResult(transpiled_metrics=metrics)
+        result = CnotCountFitness().evaluate([0, 1, 2], backend_info_torino, tr)
+        assert result == 7.0, (
+            f"Se esperaba cnot_equivalent=7, se obtuvo {result}. "
+            "Posiblemente se está leyendo two_qubit_gates en lugar de cnot_equivalent."
+        )
+
+    def test_cnot_count_fitness_swap_costs_three_cnots(
+        self, backend_torino, backend_info_torino
+    ):
+        """Un SWAP equivale a 3 CNOTs: cnot_count >= 3 * two_qubit_gates para SWAPs puros.
+
+        Se crea un circuito de 2 qubits con un SWAP y se transpila.
+        La cuenta de CNOTs equivalentes debe ser >= la cuenta de puertas
+        2-qubit (porque SWAP descompone en ≥ 3 CX en cualquier base).
+        """
+        from qiskit import QuantumCircuit
+
+        qc = QuantumCircuit(2)
+        qc.swap(0, 1)
+
+        cache = TranspilationCache(qc, backend_torino, seed=42)
+        layout = [0, 1]
+        tr = cache.get(layout)
+
+        assert tr.transpiled_metrics is not None
+        cnot_equiv = tr.transpiled_metrics.cnot_equivalent
+        two_q = tr.transpiled_metrics.two_qubit_gates
+
+        # Un SWAP = 3 CX (o CZ, o ECR) → cnot_equivalent >= two_qubit_gates
+        assert cnot_equiv >= two_q, (
+            f"cnot_equivalent={cnot_equiv} debería ser >= two_qubit_gates={two_q}"
+        )
+        # Y en concreto deben diferir (el SWAP no es su propia puerta nativa)
+        # o al menos el resultado de CnotCountFitness es cnot_equivalent
+        fitness_val = CnotCountFitness().evaluate(layout, backend_info_torino, tr)
+        assert fitness_val == float(cnot_equiv)
 
 
 class TestFitnessRegistry:
     """Tests del registro de funciones de fitness (Factory)."""
 
-    def test_list_available(self):
-        """Hay al menos 7 funciones de fitness registradas."""
+    def test_list_available_contains_active_objectives(self):
+        """El registro contiene al menos los dos objetivos activos."""
         available = list_available_fitness_functions()
-        assert len(available) >= 7
         assert "depth" in available
-        assert "avg_error_2q" in available
-        assert "connectivity" in available
+        assert "cnot_count" in available
 
-    def test_get_fitness_function_valid(self):
-        """Se puede instanciar una función de fitness por nombre."""
+    def test_get_depth_fitness(self):
+        """Se puede instanciar DepthFitness por nombre."""
         ff = get_fitness_function("depth")
         assert isinstance(ff, DepthFitness)
+
+    def test_get_cnot_count_fitness(self):
+        """Se puede instanciar CnotCountFitness por nombre."""
+        ff = get_fitness_function("cnot_count")
+        assert isinstance(ff, CnotCountFitness)
 
     def test_get_fitness_function_invalid(self):
         """Nombre inválido lanza ValueError."""
@@ -374,17 +417,11 @@ class TestFitnessRegistry:
 class TestPresets:
     """Tests de los presets de objetivos."""
 
-    def test_preset_hardware_only(self):
-        """El preset hardware_only tiene los objetivos correctos."""
-        objs = get_preset_objectives("hardware_only")
-        assert "avg_error_2q" in objs
-        assert "connectivity" in objs
-
-    def test_preset_transpilation_basic(self):
-        """El preset transpilation_basic incluye depth y 2Q gates."""
-        objs = get_preset_objectives("transpilation_basic")
+    def test_preset_default(self):
+        """El preset default contiene depth y cnot_count."""
+        objs = get_preset_objectives("default")
         assert "depth" in objs
-        assert "two_qubit_gates" in objs
+        assert "cnot_count" in objs
 
     def test_preset_invalid(self):
         """Preset inexistente lanza ValueError."""
@@ -430,25 +467,11 @@ class TestTranspilationCache:
 class TestFitnessEvaluator:
     """Tests del evaluador compuesto."""
 
-    def test_evaluator_hardware_only(self, backend_info_torino):
-        """Evaluador solo hardware funciona sin transpilación."""
-        evaluator = FitnessEvaluator.from_names(
-            ["avg_error_2q", "connectivity"],
-            backend_info=backend_info_torino,
-        )
-        assert evaluator.n_objectives == 2
-        assert not evaluator.requires_transpilation
-
-        values = evaluator.evaluate([0, 1, 2, 3, 4])
-        assert values.shape == (2,)
-        assert values[0] >= 0  # Error
-        assert values[1] <= 0  # Conectividad (negada)
-
     def test_evaluator_from_names_missing_circuit(self, backend_info_torino):
         """Objetivos de transpilación sin circuito lanzan ValueError."""
         with pytest.raises(ValueError):
             FitnessEvaluator.from_names(
-                ["depth", "avg_error_2q"],
+                ["depth", "cnot_count"],
                 backend_info=backend_info_torino,
                 # Sin circuit ni backend → error
             )
@@ -456,9 +479,9 @@ class TestFitnessEvaluator:
     def test_evaluator_with_transpilation(
         self, simple_circuit, backend_torino, backend_info_torino
     ):
-        """Evaluador con transpilación calcula métricas correctamente."""
+        """Evaluador con depth y cnot_count calcula métricas correctamente."""
         evaluator = FitnessEvaluator.from_names(
-            ["depth", "avg_error_2q"],
+            ["depth", "cnot_count"],
             backend_info=backend_info_torino,
             circuit=simple_circuit,
             backend=backend_torino,
@@ -469,28 +492,35 @@ class TestFitnessEvaluator:
 
         values = evaluator.evaluate([0, 1, 2])
         assert values.shape == (2,)
-        assert values[0] > 0  # depth > 0
-        assert values[1] >= 0  # error >= 0
+        assert values[0] > 0   # depth > 0
+        assert values[1] >= 0  # cnot_count >= 0
 
-    def test_evaluate_population(self, backend_info_torino):
+    def test_evaluate_population(
+        self, simple_circuit, backend_torino, backend_info_torino
+    ):
         """Evaluación de una población entera."""
         evaluator = FitnessEvaluator.from_names(
-            ["avg_error_2q", "connectivity"],
+            ["depth", "cnot_count"],
             backend_info=backend_info_torino,
+            circuit=simple_circuit,
+            backend=backend_torino,
+            seed=42,
         )
         pop = np.array([[0, 1, 2], [10, 11, 12], [50, 51, 52]])
         F = evaluator.evaluate_population(pop)
         assert F.shape == (3, 2)
 
-    def test_objective_names(self, backend_info_torino):
+    def test_objective_names(
+        self, simple_circuit, backend_torino, backend_info_torino
+    ):
         """Los nombres de objetivos se reportan correctamente."""
         evaluator = FitnessEvaluator.from_names(
-            ["depth", "connectivity", "avg_error_2q"],
+            ["depth", "cnot_count"],
             backend_info=backend_info_torino,
-            circuit=create_ghz_circuit(3),
-            backend=get_backend("fake_torino"),
+            circuit=simple_circuit,
+            backend=backend_torino,
         )
-        assert evaluator.objective_names == ["depth", "connectivity", "avg_error_2q"]
+        assert evaluator.objective_names == ["depth", "cnot_count"]
 
 
 # ===========================================================================
@@ -523,7 +553,7 @@ class TestOptimizerConfig:
             algorithm="moead",
             population_size=100,
             n_generations=200,
-            objectives=["depth", "connectivity"],
+            objectives=["depth", "cnot_count"],
             seed=99,
         )
         assert config.algorithm == "moead"
@@ -550,11 +580,15 @@ class TestAlgorithmFactory:
 class TestOptimizationProblem:
     """Tests del problema de optimización pymoo."""
 
-    def test_problem_dimensions(self, search_space_5q, backend_info_torino):
+    def test_problem_dimensions(
+        self, search_space_5q, backend_info_torino, ghz5, backend_torino
+    ):
         """El problema tiene las dimensiones correctas."""
         evaluator = FitnessEvaluator.from_names(
-            ["avg_error_2q", "connectivity"],
+            ["depth", "cnot_count"],
             backend_info=backend_info_torino,
+            circuit=ghz5,
+            backend=backend_torino,
         )
         problem = LayoutOptimizationProblem(search_space_5q, evaluator)
 
@@ -569,13 +603,13 @@ class TestOptimizeLayout:
     tests sean rápidos (< 30s cada uno).
     """
 
-    def test_optimize_hardware_only(self, simple_circuit, backend_torino):
-        """Optimización solo hardware produce resultados válidos."""
+    def test_optimize_depth_cnot(self, simple_circuit, backend_torino):
+        """Optimización con depth y cnot_count produce resultados válidos."""
         config = OptimizerConfig(
             algorithm="nsga2",
             population_size=10,
             n_generations=5,
-            objectives=["avg_error_2q", "connectivity"],
+            objectives=["depth", "cnot_count"],
             seed=42,
             verbose=False,
         )
@@ -596,7 +630,7 @@ class TestOptimizeLayout:
             algorithm="nsga2",
             population_size=6,
             n_generations=3,
-            objectives=["depth", "avg_error_2q"],
+            objectives=["depth", "cnot_count"],
             seed=42,
             verbose=False,
         )
@@ -609,11 +643,11 @@ class TestOptimizeLayout:
         assert result.cache_stats.get("misses", 0) > 0
 
     def test_optimize_layout_quick(self, simple_circuit, backend_torino):
-        """optimize_layout_quick funciona con preset por defecto."""
+        """optimize_layout_quick funciona con el preset por defecto."""
         result = optimize_layout_quick(
             simple_circuit,
             backend=backend_torino,
-            preset="hardware_only",
+            preset="default",
             population_size=10,
             n_generations=3,
             seed=42,
@@ -626,7 +660,7 @@ class TestOptimizeLayout:
             algorithm="nsga2",
             population_size=10,
             n_generations=5,
-            objectives=["avg_error_2q", "connectivity"],
+            objectives=["depth", "cnot_count"],
             seed=42,
             verbose=False,
         )

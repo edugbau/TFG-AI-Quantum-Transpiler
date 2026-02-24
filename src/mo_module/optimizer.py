@@ -136,7 +136,7 @@ class OptimizerConfig:
     population_size: int = 50
     n_generations: int = 100
     objectives: list[str] = field(
-        default_factory=lambda: ["depth", "avg_error_2q"]
+        default_factory=lambda: ["depth", "cnot_count"]
     )
     optimization_level: int = 1
     prob_crossover: float = 0.9
@@ -649,7 +649,7 @@ def optimize_layout_quick(
     circuit: QuantumCircuit,
     backend=None,
     backend_name: str = "fake_torino",
-    preset: str = "hardware_only",
+    preset: str = "default",
     population_size: int = 30,
     n_generations: int = 50,
     seed: int = 42,
@@ -664,7 +664,7 @@ def optimize_layout_quick(
         backend: Backend (opcional).
         backend_name: Nombre del backend.
         preset: Nombre del preset de objetivos
-            (``"hardware_only"``, ``"transpilation_basic"``, etc.).
+            (``"default"`` o cualquier preset de ``PRESET_OBJECTIVES``).
         population_size: Tamaño de la población.
         n_generations: Número de generaciones.
         seed: Semilla.

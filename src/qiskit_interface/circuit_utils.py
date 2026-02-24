@@ -48,6 +48,7 @@ from typing import Optional, Union
 # ---------------------------------------------------------------------------
 from qiskit import QuantumCircuit            # Clase principal de circuito
 from qiskit import qasm2, qasm3              # Módulos dedicados de QASM
+from qiskit.compiler import transpile as qiskit_transpile  # Para contar CNOTs equivalentes
 from qiskit.circuit.random import random_circuit  # Circuitos aleatorios
 from qiskit.synthesis.qft import synth_qft_full  # Síntesis de QFT (Qiskit 2.1+)
 from qiskit.converters import (              # Conversión Circuit ↔ DAG
@@ -112,6 +113,7 @@ class CircuitMetrics:
     total_gates: int = 0
     two_qubit_gates: int = 0
     nonlocal_gates: int = 0
+    cnot_equivalent: int = 0
     gate_counts: dict[str, int] = field(default_factory=dict)
     width: int = 0
     num_clbits: int = 0
@@ -129,6 +131,7 @@ class CircuitMetrics:
             f"  Profundidad:       {self.depth}",
             f"  Puertas totales:   {self.total_gates}",
             f"  Puertas 2-qubit:   {self.two_qubit_gates}",
+            f"  CNOTs equivalentes:{self.cnot_equivalent}",
             f"  Puertas no-loc.:   {self.nonlocal_gates}",
             f"  Ancho (q+c):       {self.width}",
             f"  Bits clásicos:     {self.num_clbits}",
@@ -409,6 +412,43 @@ _KNOWN_TWO_QUBIT_GATES: set[str] = {
 }
 
 
+def count_cnot_equivalent(circuit: QuantumCircuit) -> int:
+    """Cuenta el número de CNOTs equivalentes de un circuito.
+
+    Descompone el circuito a la base ``['cx', 'u']`` con
+    ``optimization_level=0`` (sin cancelaciones) y cuenta las puertas
+    ``cx`` resultantes. Esto convierte cualquier puerta nativa del
+    backend a su coste real en CNOTs:
+
+      - CX / CNOT  → 1
+      - CZ         → 1
+      - ECR        → 1
+      - SWAP       → 3
+      - iSWAP      → 2
+      - CRZ / CRX  → 2
+      - etc.
+
+    El circuito de entrada debe estar ya transpilado al backend (con
+    sus puertas nativas), pues es ese coste real el que queremos medir.
+
+    Args:
+        circuit: Circuito (preferiblemente ya transpilado al backend).
+
+    Returns:
+        Número total de CNOTs equivalentes.
+    """
+    try:
+        cx_circuit = qiskit_transpile(
+            circuit,
+            basis_gates=["cx", "u", "id", "reset", "measure"],
+            optimization_level=0,
+        )
+        return cx_circuit.count_ops().get("cx", 0)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("count_cnot_equivalent falló: %s", exc)
+        return 0
+
+
 def count_two_qubit_gates(circuit: QuantumCircuit) -> int:
     """Cuenta el número de puertas que operan sobre 2+ qubits.
 
@@ -472,6 +512,7 @@ def extract_metrics(circuit: QuantumCircuit) -> CircuitMetrics:
         total_gates=circuit.size(),
         two_qubit_gates=count_two_qubit_gates(circuit),
         nonlocal_gates=circuit.num_nonlocal_gates(),
+        cnot_equivalent=count_cnot_equivalent(circuit),
         gate_counts=gate_counts,
         width=circuit.width(),
         num_clbits=circuit.num_clbits,

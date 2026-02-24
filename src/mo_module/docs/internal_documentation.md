@@ -18,25 +18,24 @@ Define cómo se representan los layouts como individuos dentro del algoritmo evo
 ### 2. Funciones de Fitness (`fitness.py`)
 Sistema extensible de funciones objetivo siguiendo el **patrón Strategy**.
 
-**Categoría 1 — Basadas en hardware (sin transpilación, rápidas):**
-| Función | Métrica | Minimiza |
-|:---|:---|:---|
-| `ErrorRateFitness` | Error promedio de puertas 2Q en el layout | Sí |
-| `MaxErrorRateFitness` | Error máximo de puertas 2Q | Sí |
-| `DecoherenceFitness` | −T2 promedio (negado para minimizar) | Sí (= maximiza T2) |
-| `ConnectivityFitness` | −nº aristas del coupling map (negado) | Sí (= maximiza conectividad) |
+**Objetivos activos (basados en transpilación):**
+| Clase | Clave registro | Métrica | Minimiza |
+|:---|:---|:---|:---|
+| `DepthFitness` | `"depth"` | Profundidad del circuito transpilado | Sí |
+| `CnotCountFitness` | `"cnot_count"` | Nº de puertas 2Q (CNOTs) tras transpilación | Sí |
 
-**Categoría 2 — Basadas en transpilación (requieren `qiskit.transpile`):**
-| Función | Métrica | Minimiza |
-|:---|:---|:---|
-| `DepthFitness` | Profundidad del circuito transpilado | Sí |
-| `TwoQubitGateFitness` | Nº de puertas 2Q tras transpilación | Sí |
-| `TotalGateFitness` | Nº total de puertas tras transpilación | Sí |
+Ambas requieren transpilar el circuito con el layout dado; el `TranspilationCache` garantiza que la transpilación se realiza una sola vez por layout aunque se evalúen varios objetivos.
 
-- **FitnessEvaluator** (**patrón Composite**): Agrupa múltiples funciones de fitness y orquesta su evaluación. Gestiona automáticamente el `TranspilationCache` para evitar transpilaciones redundantes.
+**Extensibilidad — cómo añadir un nuevo objetivo:**
+1. Crear una clase que herede de `FitnessFunction` e implemente `evaluate()`.
+2. Establecer `name` (clave de log) y `requires_transpilation`.
+3. Registrarla en `AVAILABLE_FITNESS_FUNCTIONS` con una clave de cadena.
+4. Opcionalmente añadirla a un preset en `PRESET_OBJECTIVES`.
+
+- **FitnessEvaluator** (**patrón Composite**): Agrupa múltiples funciones de fitness y orquesta su evaluación. Gestiona automáticamente el `TranspilationCache`.
 - **TranspilationCache**: Caché dict-based que almacena resultados de transpilación usando el layout (como tupla) como clave.
-- **Presets**: Configuraciones predefinidas de objetivos (`hardware_only`, `transpilation_basic`, `balanced`, etc.).
-- **Factory**: Registro de funciones de fitness por nombre (`get_fitness_function("depth")`).
+- **Preset activo**: `"default"` → `["depth", "cnot_count"]`.
+- **Factory**: Registro de funciones por nombre (`get_fitness_function("depth")`, `get_fitness_function("cnot_count")`).
 
 ### 3. Algoritmos Evolutivos (`optimizer.py`)
 Orquesta la ejecución de la optimización con pymoo.
@@ -145,10 +144,10 @@ Flujo ejecutado por `analyze_pareto_front()`:
 ## Integración con Otros Módulos
 
 ### Dependencias del módulo `qiskit_interface` (Módulo 1):
-- `BackendInfo` / `extract_backend_info()`: información del backend (topología, errores).
-- `get_error_for_layout()`: estadísticas de error para un layout (usado por fitness hardware).
-- `transpile_with_custom_layout()`: transpilación con layout personalizado (usado por fitness de transpilación).
-- `extract_metrics()` / `CircuitMetrics`: métricas del circuito transpilado.
+- `BackendInfo` / `extract_backend_info()`: información del backend (topología, coupling map).
+- `transpile_with_custom_layout()`: transpilación con layout personalizado (usada por `TranspilationCache`).
+- `extract_metrics()` / `CircuitMetrics`: métricas del circuito transpilado (profundidad, puertas 2Q).
+- `get_error_for_layout()`: estadísticas de error hardware; usada en `compare_layouts()` para diagnóstico, no en las funciones de fitness.
 - `get_backend()`: instanciar Fake Backends.
 
 ### Salida hacia el módulo `rl_module` (Módulo 2):

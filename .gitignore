@@ -1,3 +1,6 @@
 /.venv
 /notebooks/descargados
 src/qiskit_interface/docs/
+/src/mo_module/__pycache__
+/src/mo_module/__pycache__
+/tests/test_qiskit_interface/__pycache__

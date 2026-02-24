@@ -9,40 +9,43 @@ al algoritmo evolutivo en la búsqueda de layouts óptimos. Cada
 función de fitness evalúa un aspecto diferente de la calidad de un
 layout y, combinadas, forman un problema de optimización multiobjetivo.
 
-Categorías de funciones de fitness:
-  1. **Basadas en hardware** (rápidas, sin transpilación):
-     Evalúan la calidad del layout usando únicamente la información
-     del backend (errores de puertas, T1/T2, conectividad).
-     Son baratas de calcular y permiten poblaciones grandes.
+Objetivos activos:
+  - **Profundidad** (``DepthFitness``): profundidad del circuito
+    transpilado. Determina el tiempo de ejecución y la exposición
+    a la decoherencia.
+  - **Número de CNOTs** (``CnotCountFitness``): puertas de dos qubits
+    tras transpilación. Refleja el coste de routing (cada SWAP = 3
+    CNOTs) y es la principal fuente de error.
 
-  2. **Basadas en transpilación** (lentas, requieren transpilar):
-     Evalúan las métricas del circuito transpilado con un layout dado
-     (profundidad, número de CNOTs). Son más precisas pero costosas.
+  Ambas métricas requieren transpilar el circuito con el layout dado.
 
-Arquitectura:
+Arquitectura (extensible):
   Se utiliza el patrón **Strategy** para las funciones de fitness,
   permitiendo que el usuario componga libremente los objetivos
   deseados. Cada función de fitness es una clase que implementa
-  la interfaz ``FitnessFunction`` (protocolo).
+  la interfaz ``FitnessFunction`` (ABC).
 
   El ``FitnessEvaluator`` actúa como **Composite**: agrupa múltiples
   funciones de fitness y las evalúa en bloque, devolviendo el vector
   de objetivos que pymoo necesita.
 
+  Para añadir un nuevo objetivo:
+    1. Crear una clase que herede de ``FitnessFunction`` e implemente
+       ``evaluate()``.
+    2. Registrarla en ``AVAILABLE_FITNESS_FUNCTIONS`` con una clave
+       de cadena.
+    3. Optionalmente añadirla a un preset en ``PRESET_OBJECTIVES``.
+
 Decisiones de diseño:
   1. **Todas las funciones minimizan** — pymoo minimiza por defecto.
-     Para métricas que se quieren maximizar (T1, T2, conectividad),
-     se devuelve el valor negado o su inverso.
+     Para métricas que se quieren maximizar en el futuro, devolver
+     el valor negado.
 
   2. **Caché de transpilación** — Las funciones basadas en transpilación
-     comparten un caché LRU para evitar transpilar el mismo layout
-     múltiples veces cuando hay varios objetivos de transpilación.
+     comparten un caché para evitar transpilar el mismo layout
+     múltiples veces cuando hay varios objetivos activos.
 
-  3. **Normalización opcional** — Se permite configurar si los valores
-     se normalizan al rango [0, 1] para mejorar la convergencia del
-     algoritmo.
-
-  4. **Dependencia de qiskit_interface** — Las funciones utilizan
+  3. **Dependencia de qiskit_interface** — Las funciones utilizan
      ``extract_metrics``, ``transpile_with_custom_layout`` y
      ``BackendInfo`` del módulo 1.
 
@@ -64,7 +67,7 @@ from qiskit import QuantumCircuit
 # ---------------------------------------------------------------------------
 # Imports internos del proyecto
 # ---------------------------------------------------------------------------
-from src.qiskit_interface.backend_info import BackendInfo, get_error_for_layout
+from src.qiskit_interface.backend_info import BackendInfo
 from src.qiskit_interface.circuit_utils import CircuitMetrics, extract_metrics
 from src.qiskit_interface.transpiler import (
     TranspilationResult,
@@ -119,109 +122,13 @@ class FitnessFunction(ABC):
 
 
 # ===========================================================================
-#  Funciones de fitness basadas en hardware (sin transpilación)
-# ===========================================================================
-
-class ErrorRateFitness(FitnessFunction):
-    """Minimiza la tasa de error promedio de puertas 2Q en el layout.
-
-    Fundamento: las puertas de dos qubits tienen tasas de error ~10×
-    mayores que las de un qubit, y varían significativamente entre
-    pares de qubits. Elegir qubits con aristas de bajo error reduce
-    el error total del circuito transpilado.
-
-    Métrica: error medio de las puertas 2Q nativas entre los qubits
-    físicos del layout (solo aristas del coupling map).
-    """
-
-    name = "avg_error_2q"
-    requires_transpilation = False
-
-    def evaluate(
-        self,
-        layout: list[int],
-        backend_info: BackendInfo,
-        transpilation_result: Optional[TranspilationResult] = None,
-    ) -> float:
-        stats = get_error_for_layout(backend_info, layout)
-        return stats["avg_error_2q"]
-
-
-class MaxErrorRateFitness(FitnessFunction):
-    """Minimiza la tasa de error **máxima** de las puertas 2Q en el layout.
-
-    Fundamento: incluso si el error promedio es bajo, una sola arista
-    con error muy alto puede degradar la fidelidad del circuito. Esta
-    función es una alternativa más conservadora a ``ErrorRateFitness``.
-    """
-
-    name = "max_error_2q"
-    requires_transpilation = False
-
-    def evaluate(
-        self,
-        layout: list[int],
-        backend_info: BackendInfo,
-        transpilation_result: Optional[TranspilationResult] = None,
-    ) -> float:
-        stats = get_error_for_layout(backend_info, layout)
-        return stats["max_error_2q"]
-
-
-class DecoherenceFitness(FitnessFunction):
-    """Minimiza la susceptibilidad a la decoherencia del layout.
-
-    Fundamento: T1 (relajación) y T2 (decoherencia) miden cuánto
-    tiempo los qubits mantienen su estado cuántico. Qubits con
-    T1/T2 altos son preferibles porque permiten circuitos más
-    profundos antes de que la decoherencia destruya la información.
-
-    Métrica: devolvemos ``-avg_t2`` (negado para minimizar) como
-    proxy de la calidad de decoherencia. T2 suele ser el factor
-    limitante (T2 ≤ 2·T1).
-    """
-
-    name = "decoherence"
-    requires_transpilation = False
-
-    def evaluate(
-        self,
-        layout: list[int],
-        backend_info: BackendInfo,
-        transpilation_result: Optional[TranspilationResult] = None,
-    ) -> float:
-        stats = get_error_for_layout(backend_info, layout)
-        avg_t2 = stats["avg_t2"]
-        # Minimizar → usamos negación. Mayor T2 = menor valor = mejor.
-        return -avg_t2 if avg_t2 > 0 else 0.0
-
-
-class ConnectivityFitness(FitnessFunction):
-    """Minimiza la falta de conectividad entre qubits del layout.
-
-    Fundamento: cuantas más aristas del coupling map hay entre los
-    qubits seleccionados, menos SWAPs se necesitarán durante el
-    routing. Un subgrafo denso es preferible.
-
-    Métrica: ``-num_available_edges`` (negado para minimizar).
-    Más aristas = valor más negativo = mejor layout.
-    """
-
-    name = "connectivity"
-    requires_transpilation = False
-
-    def evaluate(
-        self,
-        layout: list[int],
-        backend_info: BackendInfo,
-        transpilation_result: Optional[TranspilationResult] = None,
-    ) -> float:
-        stats = get_error_for_layout(backend_info, layout)
-        return -float(stats["num_available_edges"])
-
-
-# ===========================================================================
 #  Funciones de fitness basadas en transpilación
+# ===========================================================================
+#
+# Para añadir un nuevo objetivo:
+#   1. Crear una clase que herede de FitnessFunction.
+#   2. Definir name, requires_transpilation e implementar evaluate().
+#   3. Registrarla en AVAILABLE_FITNESS_FUNCTIONS al final del fichero.
 # ===========================================================================
 
 class DepthFitness(FitnessFunction):
@@ -255,18 +162,24 @@ class DepthFitness(FitnessFunction):
         return float(transpilation_result.transpiled_metrics.depth)
 
 
-class TwoQubitGateFitness(FitnessFunction):
-    """Minimiza el número de puertas de dos qubits tras transpilación.
+class CnotCountFitness(FitnessFunction):
+    """Minimiza el número de CNOTs equivalentes tras transpilación.
 
-    Fundamento: las puertas 2Q son las principales fuentes de error.
-    El número de puertas 2Q después de transpilar refleja la eficiencia
-    del layout + routing: un buen layout requiere menos SWAPs (cada
-    SWAP = 3 CNOTs o equivalentes).
+    Cuenta los CNOTs reales obtenidos al descomponer el circuito
+    transpilado a la base ``['cx', 'u']`` con ``optimization_level=0``.
+    Convierte cualquier puerta nativa del backend a su coste en CNOTs:
 
-    Métrica: ``transpiled_metrics.two_qubit_gates``.
+      - CX / CNOT  → 1
+      - CZ         → 1  (puerta nativa de Torino)
+      - ECR        → 1  (puerta nativa de Sherbrooke/Brisbane)
+      - SWAP       → 3
+      - iSWAP      → 2
+      - CRZ / CRX  → 2
+
+    Métrica: ``transpiled_metrics.cnot_equivalent``.
     """
 
-    name = "two_qubit_gates"
+    name = "cnot_count"
     requires_transpilation = True
 
     def evaluate(
@@ -276,48 +189,24 @@ class TwoQubitGateFitness(FitnessFunction):
         transpilation_result: Optional[TranspilationResult] = None,
     ) -> float:
         if transpilation_result is None or transpilation_result.transpiled_metrics is None:
-            logger.warning("TwoQubitGateFitness: no transpilation result available")
+            logger.warning("CnotCountFitness: no transpilation result available")
             return float("inf")
-        return float(transpilation_result.transpiled_metrics.two_qubit_gates)
-
-
-class TotalGateFitness(FitnessFunction):
-    """Minimiza el número total de puertas tras transpilación.
-
-    Complementa a ``TwoQubitGateFitness`` incluyendo también las
-    puertas de un qubit, que aunque tienen menor error individual,
-    contribuyen a la profundidad y al tiempo total de ejecución.
-    """
-
-    name = "total_gates"
-    requires_transpilation = True
-
-    def evaluate(
-        self,
-        layout: list[int],
-        backend_info: BackendInfo,
-        transpilation_result: Optional[TranspilationResult] = None,
-    ) -> float:
-        if transpilation_result is None or transpilation_result.transpiled_metrics is None:
-            logger.warning("TotalGateFitness: no transpilation result available")
-            return float("inf")
-        return float(transpilation_result.transpiled_metrics.total_gates)
+        return float(transpilation_result.transpiled_metrics.cnot_equivalent)
 
 
 # ===========================================================================
 #  Registro de funciones de fitness disponibles (Factory)
 # ===========================================================================
 
+# ---------------------------------------------------------------------------
 # Registro de funciones de fitness por nombre.
-# Permite instanciarlas por cadena en la configuración del optimizador.
+# Para añadir un nuevo objetivo: registrar aquí la clase con su clave.
+# ---------------------------------------------------------------------------
 AVAILABLE_FITNESS_FUNCTIONS: dict[str, type[FitnessFunction]] = {
-    "avg_error_2q": ErrorRateFitness,
-    "max_error_2q": MaxErrorRateFitness,
-    "decoherence": DecoherenceFitness,
-    "connectivity": ConnectivityFitness,
     "depth": DepthFitness,
-    "two_qubit_gates": TwoQubitGateFitness,
-    "total_gates": TotalGateFitness,
+    "cnot_count": CnotCountFitness,
+    # --- Añadir aquí nuevos objetivos ---
+    # "nombre_clave": NuevaClaseFitness,
 }
 
 
@@ -589,29 +478,12 @@ class FitnessEvaluator:
 # Configuraciones predefinidas comunes de objetivos para facilitar el uso.
 
 PRESET_OBJECTIVES: dict[str, list[str]] = {
-    "hardware_only": [
-        "avg_error_2q",
-        "connectivity",
-    ],
-    "hardware_full": [
-        "avg_error_2q",
-        "decoherence",
-        "connectivity",
-    ],
-    "transpilation_basic": [
+    # Preset por defecto: profundidad y número de CNOTs.
+    "default": [
         "depth",
-        "two_qubit_gates",
+        "cnot_count",
     ],
-    "transpilation_full": [
-        "depth",
-        "two_qubit_gates",
-        "avg_error_2q",
-    ],
-    "balanced": [
-        "depth",
-        "avg_error_2q",
-        "connectivity",
-    ],
+    # --- Añadir aquí nuevos presets cuando se registren más objetivos ---
 }
 
 
