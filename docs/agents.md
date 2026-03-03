@@ -105,6 +105,8 @@ Módulo de optimización de layouts basado en algoritmos evolutivos. Se encarga 
 
 > **DPX por defecto** — El operador de cruce usado es **DPX (Dynastic Potential Crossover)** (`Chicano et al., 2017`), configurable en `OptimizerConfig(crossover_operator="dpx"|"ox")`. DPX preserva asignaciones comunes entre padres, lo que es especialmente efectivo para la asignación de layouts (baja epistasis). `LayoutCrossover` (OX clásico) se mantiene disponible como alternativa.
 
+> **Tuning de hiperparámetros** — `tuning.py` provee `LayoutTuner` para ajuste automático de los parámetros de `OptimizerConfig` usando **Optuna** (TPE). Presupuesto por defecto: 30 trials × 3 seeds. Cambiar con `LayoutTuner(n_trials=N)`. Métrica: hipervolumen medio del frente de Pareto.
+
 ### Módulo 4 — Integración y Experimentación (`integration/`)
 
 Módulo orquestador del pipeline híbrido MO → RL. Se encarga de:
@@ -149,7 +151,8 @@ TFG-Quantum-Transpiler/
 │   │   ├── optimizer.py       # Algoritmo evolutivo (NSGA-II, MOEA/D)
 │   │   ├── fitness.py         # Funciones de fitness (profundidad, CNOTs, error)
 │   │   ├── encoding.py        # Codificación del layout como individuo
-│   │   └── pareto.py          # Análisis del frente de Pareto
+│   │   ├── pareto.py          # Análisis del frente de Pareto
+│   │   └── tuning.py          # Tuning de hiperparámetros con Optuna
 │   │
 │   └── integration/           # Módulo 4: Integración y Experimentación
 │       ├── __init__.py

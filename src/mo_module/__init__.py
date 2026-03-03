@@ -114,6 +114,12 @@ from .pareto import (
     plot_parallel_coordinates,
 )
 
+# --- tuning ---
+from .tuning import (
+    HyperparameterSpace,
+    LayoutTuner,
+)
+
 
 # ===================================================================
 #  __all__ — API pública explícita
@@ -160,4 +166,7 @@ __all__ = [
     "plot_pareto_front_2d",
     "plot_pareto_front_3d",
     "plot_parallel_coordinates",
+    # tuning
+    "HyperparameterSpace",
+    "LayoutTuner",
 ]
