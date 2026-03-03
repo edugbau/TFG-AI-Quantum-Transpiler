@@ -57,8 +57,8 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import Optional, Protocol, Sequence
 
 import numpy as np
@@ -246,20 +246,35 @@ def list_available_fitness_functions() -> list[str]:
 #  Caché de transpilación
 # ===========================================================================
 
+# ---------------------------------------------------------------------------
+# Tamaño máximo del caché de transpilación.
+# Política de reemplazo: LRU (Least Recently Used).
+# Aumentar este valor consume más memoria; reducirlo aumenta los fallos de caché.
+# ---------------------------------------------------------------------------
+CACHE_MAX_SIZE: int = 512
+
+
 class TranspilationCache:
-    """Caché de resultados de transpilación para evitar recálculos.
+    """Caché LRU de resultados de transpilación para evitar recálculos.
 
     Cuando múltiples funciones de fitness basadas en transpilación
     comparten el mismo circuito, backend y nivel de optimización,
     la transpilación solo se realiza una vez por layout.
 
-    El caché usa el layout (como tupla inmutable) como clave.
+    El caché usa el layout (como tupla inmutable) como clave y aplica
+    la política **LRU** (Least Recently Used): cuando se supera
+    ``max_size``, se expulsa la entrada accedida hace más tiempo.
+    Esta política es adecuada para algoritmos evolutivos, donde los
+    layouts evaluados recientemente (por cruce o mutación) tienen
+    mayor probabilidad de reaparecer que los de generaciones antiguas.
 
     Attributes:
         circuit: Circuito a transpilar.
         backend: Backend de destino.
         optimization_level: Nivel de optimización de Qiskit.
         seed: Semilla para reproducibilidad.
+        max_size: Número máximo de entradas en el caché.
+            Por defecto ``CACHE_MAX_SIZE``.
     """
 
     def __init__(
@@ -268,17 +283,24 @@ class TranspilationCache:
         backend,
         optimization_level: int = 1,
         seed: int = 42,
+        max_size: int = CACHE_MAX_SIZE,
     ):
         self.circuit = circuit
         self.backend = backend
         self.optimization_level = optimization_level
         self.seed = seed
-        self._cache: dict[tuple[int, ...], TranspilationResult] = {}
+        self.max_size = max_size
+        self._cache: OrderedDict[tuple[int, ...], TranspilationResult] = OrderedDict()
         self._hits = 0
         self._misses = 0
+        self._evictions = 0
 
     def get(self, layout: list[int]) -> TranspilationResult:
         """Obtiene o calcula el resultado de transpilación para un layout.
+
+        En caso de **hit**, la entrada se mueve al final del OrderedDict
+        (más reciente). En caso de **miss**, si el caché está lleno se
+        expulsa la entrada del principio (menos reciente → LRU).
 
         Args:
             layout: Layout a evaluar.
@@ -289,6 +311,7 @@ class TranspilationCache:
         key = tuple(layout)
         if key in self._cache:
             self._hits += 1
+            self._cache.move_to_end(key)  # marcar como usado recientemente
             return self._cache[key]
 
         self._misses += 1
@@ -300,13 +323,18 @@ class TranspilationCache:
             seed=self.seed,
         )
         self._cache[key] = result
+        # Expulsar la entrada LRU si se supera el límite
+        if len(self._cache) > self.max_size:
+            self._cache.popitem(last=False)
+            self._evictions += 1
         return result
 
     def clear(self) -> None:
-        """Limpia el caché."""
+        """Limpia el caché y resetea todos los contadores."""
         self._cache.clear()
         self._hits = 0
         self._misses = 0
+        self._evictions = 0
 
     @property
     def stats(self) -> dict[str, int]:
@@ -314,7 +342,9 @@ class TranspilationCache:
         return {
             "hits": self._hits,
             "misses": self._misses,
+            "evictions": self._evictions,
             "size": len(self._cache),
+            "max_size": self.max_size,
         }
 
 
