@@ -103,6 +103,8 @@ Módulo de optimización de layouts basado en algoritmos evolutivos. Se encarga 
 
 **Dependencias principales:** `pymoo`, `numpy`, `scipy`
 
+> **DPX por defecto** — El operador de cruce usado es **DPX (Dynastic Potential Crossover)** (`Chicano et al., 2017`), configurable en `OptimizerConfig(crossover_operator="dpx"|"ox")`. DPX preserva asignaciones comunes entre padres, lo que es especialmente efectivo para la asignación de layouts (baja epistasis). `LayoutCrossover` (OX clásico) se mantiene disponible como alternativa.
+
 ### Módulo 4 — Integración y Experimentación (`integration/`)
 
 Módulo orquestador del pipeline híbrido MO → RL. Se encarga de:

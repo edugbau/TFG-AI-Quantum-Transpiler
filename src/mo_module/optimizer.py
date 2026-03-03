@@ -76,6 +76,7 @@ from .encoding import (
     LayoutSearchSpace,
     LayoutSampling,
     LayoutCrossover,
+    DPXCrossover,
     LayoutMutation,
     layout_to_list,
 )
@@ -120,6 +121,10 @@ class OptimizerConfig:
         optimization_level:
             Nivel de optimización de Qiskit (0–3) para transpilar
             durante la evaluación de fitness.
+        crossover_operator:
+            Operador de cruce a usar. Valores válidos:
+            ``"dpx"`` (Dynastic Potential Crossover, por defecto) o
+            ``"ox"`` (Order Crossover, alternativa legacy).
         prob_crossover:
             Probabilidad de cruce.
         prob_swap_mutation:
@@ -139,6 +144,7 @@ class OptimizerConfig:
         default_factory=lambda: ["depth", "cnot_count"]
     )
     optimization_level: int = 1
+    crossover_operator: str = "dpx"
     prob_crossover: float = 0.9
     prob_swap_mutation: float = 0.5
     prob_replace_mutation: float = 0.3
@@ -151,6 +157,11 @@ class OptimizerConfig:
             raise ValueError(
                 f"Algoritmo '{self.algorithm}' no soportado. "
                 f"Use 'nsga2' o 'moead'."
+            )
+        if self.crossover_operator not in ("ox", "dpx"):
+            raise ValueError(
+                f"crossover_operator '{self.crossover_operator}' no soportado. "
+                f"Use 'ox' (Order Crossover) o 'dpx' (Dynastic Potential Crossover)."
             )
         if self.population_size < 4:
             raise ValueError("population_size debe ser al menos 4.")
@@ -223,6 +234,25 @@ class LayoutOptimizationProblem(Problem):
 #  Factory de algoritmos evolutivos
 # ===========================================================================
 
+def _build_crossover(
+    config: OptimizerConfig,
+    search_space: LayoutSearchSpace,
+):
+    """Helper: devuelve el operador de cruce configurado.
+
+    Args:
+        config: Configuración del optimizador.
+        search_space: Espacio de búsqueda del layout.
+
+    Returns:
+        Instancia de ``DPXCrossover`` o ``LayoutCrossover`` según
+        ``config.crossover_operator``.
+    """
+    if config.crossover_operator == "dpx":
+        return DPXCrossover(search_space)
+    return LayoutCrossover(search_space)
+
+
 def _create_nsga2(
     config: OptimizerConfig,
     search_space: LayoutSearchSpace,
@@ -245,7 +275,7 @@ def _create_nsga2(
     algorithm = NSGA2(
         pop_size=config.population_size,
         sampling=LayoutSampling(search_space),
-        crossover=LayoutCrossover(search_space),
+        crossover=_build_crossover(config, search_space),
         mutation=LayoutMutation(
             search_space,
             prob_swap=config.prob_swap_mutation,
@@ -254,8 +284,9 @@ def _create_nsga2(
     )
 
     logger.info(
-        "NSGA-II configurado: pop_size=%d",
+        "NSGA-II configurado: pop_size=%d, crossover=%s",
         config.population_size,
+        config.crossover_operator,
     )
 
     return algorithm
@@ -297,7 +328,7 @@ def _create_moead(
         ref_dirs=ref_dirs,
         n_neighbors=max(15, config.population_size // 5),
         sampling=LayoutSampling(search_space),
-        crossover=LayoutCrossover(search_space),
+        crossover=_build_crossover(config, search_space),
         mutation=LayoutMutation(
             search_space,
             prob_swap=config.prob_swap_mutation,

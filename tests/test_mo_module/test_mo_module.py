@@ -30,6 +30,7 @@ from src.mo_module.encoding import (
     LayoutSearchSpace,
     LayoutSampling,
     LayoutCrossover,
+    DPXCrossover,
     LayoutMutation,
     validate_layout,
     repair_layout,
@@ -253,6 +254,59 @@ class TestLayoutOperators:
         Y = mutator._do(None, X)
         assert validate_layout(Y[0], search_space_5q)
         assert len(set(Y[0].tolist())) == 5  # Sin duplicados
+
+    def test_dpx_crossover_produces_valid_offspring(self, search_space_5q):
+        """DPXCrossover produce hijos válidos y sin duplicados."""
+        sampler = LayoutSampling(search_space_5q)
+        parents = sampler._do(None, 4)
+        X = parents.reshape(2, 2, 5)
+
+        crossover = DPXCrossover(search_space_5q)
+        Y = crossover._do(None, X)
+
+        assert Y.shape == (2, 2, 5)
+        for k in range(2):
+            for j in range(2):
+                assert validate_layout(Y[k, j], search_space_5q), (
+                    f"DPX hijo [{k},{j}] inválido: {Y[k, j]}"
+                )
+                assert len(set(Y[k, j].tolist())) == 5, (
+                    f"DPX hijo [{k},{j}] tiene duplicados: {Y[k, j]}"
+                )
+
+    def test_dpx_preserves_common_assignments(self, search_space_5q):
+        """DPX conserva posiciones donde ambos padres asignan el mismo qubit."""
+        # Padres con posiciones 0 y 2 idénticas: qubit 10 y qubit 30
+        p1 = np.array([10, 20, 30, 40, 50])
+        p2 = np.array([10, 25, 30, 45, 55])
+        X = np.array([p1, p2]).reshape(2, 1, 5)
+
+        crossover = DPXCrossover(search_space_5q)
+        Y = crossover._do(None, X)
+
+        # Ambos hijos deben tener qubit 10 en posición 0 y qubit 30 en posición 2
+        for offspring_idx in range(2):
+            child = Y[offspring_idx, 0]
+            assert child[0] == 10, (
+                f"Hijo {offspring_idx}: posición 0 debería ser 10, es {child[0]}"
+            )
+            assert child[2] == 30, (
+                f"Hijo {offspring_idx}: posición 2 debería ser 30, es {child[2]}"
+            )
+
+    def test_dpx_no_duplicates_stress(self, search_space_5q):
+        """DPX no genera duplicados en 50 pares de padres aleatorios."""
+        sampler = LayoutSampling(search_space_5q)
+        crossover = DPXCrossover(search_space_5q)
+        rng = np.random.default_rng(42)
+
+        for _ in range(50):
+            parents = sampler._do(None, 4)
+            X = parents.reshape(2, 2, 5)
+            Y = crossover._do(None, X)
+            for k in range(2):
+                for j in range(2):
+                    assert len(set(Y[k, j].tolist())) == 5
 
 
 class TestLayoutUtilities:
@@ -531,11 +585,27 @@ class TestOptimizerConfig:
     """Tests de la configuración del optimizador."""
 
     def test_default_config(self):
-        """La configuración por defecto es válida."""
+        """La configuración por defecto es válida y usa DPX."""
         config = OptimizerConfig()
         assert config.algorithm == "nsga2"
         assert config.population_size == 50
         assert config.n_generations == 100
+        assert config.crossover_operator == "dpx"
+
+    def test_dpx_is_default_crossover_operator(self):
+        """OptimizerConfig usa DPX como operador de cruce por defecto."""
+        config = OptimizerConfig()
+        assert config.crossover_operator == "dpx"
+
+    def test_ox_crossover_still_selectable(self):
+        """OX sigue disponible como opción vía crossover_operator='ox'."""
+        config = OptimizerConfig(crossover_operator="ox")
+        assert config.crossover_operator == "ox"
+
+    def test_invalid_crossover_operator_raises(self):
+        """crossover_operator inválido lanza ValueError."""
+        with pytest.raises(ValueError, match="crossover_operator"):
+            OptimizerConfig(crossover_operator="pmx")
 
     def test_invalid_algorithm(self):
         """Algoritmo inválido lanza ValueError."""
