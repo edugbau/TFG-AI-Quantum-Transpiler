@@ -139,6 +139,7 @@ class CircuitAnalysis:
     pareto_size_stats: Optional[ObjectiveStats] = None
     mo_hv_stats: Optional[ObjectiveStats] = None
     bl_hv_stats: Optional[ObjectiveStats] = None
+    hv_pvalue: Optional[float] = None
     seed_stability_pvalue: Optional[float] = None
 
     def to_text(self) -> str:
@@ -181,6 +182,13 @@ class CircuitAnalysis:
             elif mo_mean > 0 and bl_mean == 0:
                 lines.append(f"  Mejora media de HV (MO vs Qiskit): +∞% (Qiskit=0)")
 
+            if self.hv_pvalue is not None:
+                signif = "SÍ" if self.hv_pvalue < 0.05 else "NO"
+                lines.append(
+                    f"  Mejora de HV significativa: p={self.hv_pvalue:.4e} "
+                    f"→ {signif} (Wilcoxon signed-rank, α=0.05)"
+                )
+                
         if self.seed_stability_pvalue is not None:
             stable = "SÍ" if self.seed_stability_pvalue > 0.05 else "NO"
             lines.append(
@@ -315,6 +323,7 @@ def analyze_results(result_set: BenchmarkResultSet, baseline_results: Optional[d
         # --- Hipervolumen ---
         mo_hv_stats = None
         bl_hv_stats = None
+        hv_pvalue = None
         if baseline_results and cname in baseline_results:
             n_obj = len(obj_names)
             max_obj = [-float('inf')] * n_obj
@@ -362,6 +371,18 @@ def analyze_results(result_set: BenchmarkResultSet, baseline_results: Optional[d
                 
                 mo_hv_stats = compute_objective_stats("HV_MO", mo_hvs)
                 bl_hv_stats = compute_objective_stats("HV_Qiskit", bl_hvs)
+                
+                # Test de Wilcoxon para muestras emparejadas (misma semilla en MO vs Baseline)
+                try:
+                    # Wilcoxon da error si todas las diferencias son 0
+                    diffs = np.array(mo_hvs) - np.array(bl_hvs)
+                    if np.any(diffs != 0):
+                        _, hv_p = sp_stats.wilcoxon(mo_hvs, bl_hvs)
+                        hv_pvalue = float(hv_p)
+                    else:
+                        hv_pvalue = 1.0 # Son exactamente idénticas
+                except Exception:
+                    hv_pvalue = None
 
         ca = CircuitAnalysis(
             circuit_name=cname,
@@ -371,6 +392,7 @@ def analyze_results(result_set: BenchmarkResultSet, baseline_results: Optional[d
             pareto_size_stats=pareto_stats,
             mo_hv_stats=mo_hv_stats,
             bl_hv_stats=bl_hv_stats,
+            hv_pvalue=hv_pvalue,
             seed_stability_pvalue=stability_p,
         )
         report.circuit_analyses.append(ca)
