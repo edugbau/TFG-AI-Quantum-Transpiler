@@ -318,6 +318,12 @@ class BenchmarkGUI(ctk.CTk):
         self.t_plot_frame = ctk.CTkFrame(self.t_main_frame)
         self.t_plot_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
 
+    def log(self, text):
+        self.terminal_text.configure(state="normal")
+        self.terminal_text.insert("end", text + "\n")
+        self.terminal_text.see("end")
+        self.terminal_text.configure(state="disabled")
+
     def t_log(self, text):
         self.t_terminal_text.configure(state="normal")
         self.t_terminal_text.insert("end", text + "\n")
@@ -466,7 +472,16 @@ class BenchmarkGUI(ctk.CTk):
             
         # Generar Boxplots
         if self._last_results and self._last_baseline:
-            self._render_plots()
+            # Limpiar frame de plots previo
+            for widget in self.plot_frame.winfo_children():
+                widget.destroy()
+
+            # Frame scrollable para poder ver múltiples gráficos si es necesario
+            scrollable_plots = ctk.CTkScrollableFrame(self.plot_frame, fg_color="transparent")
+            scrollable_plots.pack(fill="both", expand=True, padx=5, pady=5)
+
+            self._render_pareto_fronts(scrollable_plots)
+            self._render_boxplots(scrollable_plots)
 
     def start_tuning(self):
         if self.is_tuning:
@@ -620,6 +635,55 @@ class BenchmarkGUI(ctk.CTk):
             self.t_log("✓ Configuración transferida al panel de Benchmark")
         except Exception as e:
             self.t_log(f"Error copiando config: {str(e)}")
+
+    def _render_pareto_fronts(self, parent_frame):
+        circuit_names = self._last_results.circuit_names
+        runs_first = self._last_results.runs_for_circuit(circuit_names[0])
+        if not runs_first: return
+        obj_names = runs_first[0].result.objective_names
+        
+        if len(obj_names) < 2:
+            return
+
+        fig, axes = plt.subplots(1, len(circuit_names), figsize=(5 * len(circuit_names), 4), squeeze=False)
+        fig.suptitle('Frente de Pareto (MO) vs Baseline Qiskit', fontsize=12, fontweight='bold')
+
+        for ci, cname in enumerate(circuit_names):
+            ax = axes[0][ci]
+
+            runs = self._last_results.runs_for_circuit(cname)
+            for run in runs:
+                if run.result.pareto_fitness is not None and len(run.result.pareto_fitness) > 0 and run.result.pareto_fitness.shape[1] >= 2:
+                    F = run.result.pareto_fitness
+                    # Ordenar por el primer objetivo para conectar los puntos con una línea si se desea (opcional)
+                    idx = np.argsort(F[:, 0])
+                    F_sorted = F[idx]
+                    
+                    # Dibujar todos los puntos del frente para esta run
+                    ax.scatter(F_sorted[:, 0], F_sorted[:, 1], alpha=0.5, s=20, label='MO' if run is runs[0] else None)
+                    # Opcional: unir los puntos del frente con una línea tenue
+                    ax.plot(F_sorted[:, 0], F_sorted[:, 1], alpha=0.3, linewidth=1)
+
+            bl = self._last_baseline.get(cname, {}) if self._last_baseline else {}
+            if bl:
+                bl_x = [v[obj_names[0]] for v in bl.values() if obj_names[0] in v and v[obj_names[0]] != float('inf')]
+                bl_y = [v[obj_names[1]] for v in bl.values() if obj_names[1] in v and v[obj_names[1]] != float('inf')]
+                if bl_x and bl_y:
+                    ax.scatter(bl_x, bl_y, marker='X', s=80, color='#e74c3c', edgecolors='k', linewidths=0.5, zorder=5, label='Qiskit default')
+
+            ax.set_xlabel(obj_names[0])
+            ax.set_ylabel(obj_names[1] if len(obj_names) > 1 else '')
+            ax.set_title(cname)
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8, loc='upper right')
+
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        
+        canvas = FigureCanvasTkAgg(fig, master=parent_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="x", expand=False, pady=(0, 20))
+
+    def _render_boxplots(self, parent_frame):
         circuit_names = self._last_results.circuit_names
         n_circuits = len(circuit_names)
         obj_names = self._last_results.runs_for_circuit(circuit_names[0])[0].result.objective_names
@@ -630,7 +694,7 @@ class BenchmarkGUI(ctk.CTk):
             figsize=(5 * n_circuits, 3.5 * n_obj),
             squeeze=False,
         )
-        fig.suptitle('MO vs Qiskit por defecto — Distribución por semilla', fontsize=13, fontweight='bold')
+        fig.suptitle('MO vs Qiskit por defecto — Distribución por semilla', fontsize=12, fontweight='bold')
 
         for ci, cname in enumerate(circuit_names):
             for oi, oname in enumerate(obj_names):
@@ -677,8 +741,7 @@ class BenchmarkGUI(ctk.CTk):
 
         plt.tight_layout(rect=[0, 0, 1, 0.94])
         
-        # Embeber canvas en CustomTkinter
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas = FigureCanvasTkAgg(fig, master=parent_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
