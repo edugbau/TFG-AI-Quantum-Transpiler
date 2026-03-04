@@ -17,6 +17,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent.par
 from src.mo_module.benchmark import DEFAULT_BENCHMARK_CIRCUITS, analyze_results
 from src.mo_module.benchmark.runner import BenchmarkRun, BenchmarkResultSet
 from src.mo_module.optimizer import OptimizerConfig, optimize_layout
+from src.mo_module.tuning import LayoutTuner, HyperparameterSpace
 from src.qiskit_interface.backend_info import get_backend
 from src.qiskit_interface.transpiler import transpile_circuit
 
@@ -58,14 +59,26 @@ class BenchmarkGUI(ctk.CTk):
         super().__init__()
 
         self.title("Benchmark Multi-Objective Layout Optimizer")
-        self.geometry("1200x800")
+        self.geometry("1400x900")
         
-        # Grid Layout (1 row, 2 columns)
-        self.grid_columnconfigure(1, weight=1)
+        # Grid Layout (1 row, 1 column)
+        self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self._create_sidebar()
-        self._create_main_frame()
+        # Main Master TabView for "Benchmark" and "Tuning"
+        self.master_tabview = ctk.CTkTabview(self)
+        self.master_tabview.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        
+        self.tab_benchmark = self.master_tabview.add("Modo Benchmark")
+        self.tab_benchmark.grid_rowconfigure(0, weight=1)
+        self.tab_benchmark.grid_columnconfigure(1, weight=1)
+        
+        self.tab_tuning = self.master_tabview.add("Modo Tuning (Optuna)")
+        self.tab_tuning.grid_rowconfigure(0, weight=1)
+        self.tab_tuning.grid_columnconfigure(1, weight=1)
+
+        self._create_benchmark_ui()
+        self._create_tuning_ui()
         
         # Benchmark State
         self.is_running = False
@@ -73,8 +86,22 @@ class BenchmarkGUI(ctk.CTk):
         self._last_report = None
         self._last_baseline = None
 
-    def _create_sidebar(self):
-        self.sidebar_frame = ctk.CTkFrame(self, width=300, corner_radius=0)
+        # Tuning State
+        self.is_tuning = False
+        self._tuner = None
+
+    def _create_benchmark_ui(self):
+        self._create_sidebar(self.tab_benchmark)
+        self._create_main_frame(self.tab_benchmark)
+        
+        # Benchmark State
+        self.is_running = False
+        self._last_results = None
+        self._last_report = None
+        self._last_baseline = None
+
+    def _create_sidebar(self, parent):
+        self.sidebar_frame = ctk.CTkFrame(parent, width=300, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         self.sidebar_frame.grid_rowconfigure(9, weight=1)
 
@@ -142,8 +169,8 @@ class BenchmarkGUI(ctk.CTk):
         self.run_button = ctk.CTkButton(self.sidebar_frame, text="▶ Ejecutar Benchmark", command=self.start_benchmark)
         self.run_button.grid(row=15, column=0, padx=20, pady=20, sticky="ew")
 
-    def _create_main_frame(self):
-        self.main_frame = ctk.CTkFrame(self)
+    def _create_main_frame(self, parent):
+        self.main_frame = ctk.CTkFrame(parent)
         self.main_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
         self.main_frame.grid_rowconfigure(1, weight=1)
         self.main_frame.grid_columnconfigure(0, weight=1)
@@ -182,7 +209,120 @@ class BenchmarkGUI(ctk.CTk):
         self.plot_frame = ctk.CTkFrame(self.tab_plots)
         self.plot_frame.grid(row=0, column=0, sticky="nsew")
 
-    def log(self, text):
+    def _create_tuning_ui(self):
+        # Frame lateral (Configuración)
+        self.t_sidebar = ctk.CTkFrame(self.tab_tuning, width=350, corner_radius=0)
+        self.t_sidebar.grid(row=0, column=0, sticky="nsew")
+        self.t_sidebar.grid_rowconfigure(20, weight=1)
+
+        logo_label = ctk.CTkLabel(self.t_sidebar, text="Configuración Tuning", font=ctk.CTkFont(size=18, weight="bold"))
+        logo_label.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 10))
+
+        # Circuito (solo 1 para tuning)
+        ctk.CTkLabel(self.t_sidebar, text="Circuito:").grid(row=1, column=0, padx=10, sticky="w")
+        circuit_names = [bc.name for bc in DEFAULT_BENCHMARK_CIRCUITS]
+        self.t_circuit = ctk.CTkOptionMenu(self.t_sidebar, values=circuit_names)
+        self.t_circuit.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        # Backend
+        ctk.CTkLabel(self.t_sidebar, text="Backend:").grid(row=2, column=0, padx=10, sticky="w")
+        self.t_backend = ctk.CTkOptionMenu(self.t_sidebar, values=['fake_torino', 'fake_sherbrooke', 'fake_brisbane'])
+        self.t_backend.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+
+        # Trials
+        self.t_trials_label = ctk.CTkLabel(self.t_sidebar, text="Trials: 10")
+        self.t_trials_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
+        self.t_trials_slider = ctk.CTkSlider(self.t_sidebar, from_=5, to=60, number_of_steps=55, command=lambda v: self.t_trials_label.configure(text=f"Trials: {int(v)}"))
+        self.t_trials_slider.set(10)
+        self.t_trials_slider.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+
+        # Seeds/Trial
+        self.t_seeds_label = ctk.CTkLabel(self.t_sidebar, text="Seeds/Trial: 3")
+        self.t_seeds_label.grid(row=5, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
+        self.t_seeds_slider = ctk.CTkSlider(self.t_sidebar, from_=1, to=10, number_of_steps=9, command=lambda v: self.t_seeds_label.configure(text=f"Seeds/Trial: {int(v)}"))
+        self.t_seeds_slider.set(3)
+        self.t_seeds_slider.grid(row=6, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+
+        # Rangos Pop & Gen
+        ctk.CTkLabel(self.t_sidebar, text="Rango Población:", font=ctk.CTkFont(weight="bold")).grid(row=7, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        
+        frame_pop = ctk.CTkFrame(self.t_sidebar, fg_color="transparent")
+        frame_pop.grid(row=8, column=0, columnspan=2, sticky="ew", padx=10)
+        ctk.CTkLabel(frame_pop, text="Min:").pack(side="left")
+        self.t_pop_min = ctk.CTkEntry(frame_pop, width=50)
+        self.t_pop_min.insert(0, "20")
+        self.t_pop_min.pack(side="left", padx=(5, 15))
+        ctk.CTkLabel(frame_pop, text="Max:").pack(side="left")
+        self.t_pop_max = ctk.CTkEntry(frame_pop, width=50)
+        self.t_pop_max.insert(0, "80")
+        self.t_pop_max.pack(side="left", padx=(5, 0))
+
+        ctk.CTkLabel(self.t_sidebar, text="Rango Generaciones:", font=ctk.CTkFont(weight="bold")).grid(row=9, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        
+        frame_gen = ctk.CTkFrame(self.t_sidebar, fg_color="transparent")
+        frame_gen.grid(row=10, column=0, columnspan=2, sticky="ew", padx=10)
+        ctk.CTkLabel(frame_gen, text="Min:").pack(side="left")
+        self.t_gen_min = ctk.CTkEntry(frame_gen, width=50)
+        self.t_gen_min.insert(0, "30")
+        self.t_gen_min.pack(side="left", padx=(5, 15))
+        ctk.CTkLabel(frame_gen, text="Max:").pack(side="left")
+        self.t_gen_max = ctk.CTkEntry(frame_gen, width=50)
+        self.t_gen_max.insert(0, "120")
+        self.t_gen_max.pack(side="left", padx=(5, 0))
+
+        # Checkboxes Objetivos
+        ctk.CTkLabel(self.t_sidebar, text="Objetivos:", font=ctk.CTkFont(weight="bold")).grid(row=11, column=0, columnspan=2, padx=10, pady=(15,0), sticky="w")
+        self.t_obj_depth = ctk.CTkCheckBox(self.t_sidebar, text="depth")
+        self.t_obj_depth.grid(row=12, column=0, padx=20, sticky="w"); self.t_obj_depth.select()
+        self.t_obj_cnot = ctk.CTkCheckBox(self.t_sidebar, text="cnot_count")
+        self.t_obj_cnot.grid(row=13, column=0, padx=20, sticky="w"); self.t_obj_cnot.select()
+
+        # Checkboxes Algoritmos
+        ctk.CTkLabel(self.t_sidebar, text="Algoritmos Space:", font=ctk.CTkFont(weight="bold")).grid(row=14, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        self.t_alg_nsga2 = ctk.CTkCheckBox(self.t_sidebar, text="nsga2")
+        self.t_alg_nsga2.grid(row=15, column=0, padx=20, sticky="w"); self.t_alg_nsga2.select()
+        self.t_alg_moead = ctk.CTkCheckBox(self.t_sidebar, text="moead")
+        self.t_alg_moead.grid(row=16, column=0, padx=20, sticky="w")
+
+        # Workers (Tuning)
+        n_cpus = os.cpu_count() or 1
+        default_workers = max(1, n_cpus // 2)
+        max_workers = max(default_workers * 2, 8)
+        self.t_workers_label = ctk.CTkLabel(self.t_sidebar, text=f"Workers: {default_workers} (Max {max_workers})", anchor="w")
+        self.t_workers_label.grid(row=17, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
+        self.t_workers_slider = ctk.CTkSlider(self.t_sidebar, from_=1, to=max_workers, number_of_steps=max_workers-1, command=lambda v: self.t_workers_label.configure(text=f"Workers: {int(v)} (Max {int(max_workers)})"))
+        self.t_workers_slider.set(default_workers)
+        self.t_workers_slider.grid(row=18, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+
+        # Config Output (ReadOnly)
+        self.t_best_config_btn = ctk.CTkButton(self.t_sidebar, text="Copiar a Benchmark", state="disabled", fg_color="green", command=self._copy_best_to_benchmark)
+        self.t_best_config_btn.grid(row=19, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+
+        # Run Button
+        self.t_run_button = ctk.CTkButton(self.t_sidebar, text="▶ Iniciar Tuning Optuna", command=self.start_tuning)
+        self.t_run_button.grid(row=20, column=0, columnspan=2, padx=20, pady=20, sticky="ew")
+
+        # Main Frame Tuning
+        self.t_main_frame = ctk.CTkFrame(self.tab_tuning)
+        self.t_main_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.t_main_frame.grid_rowconfigure(2, weight=1)
+        self.t_main_frame.grid_columnconfigure(0, weight=1)
+
+        self.t_progress_label = ctk.CTkLabel(self.t_main_frame, text="Esperando inicio...", font=ctk.CTkFont(weight="bold"))
+        self.t_progress_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+        
+        self.t_terminal_text = ctk.CTkTextbox(self.t_main_frame, height=300, font=ctk.CTkFont(family="Consolas", size=12))
+        self.t_terminal_text.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.t_terminal_text.configure(state="disabled")
+
+        self.t_plot_frame = ctk.CTkFrame(self.t_main_frame)
+        self.t_plot_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+
+    def t_log(self, text):
+        self.t_terminal_text.configure(state="normal")
+        self.t_terminal_text.insert("end", text + "\n")
+        self.t_terminal_text.see("end")
+        self.t_terminal_text.configure(state="disabled")
         self.terminal_text.configure(state="normal")
         self.terminal_text.insert("end", text + "\n")
         self.terminal_text.see("end")
@@ -328,7 +468,158 @@ class BenchmarkGUI(ctk.CTk):
         if self._last_results and self._last_baseline:
             self._render_plots()
 
-    def _render_plots(self):
+    def start_tuning(self):
+        if self.is_tuning:
+            return
+
+        circuit_name = self.t_circuit.get()
+        backend_name = self.t_backend.get()
+        trials = int(self.t_trials_slider.get())
+        seeds = int(self.t_seeds_slider.get())
+        workers = int(self.t_workers_slider.get())
+
+        try:
+            pmin = int(self.t_pop_min.get())
+            pmax = int(self.t_pop_max.get())
+            gmin = int(self.t_gen_min.get())
+            gmax = int(self.t_gen_max.get())
+        except ValueError:
+            self.t_log("⚠ Error: Los rangos de población y generaciones deben ser enteros.")
+            return
+
+        objs = []
+        if self.t_obj_depth.get(): objs.append("depth")
+        if self.t_obj_cnot.get(): objs.append("cnot_count")
+
+        algs = []
+        if self.t_alg_nsga2.get(): algs.append("nsga2")
+        if self.t_alg_moead.get(): algs.append("moead")
+
+        if not objs or not algs:
+            self.t_log("⚠ Selecciona al menos un objetivo y un algoritmo.")
+            return
+
+        self.is_tuning = True
+        self.t_run_button.configure(state="disabled")
+        self.t_best_config_btn.configure(state="disabled")
+        self.t_terminal_text.configure(state="normal")
+        self.t_terminal_text.delete("1.0", "end")
+        self.t_terminal_text.configure(state="disabled")
+
+        for widget in self.t_plot_frame.winfo_children():
+            widget.destroy()
+
+        self.t_log(f'Tuning: {trials} trials × {seeds} seeds')
+        self.t_log(f'Workers: {workers}')
+        self.t_log(f'Circuito: {circuit_name} | Backend: {backend_name}')
+        self.t_log(f'Pop Rango: [{pmin}, {pmax}] | Gen Rango: [{gmin}, {gmax}]')
+        self.t_log(f'Objetivos: {objs} | Algoritmos: {algs}')
+        self.t_log('=' * 60)
+
+        threading.Thread(target=self._run_tuning_thread, args=(circuit_name, backend_name, trials, seeds, workers, pmin, pmax, gmin, gmax, objs, algs), daemon=True).start()
+
+    def _run_tuning_thread(self, c_name, b_name, t, s, w, pmin, pmax, gmin, gmax, objs, algs):
+        self.after(0, lambda: self.t_progress_label.configure(text="Ejecutando Optuna (ver salida en consola del script original)..."))
+        t0 = time.perf_counter()
+
+        try:
+            bc = next(bc for bc in DEFAULT_BENCHMARK_CIRCUITS if bc.name == c_name)
+            circuit = bc.create()
+            backend = get_backend(b_name)
+
+            space = HyperparameterSpace(
+                population_size_range=(pmin, pmax),
+                n_generations_range=(gmin, gmax),
+                algorithms=algs,
+            )
+
+            self._tuner = LayoutTuner(
+                circuit=circuit,
+                backend=backend,
+                n_trials=t,
+                n_seeds=s,
+                n_jobs=w,
+                space=space,
+                objectives=objs,
+                study_name=f'tuning_{c_name}_{b_name}',
+            )
+
+            # Para capturar logs, redirigimos stdout temporalmente
+            import io, sys
+            old_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+
+            self._tuner.tune(show_progress_bar=False) # Progreso en GUI es complejo con optuna bar
+            
+            output = sys.stdout.getvalue()
+            sys.stdout = old_stdout
+            
+            # Print logs if available
+            if output:
+                 self.after(0, self.t_log, output)
+
+            t_t = time.perf_counter() - t0
+            self.after(0, self.t_log, f'\\n✓ Tuning completado en {t_t:.1f} s\\n')
+            
+            summary = self._tuner.summary()
+            self.after(0, self.t_log, summary)
+            
+            best = self._tuner.best_config()
+            self.after(0, self.t_log, f'\\nMejor configuración:\\n{best}')
+
+            # Plots
+            self.after(0, self._render_tuning_plots)
+
+        except Exception as e:
+            self.after(0, self.t_log, f'\\n⚠ Error durante el tuning: {str(e)}')
+
+        finally:
+            self.after(0, lambda: self.t_progress_label.configure(text="Completado."))
+            self.after(0, lambda: self.t_run_button.configure(state="normal"))
+            if self._tuner and getattr(self._tuner, "_best_config", None):
+                self.after(0, lambda: self.t_best_config_btn.configure(state="normal"))
+            self.is_tuning = False
+
+    def _render_tuning_plots(self):
+        try:
+            import optuna.visualization as vis
+            study = self._tuner.study
+            
+            # optuna plots output a plotly Figure. We need to save it to an image, then put in matplotlib
+            import plotly.io as pio
+            
+            # This requires kaleido or orca. Let's do a simple workaround without saving images if possible,
+            # Or use matplotlib directly for study visualization
+            from optuna.visualization.matplotlib import plot_optimization_history
+            import matplotlib.pyplot as plt
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+            plot_optimization_history(study, ax=ax)
+            fig.tight_layout()
+
+            canvas = FigureCanvasTkAgg(fig, master=self.t_plot_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        except Exception as e:
+            self.t_log(f"No se pudieron generar las gráficas: {str(e)}\n(Puede que falte plotly/kaleido para exports, o sea versión de matplotlib antigua)")
+
+    def _copy_best_to_benchmark(self):
+        try:
+            best = self._tuner.best_config()
+            self.pop_slider.set(best.population_size)
+            self.gens_slider.set(best.n_generations)
+            self._update_pop_label(best.population_size)
+            self._update_gens_label(best.n_generations)
+            
+            if best.algorithm in ['nsga2', 'moead']:
+                 self.algo_option.set(best.algorithm)
+            
+            self.master_tabview.set("Modo Benchmark")
+            self.t_log("✓ Configuración transferida al panel de Benchmark")
+        except Exception as e:
+            self.t_log(f"Error copiando config: {str(e)}")
         circuit_names = self._last_results.circuit_names
         n_circuits = len(circuit_names)
         obj_names = self._last_results.runs_for_circuit(circuit_names[0])[0].result.objective_names

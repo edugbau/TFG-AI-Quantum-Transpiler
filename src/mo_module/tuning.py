@@ -162,11 +162,39 @@ def _compute_hypervolume_score(opt_result: OptimizationResult) -> float:
         return 0.0
 
 
+def _evaluate_single_seed(
+    config: OptimizerConfig,
+    circuit: QuantumCircuit,
+    backend,
+    seed: int
+) -> tuple[int, float]:
+    """Evalúa una configuración para una semilla específica."""
+    try:
+        trial_config = OptimizerConfig(
+            algorithm=config.algorithm,
+            population_size=config.population_size,
+            n_generations=config.n_generations,
+            objectives=config.objectives,
+            optimization_level=config.optimization_level,
+            crossover_operator=config.crossover_operator,
+            prob_swap_mutation=config.prob_swap_mutation,
+            prob_replace_mutation=config.prob_replace_mutation,
+            seed=seed,
+            verbose=False,
+        )
+        result = optimize_layout(circuit, backend=backend, config=trial_config)
+        hv = _compute_hypervolume_score(result)
+        return seed, hv
+    except Exception as exc:
+        logger.warning("Evaluación fallida para seed=%d: %s", seed, exc)
+        return seed, 0.0
+
 def _evaluate_config(
     config: OptimizerConfig,
     circuit: QuantumCircuit,
     backend,
     seeds: Sequence[int],
+    n_jobs: int = 1
 ) -> float:
     """Evalúa una configuración ejecutando optimize_layout con múltiples seeds.
 
@@ -179,6 +207,7 @@ def _evaluate_config(
         backend: Backend de referencia.
         seeds: Lista de semillas a usar. El score final es la media
             del hipervolumen sobre todas las ejecuciones.
+        n_jobs: Número de procesos paralelos para evaluar las seeds.
 
     Returns:
         Hipervolumen medio (mayor es mejor). Negativo si todas las
@@ -186,28 +215,19 @@ def _evaluate_config(
     """
     scores: list[float] = []
 
-    for seed in seeds:
-        try:
-            trial_config = OptimizerConfig(
-                algorithm=config.algorithm,
-                population_size=config.population_size,
-                n_generations=config.n_generations,
-                objectives=config.objectives,
-                optimization_level=config.optimization_level,
-                crossover_operator=config.crossover_operator,
-                prob_swap_mutation=config.prob_swap_mutation,
-                prob_replace_mutation=config.prob_replace_mutation,
-                seed=seed,
-                verbose=False,
-            )
-            result = optimize_layout(circuit, backend=backend, config=trial_config)
-            hv = _compute_hypervolume_score(result)
+    if n_jobs == 1:
+        for seed in seeds:
+            _, hv = _evaluate_single_seed(config, circuit, backend, seed)
             scores.append(hv)
             logger.debug("seed=%d → HV=%.6f", seed, hv)
-
-        except Exception as exc:
-            logger.warning("Evaluación fallida para seed=%d: %s", seed, exc)
-            scores.append(0.0)
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            futs = [executor.submit(_evaluate_single_seed, config, circuit, backend, seed) for seed in seeds]
+            for fut in as_completed(futs):
+                seed, hv = fut.result()
+                scores.append(hv)
+                logger.debug("seed=%d → HV=%.6f", seed, hv)
 
     if not scores:
         return 0.0
@@ -290,6 +310,7 @@ class LayoutTuner:
         backend_name: str = "fake_torino",
         n_trials: int = DEFAULT_N_TRIALS,
         n_seeds: int = DEFAULT_N_SEEDS,
+        n_jobs: int = 1,
         space: Optional[HyperparameterSpace] = None,
         objectives: Optional[list[str]] = None,
         study_name: str = "layout_hyperparameter_tuning",
@@ -325,6 +346,7 @@ class LayoutTuner:
         self.backend = backend
         self.n_trials = n_trials
         self.n_seeds = n_seeds
+        self.n_jobs = n_jobs
         self.space = space or HyperparameterSpace()
         self.objectives = objectives or ["depth", "cnot_count"]
         self.study_name = study_name
@@ -380,7 +402,7 @@ class LayoutTuner:
 
         def objective(trial: "optuna.Trial") -> float:
             config = self._suggest_config(trial)
-            score = _evaluate_config(config, self.circuit, self.backend, seeds)
+            score = _evaluate_config(config, self.circuit, self.backend, seeds, self.n_jobs)
             logger.info(
                 "Trial %d/%d: pop=%d, gen=%d, cx=%s, swap=%.2f, rep=%.2f → HV=%.6f",
                 trial.number + 1, self.n_trials,
