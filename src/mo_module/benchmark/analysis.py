@@ -137,6 +137,8 @@ class CircuitAnalysis:
     objective_stats: list[ObjectiveStats] = field(default_factory=list)
     time_stats: Optional[ObjectiveStats] = None
     pareto_size_stats: Optional[ObjectiveStats] = None
+    mo_hv_stats: Optional[ObjectiveStats] = None
+    bl_hv_stats: Optional[ObjectiveStats] = None
     seed_stability_pvalue: Optional[float] = None
 
     def to_text(self) -> str:
@@ -165,6 +167,20 @@ class CircuitAnalysis:
                 f"rango=[{self.pareto_size_stats.min:.0f}, "
                 f"{self.pareto_size_stats.max:.0f}]"
             )
+            
+        if self.mo_hv_stats and self.bl_hv_stats:
+            lines.append("")
+            lines.append("  --- Hipervolumen respecto al peor caso (↑ mejor) ---")
+            lines.append(self.mo_hv_stats.to_row())
+            lines.append(self.bl_hv_stats.to_row())
+            mo_mean = self.mo_hv_stats.mean
+            bl_mean = self.bl_hv_stats.mean
+            if bl_mean > 0:
+                imp = ((mo_mean - bl_mean) / bl_mean) * 100
+                lines.append(f"  Mejora media de HV (MO vs Qiskit): {imp:+.1f}%")
+            elif mo_mean > 0 and bl_mean == 0:
+                lines.append(f"  Mejora media de HV (MO vs Qiskit): +∞% (Qiskit=0)")
+
         if self.seed_stability_pvalue is not None:
             stable = "SÍ" if self.seed_stability_pvalue > 0.05 else "NO"
             lines.append(
@@ -246,17 +262,19 @@ class BenchmarkReport:
 # ===========================================================================
 
 
-def analyze_results(result_set: BenchmarkResultSet) -> BenchmarkReport:
+def analyze_results(result_set: BenchmarkResultSet, baseline_results: Optional[dict] = None) -> BenchmarkReport:
     """Analiza un ``BenchmarkResultSet`` y produce un ``BenchmarkReport``.
 
     Para cada circuito, calcula:
       - Estadísticas descriptivas (media, std, mediana, IQR, CV) del
         **mejor valor** de cada objetivo por semilla.
+      - Estadísticas del Hipervolumen (MO vs Qiskit estandar) si `baseline_results` existe.
       - Estadísticas de tiempo de ejecución y tamaño del frente.
       - Test de Kruskal-Wallis para evaluar la estabilidad entre semillas.
 
     Args:
         result_set: Resultados de ``BenchmarkRunner.run()``.
+        baseline_results: Resultados correspondientes a las transpilaciones estándar de Qiskit.
 
     Returns:
         ``BenchmarkReport`` con el análisis completo.
@@ -294,12 +312,65 @@ def analyze_results(result_set: BenchmarkResultSet) -> BenchmarkReport:
         # --- Estabilidad entre semillas (Kruskal-Wallis) ---
         stability_p = _seed_stability_test(result_set, cname)
 
+        # --- Hipervolumen ---
+        mo_hv_stats = None
+        bl_hv_stats = None
+        if baseline_results and cname in baseline_results:
+            n_obj = len(obj_names)
+            max_obj = [-float('inf')] * n_obj
+            
+            # Buscar máximo en MO
+            for run in runs:
+                F = run.result.pareto_fitness
+                if F is not None and len(F) > 0:
+                    for i in range(n_obj):
+                        max_obj[i] = max(max_obj[i], F[:, i].max())
+            
+            # Buscar máximo en Baseline
+            bl = baseline_results[cname]
+            for seed, metrics in bl.items():
+                for i, oname in enumerate(obj_names):
+                    if oname in metrics and metrics[oname] != float('inf'):
+                        max_obj[i] = max(max_obj[i], metrics[oname])
+                        
+            # Si hemos encontrado máximos válidos
+            if all(m != -float('inf') for m in max_obj):
+                ref_point = np.array(max_obj) + 0.01  # + epsilon prevent 0 area warning
+                from pymoo.indicators.hv import HV
+                hv_calc = HV(ref_point=ref_point)
+                
+                # Calcular HV para cada semilla MO
+                mo_hvs = []
+                for run in runs:
+                    F = run.result.pareto_fitness
+                    if F is not None and len(F) > 0:
+                        mo_hvs.append(hv_calc.do(F))
+                    else:
+                        mo_hvs.append(0.0)
+                        
+                # Calcular HV para cada semilla Baseline
+                bl_hvs = []
+                for run in runs:
+                    metrics = bl.get(run.seed, {})
+                    pt = []
+                    for oname in obj_names:
+                        pt.append(metrics.get(oname, float('inf')))
+                    if all(p != float('inf') for p in pt):
+                        bl_hvs.append(hv_calc.do(np.array([pt])))
+                    else:
+                        bl_hvs.append(0.0)
+                
+                mo_hv_stats = compute_objective_stats("HV_MO", mo_hvs)
+                bl_hv_stats = compute_objective_stats("HV_Qiskit", bl_hvs)
+
         ca = CircuitAnalysis(
             circuit_name=cname,
             n_seeds=len(runs),
             objective_stats=obj_stats_list,
             time_stats=time_stats,
             pareto_size_stats=pareto_stats,
+            mo_hv_stats=mo_hv_stats,
+            bl_hv_stats=bl_hv_stats,
             seed_stability_pvalue=stability_p,
         )
         report.circuit_analyses.append(ca)

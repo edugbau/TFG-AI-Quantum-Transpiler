@@ -442,8 +442,8 @@ class BenchmarkGUI(ctk.CTk):
 
         result_set.total_elapsed_s = time.perf_counter() - t0
         self._last_results = result_set
-        self._last_report = analyze_results(result_set)
         self._last_baseline = baseline
+        self._last_report = analyze_results(result_set, baseline_results=baseline)
 
         # Resumen de terminal
         summary_terminal = (
