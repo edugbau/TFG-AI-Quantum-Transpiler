@@ -1,0 +1,396 @@
+import sys
+import pathlib
+import os
+import threading
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import customtkinter as ctk
+
+# Ensure src is in the python path if executed standalone
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent.parent))
+
+from src.mo_module.benchmark import DEFAULT_BENCHMARK_CIRCUITS, analyze_results
+from src.mo_module.benchmark.runner import BenchmarkRun, BenchmarkResultSet
+from src.mo_module.optimizer import OptimizerConfig, optimize_layout
+from src.qiskit_interface.backend_info import get_backend
+from src.qiskit_interface.transpiler import transpile_circuit
+
+ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+
+# --- Lógica de Qiskit envuelta (fuera de la clase para evitar problemas de pickling con ProcessPool) ---
+def _run_mo_one(bc_name, circuit, seed, backend, config):
+    run_cfg = OptimizerConfig(
+        algorithm=config.algorithm,
+        population_size=config.population_size,
+        n_generations=config.n_generations,
+        objectives=list(config.objectives),
+        optimization_level=config.optimization_level,
+        seed=seed,
+        verbose=False,
+    )
+    try:
+        opt = optimize_layout(circuit=circuit, backend=backend, config=run_cfg)
+        return BenchmarkRun(circuit_name=bc_name, seed=seed, result=opt)
+    except Exception as exc:
+        return BenchmarkRun(circuit_name=bc_name, seed=seed, error=str(exc))
+
+def _run_baseline_one(bc_name, circuit, seed, backend, optimization_level):
+    try:
+        tr = transpile_circuit(
+            circuit=circuit,
+            backend=backend,
+            optimization_level=optimization_level,
+            seed=seed,
+        )
+        tm = tr.transpiled_metrics
+        return bc_name, seed, {'depth': float(tm.depth), 'cnot_count': float(tm.cnot_equivalent)}
+    except Exception:
+        return bc_name, seed, {'depth': float('inf'), 'cnot_count': float('inf')}
+
+class BenchmarkGUI(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("Benchmark Multi-Objective Layout Optimizer")
+        self.geometry("1200x800")
+        
+        # Grid Layout (1 row, 2 columns)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        self._create_sidebar()
+        self._create_main_frame()
+        
+        # Benchmark State
+        self.is_running = False
+        self._last_results = None
+        self._last_report = None
+        self._last_baseline = None
+
+    def _create_sidebar(self):
+        self.sidebar_frame = ctk.CTkFrame(self, width=300, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(9, weight=1)
+
+        logo_label = ctk.CTkLabel(self.sidebar_frame, text="Configuración", font=ctk.CTkFont(size=20, weight="bold"))
+        logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+
+        # Circuitos (Checkboxes en un ScrollableFrame)
+        self.circuits_label = ctk.CTkLabel(self.sidebar_frame, text="Circuitos:", anchor="w")
+        self.circuits_label.grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.circuits_frame = ctk.CTkScrollableFrame(self.sidebar_frame, height=120)
+        self.circuits_frame.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="ew")
+        
+        self.circuit_vars = {}
+        for bc in DEFAULT_BENCHMARK_CIRCUITS:
+            var = ctk.BooleanVar(value=True)
+            self.circuit_vars[bc.name] = var
+            cb = ctk.CTkCheckBox(self.circuits_frame, text=bc.name, variable=var)
+            cb.pack(pady=2, anchor="w")
+
+        # Semillas
+        self.seeds_label = ctk.CTkLabel(self.sidebar_frame, text="Semillas: 10", anchor="w")
+        self.seeds_label.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.seeds_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=30, number_of_steps=29, command=self._update_seeds_label)
+        self.seeds_slider.set(10)
+        self.seeds_slider.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        # Backend
+        self.backend_label = ctk.CTkLabel(self.sidebar_frame, text="Backend:", anchor="w")
+        self.backend_label.grid(row=5, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.backend_option = ctk.CTkOptionMenu(self.sidebar_frame, values=['fake_torino', 'fake_sherbrooke', 'fake_brisbane'])
+        self.backend_option.grid(row=6, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        # Algoritmo
+        self.algo_label = ctk.CTkLabel(self.sidebar_frame, text="Algoritmo:", anchor="w")
+        self.algo_label.grid(row=7, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.algo_option = ctk.CTkOptionMenu(self.sidebar_frame, values=['nsga2', 'moead'])
+        self.algo_option.grid(row=8, column=0, padx=20, pady=(0, 10), sticky="ew")
+        
+        # Separator for second part
+        # Población
+        self.pop_label = ctk.CTkLabel(self.sidebar_frame, text="Población: 30", anchor="w")
+        self.pop_label.grid(row=9, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.pop_slider = ctk.CTkSlider(self.sidebar_frame, from_=6, to=100, number_of_steps=94, command=self._update_pop_label)
+        self.pop_slider.set(30)
+        self.pop_slider.grid(row=10, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        # Generaciones
+        self.gens_label = ctk.CTkLabel(self.sidebar_frame, text="Generaciones: 50", anchor="w")
+        self.gens_label.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.gens_slider = ctk.CTkSlider(self.sidebar_frame, from_=5, to=200, number_of_steps=195, command=self._update_gens_label)
+        self.gens_slider.set(50)
+        self.gens_slider.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        # Workers
+        n_cpus = os.cpu_count() or 1
+        default_workers = max(1, n_cpus // 2)
+        max_workers = max(default_workers * 2, 8)
+        self.workers_label = ctk.CTkLabel(self.sidebar_frame, text=f"Workers: {default_workers} (Max {max_workers})", anchor="w")
+        self.workers_label.grid(row=13, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.workers_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=max_workers, number_of_steps=max_workers-1, command=self._update_workers_label)
+        self.workers_slider.set(default_workers)
+        self.workers_slider.grid(row=14, column=0, padx=20, pady=(0, 20), sticky="ew")
+
+        # Run Button
+        self.run_button = ctk.CTkButton(self.sidebar_frame, text="▶ Ejecutar Benchmark", command=self.start_benchmark)
+        self.run_button.grid(row=15, column=0, padx=20, pady=20, sticky="ew")
+
+    def _create_main_frame(self):
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.main_frame.grid_rowconfigure(1, weight=1)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        
+        # TabView for Results / Plots
+        self.tabview = ctk.CTkTabview(self.main_frame)
+        self.tabview.grid(row=1, column=0, padx=10, pady=(10, 10), sticky="nsew")
+        
+        self.tab_log = self.tabview.add("Progreso & Terminal")
+        self.tab_summary = self.tabview.add("Resumen Estadístico")
+        self.tab_plots = self.tabview.add("Gráficos")
+
+        # -- Tab Progreso --
+        self.tab_log.grid_rowconfigure(1, weight=1)
+        self.tab_log.grid_columnconfigure(0, weight=1)
+        
+        self.progress_label = ctk.CTkLabel(self.tab_log, text="Esperando inicio...", font=ctk.CTkFont(weight="bold"))
+        self.progress_label.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        
+        self.progress_bar = ctk.CTkProgressBar(self.tab_log)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        self.progress_bar.set(0)
+        
+        self.terminal_text = ctk.CTkTextbox(self.tab_log, state="disabled", font=ctk.CTkFont(family="Consolas", size=12))
+        self.terminal_text.grid(row=2, column=0, sticky="nsew")
+
+        # -- Tab Resumen --
+        self.tab_summary.grid_rowconfigure(0, weight=1)
+        self.tab_summary.grid_columnconfigure(0, weight=1)
+        self.summary_text = ctk.CTkTextbox(self.tab_summary, state="disabled", font=ctk.CTkFont(family="Consolas", size=12))
+        self.summary_text.grid(row=0, column=0, sticky="nsew")
+        
+        # -- Tab Plots --
+        self.tab_plots.grid_rowconfigure(0, weight=1)
+        self.tab_plots.grid_columnconfigure(0, weight=1)
+        self.plot_frame = ctk.CTkFrame(self.tab_plots)
+        self.plot_frame.grid(row=0, column=0, sticky="nsew")
+
+    def log(self, text):
+        self.terminal_text.configure(state="normal")
+        self.terminal_text.insert("end", text + "\n")
+        self.terminal_text.see("end")
+        self.terminal_text.configure(state="disabled")
+
+    def _update_seeds_label(self, value):
+        self.seeds_label.configure(text=f"Semillas: {int(value)}")
+
+    def _update_pop_label(self, value):
+        self.pop_label.configure(text=f"Población: {int(value)}")
+
+    def _update_gens_label(self, value):
+        self.gens_label.configure(text=f"Generaciones: {int(value)}")
+
+    def _update_workers_label(self, value):
+        max_workers = self.workers_slider.cget("to")
+        self.workers_label.configure(text=f"Workers: {int(value)} (Max {int(max_workers)})")
+
+    def start_benchmark(self):
+        if self.is_running:
+            return
+            
+        selected_names = [name for name, var in self.circuit_vars.items() if var.get()]
+        if not selected_names:
+            self.log("⚠ Selecciona al menos un circuito en el panel izquierdo.")
+            return
+
+        self.is_running = True
+        self.run_button.configure(state="disabled")
+        self.terminal_text.configure(state="normal")
+        self.terminal_text.delete("1.0", "end")
+        self.terminal_text.configure(state="disabled")
+        
+        self.summary_text.configure(state="normal")
+        self.summary_text.delete("1.0", "end")
+        self.summary_text.configure(state="disabled")
+
+        # Limpiar frame de gráficos
+        for widget in self.plot_frame.winfo_children():
+            widget.destroy()
+
+        circuits = [bc for bc in DEFAULT_BENCHMARK_CIRCUITS if bc.name in selected_names]
+        seeds = list(range(int(self.seeds_slider.get())))
+        n_workers = int(self.workers_slider.get())
+        backend_name = self.backend_option.get()
+        algo_name = self.algo_option.get()
+        pop_size = int(self.pop_slider.get())
+        gens = int(self.gens_slider.get())
+
+        self.log(f'Benchmark: {len(circuits)} circuitos × {len(seeds)} semillas = {len(circuits)*len(seeds)} tareas')
+        self.log(f'Backend: {backend_name}  |  Algoritmo: {algo_name}  |  Workers: {n_workers}')
+        self.log(f'Población: {pop_size}  |  Generaciones: {gens}')
+        self.log('=' * 60)
+
+        threading.Thread(target=self._run_benchmark_thread, args=(circuits, seeds, n_workers, backend_name, algo_name, pop_size, gens), daemon=True).start()
+
+    def _run_benchmark_thread(self, circuits, seeds, n_workers, backend_name, algo_name, pop_size, gens):
+        n_total = len(circuits) * len(seeds)
+        config = OptimizerConfig(
+            algorithm=algo_name,
+            population_size=pop_size,
+            n_generations=gens,
+            objectives=['depth', 'cnot_count'],
+            verbose=False,
+        )
+
+        backend = get_backend(backend_name)
+        result_set = BenchmarkResultSet(backend_name=backend_name, config=config)
+        baseline = {bc.name: {} for bc in circuits}
+
+        t0 = time.perf_counter()
+
+        # Paso 1: MO
+        self.after(0, self.log, f'\\n[MO] Lanzando {n_total} tareas con {n_workers} workers…')
+        self.after(0, lambda: self.progress_label.configure(text="[MO] Optimizando diseños..."))
+        self.after(0, self.progress_bar.set, 0)
+        
+        mo_tasks = [(bc.name, bc.create(), seed, backend, config) for bc in circuits for seed in seeds]
+        mo_done = 0
+
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futs = {executor.submit(_run_mo_one, *t): t for t in mo_tasks}
+            for fut in as_completed(futs):
+                run = fut.result()
+                result_set.runs.append(run)
+                mo_done += 1
+                tag = '✓' if run.error is None else '✗'
+                msg = f'  {tag} [MO] {mo_done}/{n_total}  {run.circuit_name} seed={run.seed}'
+                self.after(0, self.log, msg)
+                self.after(0, self.progress_bar.set, mo_done / n_total)
+
+        t_mo = time.perf_counter() - t0
+        self.after(0, self.log, f'[MO] Completado en {t_mo:.1f} s')
+
+        # Paso 2: Baseline
+        self.after(0, self.log, f'\\n[Baseline] Lanzando {n_total} tareas…')
+        self.after(0, lambda: self.progress_label.configure(text="[Baseline] Transpilando con Qiskit por defecto..."))
+        self.after(0, self.progress_bar.set, 0)
+
+        bl_tasks = [(bc.name, bc.create(), seed, backend, config.optimization_level) for bc in circuits for seed in seeds]
+        bl_done = 0
+
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futs = {executor.submit(_run_baseline_one, *t): t for t in bl_tasks}
+            for fut in as_completed(futs):
+                bc_name, seed, metrics = fut.result()
+                baseline[bc_name][seed] = metrics
+                bl_done += 1
+                self.after(0, self.log, f'  ✓ [BL] {bl_done}/{n_total}  {bc_name} seed={seed}')
+                self.after(0, self.progress_bar.set, bl_done / n_total)
+
+        result_set.total_elapsed_s = time.perf_counter() - t0
+        self._last_results = result_set
+        self._last_report = analyze_results(result_set)
+        self._last_baseline = baseline
+
+        # Resumen de terminal
+        summary_terminal = (
+            '\\n' + '=' * 60 + '\\n' +
+            f'✓ COMPLETADO: {result_set.n_ok} ok / {result_set.n_failed} fallidas ' +
+            f'en {result_set.total_elapsed_s:.1f} s  (workers={n_workers})\\n' +
+            '=' * 60 + '\\n\\n' + result_set.summary() + '\\n'
+        )
+        self.after(0, self.log, summary_terminal)
+
+        # Atualizar tab de resultados
+        self.after(0, self._render_results)
+        
+        # Habilitar UI
+        self.after(0, lambda: self.progress_label.configure(text="Completado."))
+        self.after(0, self.progress_bar.set, 1)
+        self.is_running = False
+        self.after(0, lambda: self.run_button.configure(state="normal"))
+
+    def _render_results(self):
+        # Escribir informe completo en Resumen
+        if self._last_report:
+            self.summary_text.configure(state="normal")
+            self.summary_text.insert("end", self._last_report.to_text())
+            self.summary_text.configure(state="disabled")
+            
+        # Generar Boxplots
+        if self._last_results and self._last_baseline:
+            self._render_plots()
+
+    def _render_plots(self):
+        circuit_names = self._last_results.circuit_names
+        n_circuits = len(circuit_names)
+        obj_names = self._last_results.runs_for_circuit(circuit_names[0])[0].result.objective_names
+        n_obj = len(obj_names)
+
+        fig, axes = plt.subplots(
+            n_obj, n_circuits,
+            figsize=(5 * n_circuits, 3.5 * n_obj),
+            squeeze=False,
+        )
+        fig.suptitle('MO vs Qiskit por defecto — Distribución por semilla', fontsize=13, fontweight='bold')
+
+        for ci, cname in enumerate(circuit_names):
+            for oi, oname in enumerate(obj_names):
+                ax = axes[oi][ci]
+
+                # Valores MO
+                mo_values = self._last_results.best_per_seed(cname, oi)
+
+                # Valores Baseline
+                bl = self._last_baseline.get(cname, {}) if self._last_baseline else {}
+                bl_values = [v[oname] for v in bl.values() if oname in v and v[oname] != float('inf')]
+
+                data_to_plot = [mo_values, bl_values] if bl_values else [mo_values]
+                labels = ['MO', 'Qiskit'] if bl_values else ['MO']
+                colors = ['#aec6e8', '#f4a582']
+
+                bp = ax.boxplot(data_to_plot, vert=True, patch_artist=True,
+                                tick_labels=labels,
+                                medianprops=dict(color='#c0392b', linewidth=2))
+                for patch, color in zip(bp['boxes'], colors):
+                    patch.set_facecolor(color)
+
+                # Jitter
+                rng = np.random.default_rng(0)
+                for pos_idx, vals in enumerate(data_to_plot):
+                    jitter = rng.uniform(-0.1, 0.1, len(vals))
+                    ax.scatter([pos_idx + 1 + j for j in jitter], vals,
+                               alpha=0.6, s=18, color='#2c3e50', zorder=3)
+
+                ax.set_title(f'{cname}\n{oname}', fontsize=9)
+                ax.set_ylabel(oname if ci == 0 else '')
+
+                # Anotación porcentaje
+                if bl_values and mo_values:
+                    mo_med = np.median(mo_values)
+                    bl_med = np.median(bl_values)
+                    if bl_med > 0:
+                        pct = (bl_med - mo_med) / bl_med * 100
+                        sign = '+' if pct >= 0 else ''
+                        ax.annotate(f'{sign}{pct:.1f}%', xy=(0.5, 0.02),
+                                    xycoords='axes fraction', ha='center',
+                                    fontsize=8, color='green' if pct > 0 else 'red',
+                                    fontweight='bold')
+
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        
+        # Embeber canvas en CustomTkinter
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+if __name__ == "__main__":
+    app = BenchmarkGUI()
+    app.mainloop()
