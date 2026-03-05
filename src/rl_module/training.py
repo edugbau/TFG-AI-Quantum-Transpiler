@@ -112,7 +112,6 @@ def setup_training_pipeline(
         env=env,
         algorithm=algorithm,
         tensorboard_log=log_dir,
-        seed=seed,
         **hyperparams
     )
     

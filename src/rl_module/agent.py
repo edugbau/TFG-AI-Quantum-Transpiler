@@ -6,11 +6,14 @@ modelos PPO/DQN, gestionando el uso de GPU (PyTorch) automáticamente.
 """
 
 import os
+import logging
 import torch
 from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.base_class import BaseAlgorithm
 import gymnasium as gym
 from typing import Any, Dict, Optional, Type
+
+logger = logging.getLogger(__name__)  # FIX #5: logging en vez de print
 
 class QuantumRLAgent:
     """
@@ -51,7 +54,7 @@ class QuantumRLAgent:
         
         # Detección automática de dispositivo (CUDA si está disponible)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"[{algorithm}] Inicializando agente en dispositivo: {self.device.upper()}")
+        logger.info("[%s] Inicializando agente en dispositivo: %s", algorithm, self.device.upper())
         
         AlgorithmClass = self.ALGORITHMS[algorithm]
         
@@ -77,7 +80,7 @@ class QuantumRLAgent:
         Returns:
             El modelo entrenado.
         """
-        print(f"Iniciando entrenamiento por {total_timesteps} timesteps...")
+        logger.info("Iniciando entrenamiento por %d timesteps...", total_timesteps)
         self.model.learn(total_timesteps=total_timesteps, callback=callbacks, progress_bar=progress_bar)
         return self.model
 
@@ -97,21 +100,32 @@ class QuantumRLAgent:
 
     def save(self, path: str):
         """Guarda los pesos del modelo en disco."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # FIX #7: Guard clause para rutas sin directorio padre
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self.model.save(path)
-        print(f"Modelo guardado en {path}")
+        logger.info("Modelo guardado en %s", path)
 
     @classmethod
     def load(cls, path: str, env: gym.Env, algorithm: str = "PPO", **kwargs) -> 'QuantumRLAgent':
         """
         Carga un modelo entrenado desde el disco.
+        
+        FIX #6: Evita crear un modelo que se descarta inmediatamente.
+        Usa object.__new__ para construir sin pasar por __init__ completo.
         """
         if algorithm not in cls.ALGORITHMS:
             raise ValueError(f"Algoritmo {algorithm} no soportado.")
             
         AlgorithmClass = cls.ALGORITHMS[algorithm]
-        agent = cls(env=env, algorithm=algorithm, **kwargs)
         
-        print(f"Cargando modelo desde {path}")
+        # Crear instancia sin __init__ para evitar instanciar un modelo descartable
+        agent = object.__new__(cls)
+        agent.algorithm_name = algorithm
+        agent.env = env
+        agent.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        logger.info("Cargando modelo desde %s", path)
         agent.model = AlgorithmClass.load(path, env=env, device=agent.device)
         return agent

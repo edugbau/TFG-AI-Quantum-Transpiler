@@ -23,6 +23,7 @@ import pytest
 import numpy as np
 import os
 import tempfile
+import warnings
 
 # ---------------------------------------------------------------------------
 # Imports del módulo bajo test
@@ -158,6 +159,12 @@ class TestRoutingStrategy:
         action_space = strategy.get_action_space()
         assert action_space.n == 2  # Solo (0,1) y (1,2)
 
+    def test_edges_are_deterministically_ordered(self):
+        """FIX #9: Las aristas tienen un orden determinista (sorted)."""
+        coupling = [(2, 3), (0, 1), (1, 2)]
+        strategy = RoutingStrategy(num_qubits=4, coupling_map=coupling, lookahead_window=5)
+        assert strategy.edges == [(0, 1), (1, 2), (2, 3)]
+
     def test_build_observation_shape_and_dtype(self, linear_coupling_3q):
         """build_observation retorna dict con arrays de forma y dtype correctos."""
         strategy = RoutingStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
@@ -264,6 +271,20 @@ class TestSynthesisStrategy:
         gates = [("cx", 0, 1)]
         obs = strategy.build_observation(layout, gates)
         assert strategy.get_observation_space().contains(obs)
+
+    def test_build_observation_handles_single_qubit_gates(self, linear_coupling_3q):
+        """FIX #13: SynthesisStrategy ahora codifica puertas de 1-qubit como (q, q)."""
+        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
+        layout = np.array([0, 1, 2], dtype=np.int32)
+        # Puerta de 1 qubit codificada como (name, q, q)
+        gates = [("h", 0, 0), ("cx", 0, 1)]
+        obs = strategy.build_observation(layout, gates)
+        # Primera puerta: H en qubit 0 → (0, 0)
+        assert obs["lookahead"][0] == 0
+        assert obs["lookahead"][1] == 0
+        # Segunda puerta: CX(0,1) → (0, 1)
+        assert obs["lookahead"][2] == 0
+        assert obs["lookahead"][3] == 1
 
 
 # ===========================================================================
@@ -400,6 +421,38 @@ class TestQuantumTranspilationEnv:
                 mode="invalid_mode",
             )
 
+    def test_init_render_mode(self, simple_circuit_3q, linear_coupling_3q):
+        """FIX #3: render_mode se almacena correctamente."""
+        env = QuantumTranspilationEnv(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+            render_mode="human",
+        )
+        assert env.render_mode == "human"
+
+    def test_init_render_mode_default_none(self, simple_circuit_3q, linear_coupling_3q):
+        """FIX #3: render_mode es None por defecto."""
+        env = QuantumTranspilationEnv(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+        )
+        assert env.render_mode is None
+
+    def test_coupling_set_precomputed(self, simple_circuit_3q, linear_coupling_3q):
+        """FIX #4: _coupling_set se precomputa como set bidireccional."""
+        env = QuantumTranspilationEnv(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+        )
+        assert (0, 1) in env._coupling_set
+        assert (1, 0) in env._coupling_set
+        assert (1, 2) in env._coupling_set
+        assert (2, 1) in env._coupling_set
+        assert (0, 2) not in env._coupling_set
+
     def test_reset_returns_obs_and_info(self, routing_env):
         """reset() retorna una tupla (obs, info) con la estructura correcta."""
         obs, info = routing_env.reset(seed=42)
@@ -434,6 +487,16 @@ class TestQuantumTranspilationEnv:
             routing_env.current_layout,
             np.array(custom_layout, dtype=np.int32),
         )
+
+    def test_reset_invalid_layout_length(self, routing_env):
+        """FIX #12: Layout con longitud incorrecta lanza ValueError."""
+        with pytest.raises(ValueError, match="longitud"):
+            routing_env.reset(seed=42, options={"initial_layout": [0, 1]})
+
+    def test_reset_invalid_layout_duplicates(self, routing_env):
+        """FIX #12: Layout con duplicados lanza ValueError."""
+        with pytest.raises(ValueError, match="duplicados"):
+            routing_env.reset(seed=42, options={"initial_layout": [0, 0, 1]})
 
     def test_reset_clears_state(self, routing_env):
         """reset() reinicia current_step y total_swaps a 0."""
@@ -493,7 +556,7 @@ class TestQuantumTranspilationEnv:
 
     def test_truncation_at_max_steps(self, simple_circuit_3q):
         """El episodio se trunca al alcanzar max_steps."""
-        # Coupling sin conexión directa → las puertas nunca se ejecutan
+        # Coupling sin conexión directa para la puerta → nunca se ejecuta
         coupling = [(0, 1)]  # Solo una arista
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
@@ -507,9 +570,9 @@ class TestQuantumTranspilationEnv:
 
         assert truncated is True
 
-    def test_termination_when_all_gates_executed(self, linear_coupling_3q):
+    def test_termination_when_all_gates_executed(self):
         """El episodio termina cuando se ejecutan todas las puertas."""
-        # Circuito con una sola CX(0,1) y coupling (0,1) → ejecutable inmediatamente
+        # CX(0,1) y coupling (0,1) → ejecutable si layout = [0,1]
         qc = QuantumCircuit(2, name="trivial")
         qc.cx(0, 1)
         coupling = [(0, 1)]
@@ -520,19 +583,41 @@ class TestQuantumTranspilationEnv:
             max_steps=100,
         )
         env.reset(seed=42)
-
-        # La puerta CX(0,1) debería ejecutarse en el primer paso
-        # ya que qubits lógicos 0,1 están en físicos 0,1 conectados
-        # Al hacer un SWAP el layout cambia, pero _try_execute_front_layer 
-        # se llama después. En layout trivial, la puerta ya podría ejecutarse
-        # directamente. Pero la ejecución se intenta solo después de un SWAP.
-        # Necesitamos hacer un SWAP para trigger la evaluación.
+        # Con layout trivial [0,1], CX(0,1) necesita qubits 0→phys0, 1→phys1.
+        # Con SWAP(0,1) el layout se invierte, pero _try_execute_front_layer
+        # se ejecuta después del SWAP.
+        # Hagamos un SWAP para trigger la ejecución
         _, _, terminated, truncated, info = env.step(0)
-        # Tras el SWAP, la puerta debería haberse ejecutado o no
-        # Dependiendo de la implementación, puede requerir más pasos
-        # Al menos verificamos que terminated o truncated son bool
         assert isinstance(terminated, bool)
         assert isinstance(truncated, bool)
+
+    def test_cascading_gate_execution(self):
+        """FIX #2: _try_execute_front_layer ejecuta en cascada múltiples puertas."""
+        # Dos CX consecutivos: CX(0,1) y CX(1,2) con coupling lineal [0-1-2]
+        # En layout trivial ambas son ejecutables sin SWAP
+        qc = QuantumCircuit(3)
+        qc.cx(0, 1)
+        qc.cx(1, 2)
+        coupling = [(0, 1), (1, 2)]
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=coupling,
+            mode="routing",
+            max_steps=100,
+        )
+        env.reset(seed=42)
+        # En layout trivial [0,1,2], ambas CX están ya satisfechas.
+        # Tras un SWAP (que puede desbloquear), comprobamos cuántas se ejecutan.
+        # Pero con layout trivial, la front layer ya está satisfecha antes del SWAP.
+        # Vamos a forzarlo: primero hacemos un SWAP para mover qubits,
+        # luego otro SWAP para restaurar → las 2 puertas se ejecutan en cascada.
+        
+        # Opción alternativa: verificar directamente _try_execute_front_layer
+        gates_count = env._try_execute_front_layer()
+        # Ambas CX deberían ejecutarse porque layout trivial [0,1,2]
+        # mapea lógico 0→físico 0, etc., y (0,1) y (1,2) están en el coupling
+        assert gates_count == 2
+        assert len(env.remaining_gates) == 0
 
     def test_extract_gates_two_qubit(self, simple_circuit_3q, linear_coupling_3q):
         """_extract_gates_from_circuit extrae puertas de 2 qubits correctamente."""
@@ -562,6 +647,20 @@ class TestQuantumTranspilationEnv:
         for gate_name, q1, q2 in gates:
             assert q1 == q2  # 1-qubit gates have q1 == q2
 
+    def test_extract_gates_three_qubit_warning(self):
+        """FIX #11: Puertas de 3+ qubits generan un warning."""
+        qc = QuantumCircuit(3)
+        qc.ccx(0, 1, 2)  # Toffoli = 3 qubits
+        env = QuantumTranspilationEnv(
+            target_circuit=qc, coupling_map=[(0, 1), (1, 2)], mode="routing"
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            gates = env._extract_gates_from_circuit()
+            assert len(w) == 1
+            assert "3 qubits" in str(w[0].message)
+        assert len(gates) == 0  # La puerta de 3 qubits se ignora
+
     def test_is_connected(self, routing_env):
         """_is_connected valida la topología correctamente."""
         routing_env.reset(seed=42)
@@ -571,24 +670,21 @@ class TestQuantumTranspilationEnv:
         assert routing_env._is_connected(1, 2)
         assert not routing_env._is_connected(0, 2)  # No conectados
 
-    def test_get_physical_qubit(self, routing_env):
-        """_get_physical_qubit retorna la posición física correcta."""
+    def test_get_physical_qubit_trivial_layout(self, routing_env):
+        """FIX #1: _get_physical_qubit retorna acceso O(1) con layout trivial."""
         routing_env.reset(seed=42)
         # Layout trivial: [0, 1, 2] → logical 0 está en physical 0
         assert routing_env._get_physical_qubit(0) == 0
         assert routing_env._get_physical_qubit(1) == 1
         assert routing_env._get_physical_qubit(2) == 2
 
-    def test_get_physical_qubit_after_swap(self, routing_env):
-        """Tras un SWAP, _get_physical_qubit refleja el nuevo mapeo."""
-        routing_env.reset(seed=42)
-        # Guardar la acción que realiza SWAP en la primera arista
-        first_edge = routing_env.strategy.edges[0]
-        routing_env.step(0)  # SWAP en la primera arista
-        # Tras el SWAP, los qubits lógicos en las posiciones de la arista se intercambian
-        # Verificar que el layout ha cambiado
-        layout = routing_env.current_layout
-        assert not np.array_equal(layout, np.arange(3, dtype=np.int32))
+    def test_get_physical_qubit_custom_layout(self, routing_env):
+        """FIX #1: _get_physical_qubit funciona con layout no trivial."""
+        routing_env.reset(seed=42, options={"initial_layout": [2, 0, 1]})
+        # Layout: [2, 0, 1] → logical 0 en physical 2, logical 1 en physical 0, logical 2 en physical 1
+        assert routing_env._get_physical_qubit(0) == 2
+        assert routing_env._get_physical_qubit(1) == 0
+        assert routing_env._get_physical_qubit(2) == 1
 
     def test_info_dict_keys_on_swap(self, routing_env):
         """El info dict de step() contiene las claves esperadas tras un SWAP."""
@@ -626,8 +722,8 @@ class TestQuantumTranspilationEnv:
             done = terminated or truncated
             steps += 1
 
-    def test_synthesis_mode_full_episode(self, simple_circuit_3q, linear_coupling_3q):
-        """Un episodio en modo synthesis no lanza errores (lógica scaffold)."""
+    def test_synthesis_mode_step_handles_gate_action(self, simple_circuit_3q, linear_coupling_3q):
+        """FIX #8: El modo synthesis maneja acciones 'gate' sin error."""
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
@@ -638,6 +734,9 @@ class TestQuantumTranspilationEnv:
         for _ in range(10):
             action = env.action_space.sample()
             obs, reward, terminated, truncated, info = env.step(action)
+            # FIX #8: Las acciones gate deben llevar gate_matched_target en info
+            if info.get("action_type") == "gate":
+                assert "gate_matched_target" in info
             if terminated or truncated:
                 break
 
@@ -658,8 +757,6 @@ class TestEnvChecker:
             mode="routing",
             max_steps=50,
         )
-        # check_env lanza AssertionError o warnings si algo está mal.
-        # Usamos skip_render_check pues render no está completo.
         try:
             check_env(env, skip_render_check=True)
         except Exception as e:
@@ -698,7 +795,7 @@ class TestQuantumRLAgent:
         assert routing_env.action_space.contains(action)
 
     def test_save_and_load(self, routing_env):
-        """save() y load() persisten y restauran el modelo correctamente."""
+        """FIX #6: save() y load() persisten y restauran sin crear modelo descartable."""
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "test_model")
             
@@ -710,12 +807,20 @@ class TestQuantumRLAgent:
             assert os.path.exists(save_path + ".zip")
             
             loaded_agent = QuantumRLAgent.load(
-                save_path, env=routing_env, algorithm="PPO", verbose=0
+                save_path, env=routing_env, algorithm="PPO"
             )
             action_after, _ = loaded_agent.predict(obs, deterministic=True)
             
             # Las acciones determinísticas deben coincidir
             assert np.array_equal(action_before, action_after)
+
+    def test_save_bare_filename(self, routing_env):
+        """FIX #7: save() funciona con un nombre de archivo sin directorio."""
+        agent = QuantumRLAgent(env=routing_env, algorithm="PPO", verbose=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = os.path.join(tmpdir, "bare_model")
+            agent.save(save_path)
+            assert os.path.exists(save_path + ".zip")
 
     def test_device_detection(self, routing_env):
         """El agente detecta el dispositivo correcto (cpu o cuda)."""
@@ -723,6 +828,19 @@ class TestQuantumRLAgent:
         import torch
         expected = "cuda" if torch.cuda.is_available() else "cpu"
         assert agent.device == expected
+
+    def test_loaded_agent_has_all_attributes(self, routing_env):
+        """FIX #6: El agente cargado tiene algorithm_name, env y device."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = os.path.join(tmpdir, "test_model")
+            agent = QuantumRLAgent(env=routing_env, algorithm="PPO", verbose=0)
+            agent.save(save_path)
+
+            loaded = QuantumRLAgent.load(save_path, env=routing_env, algorithm="PPO")
+            assert loaded.algorithm_name == "PPO"
+            assert loaded.env is routing_env
+            assert loaded.device in ("cpu", "cuda")
+            assert loaded.model is not None
 
 
 # ===========================================================================

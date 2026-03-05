@@ -47,7 +47,8 @@ class RoutingStrategy(RLEnvStrategy):
     def __init__(self, num_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int):
         super().__init__(num_qubits, coupling_map, lookahead_window)
         # Limpiamos el coupling map (evitamos aristas duplicadas si es bidireccional para los SWAPs)
-        self.edges = list(set([tuple(sorted(edge)) for edge in coupling_map]))
+        # FIX #9: Orden determinista con sorted() para reproducibilidad
+        self.edges = sorted(set(tuple(sorted(edge)) for edge in coupling_map))
         self.num_edges = len(self.edges)
 
     def get_observation_space(self) -> gym.Space:
@@ -125,9 +126,12 @@ class SynthesisStrategy(RLEnvStrategy):
         # Scaffolding de momento idéntico al routing.
         lookahead_array = np.full(self.lookahead_window * 2, -1, dtype=np.int32)
         for i, gate in enumerate(remaining_gates[:self.lookahead_window]):
-             if len(gate) == 3:
+            if len(gate) == 3:  # 2-qubit gate (name, q1, q2)
                 lookahead_array[i*2] = gate[1]
                 lookahead_array[i*2 + 1] = gate[2]
+            else:  # FIX #13: 1-qubit gate — codificar como (q, q)
+                lookahead_array[i*2] = gate[1]
+                lookahead_array[i*2 + 1] = gate[1]
         return {
             'layout': current_layout.copy(),
             'lookahead': lookahead_array
