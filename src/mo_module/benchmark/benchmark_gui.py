@@ -431,7 +431,8 @@ class BenchmarkGUI(ctk.CTk):
         bl_tasks = [(bc.name, bc.create(), seed, backend, config.optimization_level) for bc in circuits for seed in seeds]
         bl_done = 0
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
             futs = {executor.submit(_run_baseline_one, *t): t for t in bl_tasks}
             for fut in as_completed(futs):
                 bc_name, seed, metrics = fut.result()
