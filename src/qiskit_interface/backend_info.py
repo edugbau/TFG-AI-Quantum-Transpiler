@@ -460,12 +460,26 @@ def extract_backend_info(backend) -> BackendInfo:
     # --- 5. Errores de puertas ---
     all_errors = get_gate_errors(backend)
 
-    # Errores de 1 qubit: usamos SX como referencia (siempre está presente)
+    # Errores de 1 qubit: usamos la primera puerta 1Q disponible como referencia
     gate_errors_1q: dict[int, float] = {}
-    sx_errors = all_errors.get("sx", {})
-    for qargs, error in sx_errors.items():
-        if len(qargs) == 1:
-            gate_errors_1q[qargs[0]] = error
+    reference_1q_gate = None
+    for gate in ["sx", "x", "rz", "id"]:
+        if gate in single_qubit_gates and gate in all_errors:
+            reference_1q_gate = gate
+            break
+    
+    if reference_1q_gate is None and single_qubit_gates:
+        # Fallback a cualquier puerta 1Q 
+        for gate in single_qubit_gates:
+            if gate in all_errors:
+                reference_1q_gate = gate
+                break
+
+    if reference_1q_gate:
+        errs_1q = all_errors.get(reference_1q_gate, {})
+        for qargs, error in errs_1q.items():
+            if len(qargs) == 1:
+                gate_errors_1q[qargs[0]] = error
 
     # Errores de 2 qubits: usamos la puerta 2Q detectada
     gate_errors_2q: dict[tuple[int, int], float] = {}
@@ -503,16 +517,13 @@ def extract_backend_info(backend) -> BackendInfo:
 # ===========================================================================
 
 def get_heaviest_hex_layout(backend, num_qubits: int) -> list[int]:
-    """Obtiene un layout basado en los qubits con mejor conectividad.
+    """Obtiene un layout inicial fuertemente conexo.
 
-    Estrategia «greedy»: selecciona los ``num_qubits`` qubits que
-    tienen mayor grado (más conexiones) en el coupling map. Esto
-    proporciona un layout inicial razonable que el módulo MO puede
-    mejorar.
-
-    Decisión: este método es una heurística simple, NO un reemplazo
-    del optimizador MO. Sirve como baseline rápido y como semilla
-    para la comparación.
+    Estrategia de expansión (BFS):
+      1. Selecciona el qubit con mayor conectividad (grado) en el chip.
+      2. Añade progresivamente sus vecinos al modelo hasta alcanzar
+         el número de ``num_qubits`` requeridos.
+      3. Esto garantiza que el layout resultante sea conexo.
 
     Args:
         backend: Instancia de un backend.
@@ -532,20 +543,40 @@ def get_heaviest_hex_layout(backend, num_qubits: int) -> list[int]:
 
     cm = backend.coupling_map
 
-    # Calcular el grado (número de vecinos) de cada qubit
-    degree: dict[int, int] = {}
+    # Calcular el grafo de adyacencia
+    adjacency: dict[int, set[int]] = {i: set() for i in range(backend.num_qubits)}
     for edge in cm.get_edges():
-        for qubit in edge:
-            degree[qubit] = degree.get(qubit, 0) + 1
+        adjacency[edge[0]].add(edge[1])
+        adjacency[edge[1]].add(edge[0])
 
-    # Ordenar por grado descendente y seleccionar los mejores
-    sorted_qubits = sorted(degree.keys(), key=lambda q: degree[q], reverse=True)
-    selected = sorted_qubits[:num_qubits]
+    # El nodo semilla será el que más conexiones tenga
+    seed_node = max(adjacency.keys(), key=lambda q: len(adjacency[q]))
+
+    # Expansión BFS para garantizar conexidad
+    selected = []
+    visited = set()
+    queue = [seed_node]
+
+    while queue and len(selected) < num_qubits:
+        current = queue.pop(0)
+        if current not in visited:
+            visited.add(current)
+            selected.append(current)
+            # Agregar los vecinos (dando prioridad a los de mayor grado para mantener compacidad)
+            neighbors = sorted(list(adjacency[current]), key=lambda q: len(adjacency[q]), reverse=True)
+            for neighbor in neighbors:
+                if neighbor not in visited and neighbor not in queue:
+                    queue.append(neighbor)
+    
+    # Si por alguna razón el grafo estuviere desconectado y no tuvieramos num_qubits
+    if len(selected) < num_qubits:
+        remaining = [q for q in range(backend.num_qubits) if q not in visited]
+        selected.extend(remaining[:num_qubits - len(selected)])
 
     logger.debug(
-        "Layout heaviest-hex: seleccionados qubits %s (grados: %s)",
+        "Layout BFS: seleccionados qubits %s (semilla: %d)",
         selected,
-        [degree[q] for q in selected],
+        seed_node,
     )
     return selected
 

@@ -48,7 +48,7 @@ from typing import Optional, Union
 # ---------------------------------------------------------------------------
 from qiskit import QuantumCircuit            # Clase principal de circuito
 from qiskit import qasm2, qasm3              # Módulos dedicados de QASM
-from qiskit.compiler import transpile as qiskit_transpile  # Para contar CNOTs equivalentes
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager # Para contar CNOTs equivalentes
 from qiskit.circuit.random import random_circuit  # Circuitos aleatorios
 from qiskit.synthesis.qft import synth_qft_full  # Síntesis de QFT (Qiskit 2.1+)
 from qiskit.converters import (              # Conversión Circuit ↔ DAG
@@ -438,11 +438,12 @@ def count_cnot_equivalent(circuit: QuantumCircuit) -> int:
         Número total de CNOTs equivalentes.
     """
     try:
-        cx_circuit = qiskit_transpile(
-            circuit,
-            basis_gates=["cx", "u", "id", "reset", "measure"],
+        pm = generate_preset_pass_manager(
             optimization_level=0,
+            basis_gates=["cx", "sx", "x", "rz", "id", "reset", "measure"],
         )
+        cx_circuit = pm.run(circuit)
+        
         return cx_circuit.count_ops().get("cx", 0)
     except Exception as exc:  # pragma: no cover
         logger.warning("count_cnot_equivalent falló: %s", exc)

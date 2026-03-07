@@ -59,8 +59,9 @@ from typing import Optional, Union
 # ---------------------------------------------------------------------------
 # Imports de Qiskit 2.3.0
 # ---------------------------------------------------------------------------
-from qiskit import QuantumCircuit, transpile  # Circuito + transpilación
+from qiskit import QuantumCircuit              # Circuito
 from qiskit.transpiler import CouplingMap     # Para layouts manuales
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
 # ---------------------------------------------------------------------------
 # Imports internos del módulo
@@ -303,27 +304,21 @@ def transpile_circuit(
         initial_layout,
     )
 
-    # --- Construir kwargs para qiskit.transpile() ---
-    transpile_kwargs = {
-        "circuits": circuit,
-        "backend": backend,
-        "optimization_level": optimization_level,
-        "seed_transpiler": seed,
-    }
-
-    # Añadir layout inicial si se proporcionó
-    if initial_layout is not None:
-        transpile_kwargs["initial_layout"] = initial_layout
-
-    # Añadir métodos de routing/layout si se especificaron
-    if routing_method is not None:
-        transpile_kwargs["routing_method"] = routing_method
-    if layout_method is not None:
-        transpile_kwargs["layout_method"] = layout_method
-
-    # --- Ejecutar transpilación con medición de tiempo ---
+    # --- Generar y ejecutar PassManager ---
     t_start = time.perf_counter()
-    transpiled = transpile(**transpile_kwargs)
+    pm = generate_preset_pass_manager(
+        optimization_level=optimization_level,
+        backend=backend,
+        initial_layout=initial_layout,
+        seed_transpiler=seed,
+    )
+    # Personalizar métodos si se especificaron
+    if routing_method is not None:
+        pm.routing = routing_method
+    if layout_method is not None:
+        pm.layout = layout_method
+
+    transpiled = pm.run(circuit)
     t_end = time.perf_counter()
     elapsed = t_end - t_start
 
