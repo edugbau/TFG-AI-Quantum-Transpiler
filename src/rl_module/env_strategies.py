@@ -9,7 +9,8 @@ así como la lógica de transición (step) dependiendo de si el agente está en 
 from abc import ABC, abstractmethod
 import gymnasium as gym
 import numpy as np
-from typing import Tuple, Dict, Any, List
+from typing import Tuple, Dict, Any, List, Union
+from collections import deque
 
 class RLEnvStrategy(ABC):
     """
@@ -29,14 +30,40 @@ class RLEnvStrategy(ABC):
     def get_action_space(self) -> gym.Space:
         pass
 
-    @abstractmethod
-    def build_observation(self, current_layout: np.ndarray, remaining_gates: List[Tuple[str, int, int]]) -> Dict[str, np.ndarray]:
-        pass
+    def build_observation(
+        self,
+        current_layout: np.ndarray,
+        remaining_gates: Union[List[Tuple[str, int, int]], deque],
+    ) -> Dict[str, np.ndarray]:
+        """
+        Construye la observación que se pasa al agente.
+
+        Codifica el layout actual y una ventana (lookahead) con las
+        próximas puertas pendientes.  Cada puerta se representa como
+        un par ``(qubit_lógico_1, qubit_lógico_2)``.  Las puertas de
+        un solo qubit se codifican como ``(q, q)``.
+
+        Si hay menos puertas que ``lookahead_window``, las posiciones
+        restantes se rellenan con ``-1``.
+        """
+        lookahead_array = np.full(self.lookahead_window * 2, -1, dtype=np.int32)
+
+        for i, gate in enumerate(
+            list(remaining_gates)[:self.lookahead_window]
+        ):
+            # Todas las puertas son tuplas de 3: (name, q1, q2)
+            # con q1 == q2 para puertas de 1 qubit.
+            lookahead_array[i * 2]     = gate[1]
+            lookahead_array[i * 2 + 1] = gate[2]
+
+        return {
+            'layout': current_layout.copy(),
+            'lookahead': lookahead_array
+        }
 
     @abstractmethod
     def decode_action(self, action: Any) -> Dict[str, Any]:
         """Decodifica la acción devuelta por el agente de RL en una operación lógica (ej. Swap en arista K)"""
-        pass
 
 class RoutingStrategy(RLEnvStrategy):
     """
@@ -47,7 +74,7 @@ class RoutingStrategy(RLEnvStrategy):
     def __init__(self, num_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int):
         super().__init__(num_qubits, coupling_map, lookahead_window)
         # Limpiamos el coupling map (evitamos aristas duplicadas si es bidireccional para los SWAPs)
-        # FIX #9: Orden determinista con sorted() para reproducibilidad
+        # Orden determinista con sorted() para reproducibilidad
         self.edges = sorted(set(tuple(sorted(edge)) for edge in coupling_map))
         self.num_edges = len(self.edges)
 
@@ -69,24 +96,6 @@ class RoutingStrategy(RLEnvStrategy):
         """Una acción discreta: Elegir una arista del Coupling Map para realizar un SWAP."""
         return gym.spaces.Discrete(self.num_edges)
 
-    def build_observation(self, current_layout: np.ndarray, remaining_gates: List[Tuple[str, int, int]]) -> Dict[str, np.ndarray]:
-        lookahead_array = np.full(self.lookahead_window * 2, -1, dtype=np.int32)
-        
-        # Rellenar la ventana con las próximas puertas pendientes
-        # Se asume que las puertas en remaining_gates son de la forma (gate_name, qubit_logico_1, qubit_logico_2)
-        for i, gate in enumerate(remaining_gates[:self.lookahead_window]):
-            if len(gate) == 3: # 2-qubit gate (name, q1, q2)
-                lookahead_array[i*2] = gate[1]
-                lookahead_array[i*2 + 1] = gate[2]
-            else: # 1-qubit gate (para completitud, el target y control son iguales)
-                lookahead_array[i*2] = gate[1]
-                lookahead_array[i*2 + 1] = gate[1]
-
-        return {
-            'layout': current_layout.copy(),
-            'lookahead': lookahead_array
-        }
-
     def decode_action(self, action: int) -> Dict[str, Any]:
         if action < 0 or action >= self.num_edges:
             return {"type": "invalid"}
@@ -106,8 +115,6 @@ class SynthesisStrategy(RLEnvStrategy):
     def __init__(self, num_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int, basis_gates: List[str] = ['cx', 'sx', 'rz', 'x']):
         super().__init__(num_qubits, coupling_map, lookahead_window)
         self.basis_gates = basis_gates
-        # Aquí el espacio de acciones se define combinando las puertas y los qubits posibles.
-        # Por simplicidad conceptual, dejaremos un espacio multi-discreto.
         
     def get_observation_space(self) -> gym.Space:
         # Observación más compleja para síntesis (ej. Tableau estabilizador o equivalente)
@@ -122,23 +129,19 @@ class SynthesisStrategy(RLEnvStrategy):
         # (q_fisico_2 se ignora si la puerta es de 1 qubit)
         return gym.spaces.MultiDiscrete([len(self.basis_gates), self.num_qubits, self.num_qubits])
 
-    def build_observation(self, current_layout: np.ndarray, remaining_gates: List[Tuple[str, int, int]]) -> Dict[str, np.ndarray]:
-        # Scaffolding de momento idéntico al routing.
-        lookahead_array = np.full(self.lookahead_window * 2, -1, dtype=np.int32)
-        for i, gate in enumerate(remaining_gates[:self.lookahead_window]):
-            if len(gate) == 3:  # 2-qubit gate (name, q1, q2)
-                lookahead_array[i*2] = gate[1]
-                lookahead_array[i*2 + 1] = gate[2]
-            else:  # FIX #13: 1-qubit gate — codificar como (q, q)
-                lookahead_array[i*2] = gate[1]
-                lookahead_array[i*2 + 1] = gate[1]
-        return {
-            'layout': current_layout.copy(),
-            'lookahead': lookahead_array
-        }
-
     def decode_action(self, action: np.ndarray) -> Dict[str, Any]:
-        gate_idx, pq1, pq2 = action
+        """Decodifica una acción MultiDiscrete en una operación de puerta.
+
+        Valida que los índices estén dentro de rango. Si no lo están,
+        retorna una acción de tipo ``"invalid"``.
+        """
+        gate_idx, pq1, pq2 = int(action[0]), int(action[1]), int(action[2])
+
+        if gate_idx < 0 or gate_idx >= len(self.basis_gates):
+            return {"type": "invalid"}
+        if pq1 < 0 or pq1 >= self.num_qubits or pq2 < 0 or pq2 >= self.num_qubits:
+            return {"type": "invalid"}
+
         return {
             "type": "gate",
             "gate_name": self.basis_gates[gate_idx],

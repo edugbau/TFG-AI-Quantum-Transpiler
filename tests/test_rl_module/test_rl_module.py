@@ -16,7 +16,7 @@ Ejecución:
   pytest tests/test_rl_module/ -v
 
 Autor: Eduardo González Bautista
-Fecha: 2026-03-05
+Fecha: 2026-03-09
 """
 
 import pytest
@@ -24,6 +24,7 @@ import numpy as np
 import os
 import tempfile
 import warnings
+from collections import deque
 
 # ---------------------------------------------------------------------------
 # Imports del módulo bajo test
@@ -160,7 +161,7 @@ class TestRoutingStrategy:
         assert action_space.n == 2  # Solo (0,1) y (1,2)
 
     def test_edges_are_deterministically_ordered(self):
-        """FIX #9: Las aristas tienen un orden determinista (sorted)."""
+        """Las aristas tienen un orden determinista (sorted)."""
         coupling = [(2, 3), (0, 1), (1, 2)]
         strategy = RoutingStrategy(num_qubits=4, coupling_map=coupling, lookahead_window=5)
         assert strategy.edges == [(0, 1), (1, 2), (2, 3)]
@@ -195,6 +196,15 @@ class TestRoutingStrategy:
         layout = np.array([0, 1, 2], dtype=np.int32)
         obs = strategy.build_observation(layout, [])
         assert np.all(obs["lookahead"] == -1)
+
+    def test_build_observation_with_deque(self, linear_coupling_3q):
+        """build_observation funciona con deque además de listas."""
+        strategy = RoutingStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
+        layout = np.array([0, 1, 2], dtype=np.int32)
+        gates = deque([("cx", 0, 1), ("cx", 1, 2)])
+        obs = strategy.build_observation(layout, gates)
+        assert obs["lookahead"][0] == 0
+        assert obs["lookahead"][1] == 1
 
     def test_decode_action_valid_swap(self, linear_coupling_3q):
         """Una acción válida se decodifica como un SWAP con qubits correctos."""
@@ -264,6 +274,20 @@ class TestSynthesisStrategy:
         assert result["physical_q1"] == 0
         assert result["physical_q2"] == 1
 
+    def test_decode_action_invalid_gate_index(self, linear_coupling_3q):
+        """decode_action con gate_idx fuera de rango retorna 'invalid'."""
+        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
+        action = np.array([99, 0, 1])
+        result = strategy.decode_action(action)
+        assert result["type"] == "invalid"
+
+    def test_decode_action_invalid_qubit_index(self, linear_coupling_3q):
+        """decode_action con qubit fuera de rango retorna 'invalid'."""
+        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
+        action = np.array([0, 0, 99])
+        result = strategy.decode_action(action)
+        assert result["type"] == "invalid"
+
     def test_build_observation_in_space(self, linear_coupling_3q):
         """La observación generada pertenece al observation space."""
         strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
@@ -273,7 +297,7 @@ class TestSynthesisStrategy:
         assert strategy.get_observation_space().contains(obs)
 
     def test_build_observation_handles_single_qubit_gates(self, linear_coupling_3q):
-        """FIX #13: SynthesisStrategy ahora codifica puertas de 1-qubit como (q, q)."""
+        """SynthesisStrategy codifica puertas de 1-qubit como (q, q)."""
         strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
         layout = np.array([0, 1, 2], dtype=np.int32)
         # Puerta de 1 qubit codificada como (name, q, q)
@@ -297,30 +321,51 @@ class TestRoutingReward:
     def test_swap_penalty(self):
         """Aplicar un SWAP genera la penalización configurada."""
         reward_fn = RoutingReward(swap_penalty=-1.0)
-        info = {"action_type": "swap", "gates_executed": 0, "is_valid_action": True, "is_completed": False}
+        info = {"action_type": "swap", "gates_executed": 0, "is_valid_action": True, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == -1.0
 
     def test_gate_execution_reward(self):
         """Ejecutar puertas genera recompensa proporcional."""
         reward_fn = RoutingReward(gate_execution_reward=10.0, swap_penalty=0.0)
-        info = {"action_type": "swap", "gates_executed": 3, "is_valid_action": True, "is_completed": False}
+        info = {"action_type": "swap", "gates_executed": 3, "is_valid_action": True, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == 30.0  # 10.0 * 3
 
     def test_invalid_action_penalty(self):
         """Una acción inválida genera penalización."""
         reward_fn = RoutingReward(invalid_action_penalty=-5.0, swap_penalty=0.0)
-        info = {"action_type": None, "gates_executed": 0, "is_valid_action": False, "is_completed": False}
+        info = {"action_type": None, "gates_executed": 0, "is_valid_action": False, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == -5.0
 
     def test_completion_bonus(self):
         """Completar el circuito genera bonificación."""
         reward_fn = RoutingReward(completion_bonus=50.0, swap_penalty=0.0)
-        info = {"action_type": None, "gates_executed": 0, "is_valid_action": True, "is_completed": True}
+        info = {"action_type": None, "gates_executed": 0, "is_valid_action": True, "is_completed": True, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == 50.0
+
+    def test_truncation_penalty(self):
+        """Truncar el episodio sin completar genera penalización configurable."""
+        reward_fn = RoutingReward(truncation_penalty=-20.0, swap_penalty=0.0)
+        info = {"action_type": None, "gates_executed": 0, "is_valid_action": True, "is_completed": False, "is_truncated": True}
+        reward = reward_fn.compute_reward(None, None, None, info)
+        assert reward == -20.0
+
+    def test_truncation_penalty_not_applied_on_completion(self):
+        """La penalización por truncación no se aplica si el circuito se completó."""
+        reward_fn = RoutingReward(truncation_penalty=-20.0, completion_bonus=50.0, swap_penalty=0.0)
+        info = {"action_type": None, "gates_executed": 0, "is_valid_action": True, "is_completed": True, "is_truncated": True}
+        reward = reward_fn.compute_reward(None, None, None, info)
+        assert reward == 50.0  # Solo completion_bonus, sin truncation_penalty
+
+    def test_truncation_penalty_disabled(self):
+        """Se puede deshabilitar la penalización por truncación con 0.0."""
+        reward_fn = RoutingReward(truncation_penalty=0.0, swap_penalty=0.0)
+        info = {"action_type": None, "gates_executed": 0, "is_valid_action": True, "is_completed": False, "is_truncated": True}
+        reward = reward_fn.compute_reward(None, None, None, info)
+        assert reward == 0.0
 
     def test_combined_reward_swap_plus_gates_plus_completion(self):
         """Recompensa combinada: SWAP + ejecución de puerta + completar."""
@@ -329,7 +374,7 @@ class TestRoutingReward:
             gate_execution_reward=10.0,
             completion_bonus=50.0,
         )
-        info = {"action_type": "swap", "gates_executed": 1, "is_valid_action": True, "is_completed": True}
+        info = {"action_type": "swap", "gates_executed": 1, "is_valid_action": True, "is_completed": True, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         # -1 (swap) + 10 (1 gate) + 50 (completed) = 59
         assert reward == 59.0
@@ -342,7 +387,7 @@ class TestRoutingReward:
             invalid_action_penalty=-10.0,
             completion_bonus=100.0,
         )
-        info = {"action_type": "swap", "gates_executed": 2, "is_valid_action": True, "is_completed": False}
+        info = {"action_type": "swap", "gates_executed": 2, "is_valid_action": True, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == pytest.approx(-2.5 + 40.0)
 
@@ -357,30 +402,37 @@ class TestSynthesisReward:
     def test_valid_gate_reward(self):
         """Puerta que contribuye a la síntesis genera recompensa positiva."""
         reward_fn = SynthesisReward(valid_gate_reward=2.0)
-        info = {"gate_matched_target": True, "is_completed": False}
+        info = {"gate_matched_target": True, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == 2.0
 
     def test_incorrect_gate_penalty(self):
         """Puerta que no contribuye genera penalización."""
         reward_fn = SynthesisReward(incorrect_gate_penalty=-1.0)
-        info = {"gate_matched_target": False, "is_completed": False}
+        info = {"gate_matched_target": False, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == -1.0
 
     def test_synthesis_completion_bonus(self):
         """Completar la síntesis genera bonificación."""
         reward_fn = SynthesisReward(completion_bonus=100.0)
-        info = {"gate_matched_target": True, "is_completed": True}
+        info = {"gate_matched_target": True, "is_completed": True, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == pytest.approx(2.0 + 100.0)  # default valid + completion
 
     def test_incorrect_gate_no_completion(self):
         """Puerta incorrecta sin completar solo penaliza."""
         reward_fn = SynthesisReward(incorrect_gate_penalty=-3.0, completion_bonus=100.0)
-        info = {"gate_matched_target": False, "is_completed": False}
+        info = {"gate_matched_target": False, "is_completed": False, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == -3.0
+
+    def test_synthesis_truncation_penalty(self):
+        """Truncar la síntesis sin completar genera penalización configurable."""
+        reward_fn = SynthesisReward(truncation_penalty=-30.0)
+        info = {"gate_matched_target": False, "is_completed": False, "is_truncated": True}
+        reward = reward_fn.compute_reward(None, None, None, info)
+        assert reward == pytest.approx(-1.0 + -30.0)  # default incorrect + truncation
 
 
 # ===========================================================================
@@ -422,7 +474,7 @@ class TestQuantumTranspilationEnv:
             )
 
     def test_init_render_mode(self, simple_circuit_3q, linear_coupling_3q):
-        """FIX #3: render_mode se almacena correctamente."""
+        """render_mode se almacena correctamente."""
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
@@ -432,7 +484,7 @@ class TestQuantumTranspilationEnv:
         assert env.render_mode == "human"
 
     def test_init_render_mode_default_none(self, simple_circuit_3q, linear_coupling_3q):
-        """FIX #3: render_mode es None por defecto."""
+        """render_mode es None por defecto."""
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
@@ -441,7 +493,7 @@ class TestQuantumTranspilationEnv:
         assert env.render_mode is None
 
     def test_coupling_set_precomputed(self, simple_circuit_3q, linear_coupling_3q):
-        """FIX #4: _coupling_set se precomputa como set bidireccional."""
+        """_coupling_set se precomputa como set bidireccional."""
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
@@ -452,6 +504,20 @@ class TestQuantumTranspilationEnv:
         assert (1, 2) in env._coupling_set
         assert (2, 1) in env._coupling_set
         assert (0, 2) not in env._coupling_set
+
+    def test_remaining_gates_is_deque(self, routing_env):
+        """remaining_gates es un deque para O(1) popleft."""
+        routing_env.reset(seed=42)
+        assert isinstance(routing_env.remaining_gates, deque)
+
+    def test_inverse_layout_exists(self, routing_env):
+        """_inverse_layout se crea y es coherente con current_layout."""
+        routing_env.reset(seed=42)
+        layout = routing_env.current_layout
+        inv = routing_env._inverse_layout
+        for lq in range(routing_env.num_qubits):
+            pq = layout[lq]
+            assert inv[pq] == lq
 
     def test_reset_returns_obs_and_info(self, routing_env):
         """reset() retorna una tupla (obs, info) con la estructura correcta."""
@@ -489,14 +555,36 @@ class TestQuantumTranspilationEnv:
         )
 
     def test_reset_invalid_layout_length(self, routing_env):
-        """FIX #12: Layout con longitud incorrecta lanza ValueError."""
+        """Layout con longitud incorrecta lanza ValueError."""
         with pytest.raises(ValueError, match="longitud"):
             routing_env.reset(seed=42, options={"initial_layout": [0, 1]})
 
     def test_reset_invalid_layout_duplicates(self, routing_env):
-        """FIX #12: Layout con duplicados lanza ValueError."""
+        """Layout con duplicados lanza ValueError."""
         with pytest.raises(ValueError, match="duplicados"):
             routing_env.reset(seed=42, options={"initial_layout": [0, 0, 1]})
+
+    def test_reset_invalid_layout_out_of_range(self, routing_env):
+        """Layout con valores fuera de rango lanza ValueError."""
+        with pytest.raises(ValueError, match="fuera del rango"):
+            routing_env.reset(seed=42, options={"initial_layout": [0, 1, 99]})
+
+    def test_reset_executes_satisfiable_gates(self):
+        """reset() ejecuta automáticamente puertas ya satisfechas por el layout."""
+        # CX(0,1) con coupling (0,1) y layout trivial → directamente ejecutable
+        qc = QuantumCircuit(2, name="trivial")
+        qc.cx(0, 1)
+        coupling = [(0, 1)]
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=coupling,
+            mode="routing",
+            max_steps=100,
+        )
+        _, info = env.reset(seed=42)
+        # La puerta debería haberse ejecutado automáticamente al final de reset()
+        assert len(env.remaining_gates) == 0
+        assert info["total_gates"] == 0  # No quedan puertas
 
     def test_reset_clears_state(self, routing_env):
         """reset() reinicia current_step y total_swaps a 0."""
@@ -545,6 +633,16 @@ class TestQuantumTranspilationEnv:
         # El layout debería haber cambiado (SWAP intercambia dos qubits)
         assert not np.array_equal(layout_before, layout_after)
 
+    def test_swap_updates_inverse_layout(self, routing_env):
+        """Tras un SWAP, _inverse_layout se mantiene coherente con current_layout."""
+        routing_env.reset(seed=42)
+        routing_env.step(0)
+        layout = routing_env.current_layout
+        inv = routing_env._inverse_layout
+        for lq in range(routing_env.num_qubits):
+            pq = layout[lq]
+            assert inv[pq] == lq
+
     def test_swap_increments_total_swaps(self, routing_env):
         """Cada SWAP incrementa el contador total_swaps."""
         routing_env.reset(seed=42)
@@ -570,6 +668,24 @@ class TestQuantumTranspilationEnv:
 
         assert truncated is True
 
+    def test_info_contains_is_truncated(self, simple_circuit_3q):
+        """info contiene 'is_truncated' para la función de recompensa."""
+        coupling = [(0, 1)]
+        env = QuantumTranspilationEnv(
+            target_circuit=simple_circuit_3q,
+            coupling_map=coupling,
+            mode="routing",
+            max_steps=2,
+        )
+        env.reset(seed=42)
+        _, _, _, _, info1 = env.step(0)
+        assert "is_truncated" in info1
+        assert info1["is_truncated"] is False
+
+        _, _, _, truncated, info2 = env.step(0)
+        assert truncated is True
+        assert info2["is_truncated"] is True
+
     def test_termination_when_all_gates_executed(self):
         """El episodio termina cuando se ejecutan todas las puertas."""
         # CX(0,1) y coupling (0,1) → ejecutable si layout = [0,1]
@@ -582,17 +698,13 @@ class TestQuantumTranspilationEnv:
             mode="routing",
             max_steps=100,
         )
+        # Con layout trivial, la puerta se ejecuta en reset()
         env.reset(seed=42)
-        # Con layout trivial [0,1], CX(0,1) necesita qubits 0→phys0, 1→phys1.
-        # Con SWAP(0,1) el layout se invierte, pero _try_execute_front_layer
-        # se ejecuta después del SWAP.
-        # Hagamos un SWAP para trigger la ejecución
-        _, _, terminated, truncated, info = env.step(0)
-        assert isinstance(terminated, bool)
-        assert isinstance(truncated, bool)
+        # Verificamos que ya terminó
+        assert len(env.remaining_gates) == 0
 
     def test_cascading_gate_execution(self):
-        """FIX #2: _try_execute_front_layer ejecuta en cascada múltiples puertas."""
+        """_try_execute_front_layer ejecuta en cascada múltiples puertas."""
         # Dos CX consecutivos: CX(0,1) y CX(1,2) con coupling lineal [0-1-2]
         # En layout trivial ambas son ejecutables sin SWAP
         qc = QuantumCircuit(3)
@@ -606,17 +718,7 @@ class TestQuantumTranspilationEnv:
             max_steps=100,
         )
         env.reset(seed=42)
-        # En layout trivial [0,1,2], ambas CX están ya satisfechas.
-        # Tras un SWAP (que puede desbloquear), comprobamos cuántas se ejecutan.
-        # Pero con layout trivial, la front layer ya está satisfecha antes del SWAP.
-        # Vamos a forzarlo: primero hacemos un SWAP para mover qubits,
-        # luego otro SWAP para restaurar → las 2 puertas se ejecutan en cascada.
-        
-        # Opción alternativa: verificar directamente _try_execute_front_layer
-        gates_count = env._try_execute_front_layer()
-        # Ambas CX deberían ejecutarse porque layout trivial [0,1,2]
-        # mapea lógico 0→físico 0, etc., y (0,1) y (1,2) están en el coupling
-        assert gates_count == 2
+        # Con layout trivial, ambas puertas se ejecutan automáticamente en reset()
         assert len(env.remaining_gates) == 0
 
     def test_extract_gates_two_qubit(self, simple_circuit_3q, linear_coupling_3q):
@@ -648,7 +750,7 @@ class TestQuantumTranspilationEnv:
             assert q1 == q2  # 1-qubit gates have q1 == q2
 
     def test_extract_gates_three_qubit_warning(self):
-        """FIX #11: Puertas de 3+ qubits generan un warning."""
+        """Puertas de 3+ qubits generan un warning."""
         qc = QuantumCircuit(3)
         qc.ccx(0, 1, 2)  # Toffoli = 3 qubits
         env = QuantumTranspilationEnv(
@@ -671,7 +773,7 @@ class TestQuantumTranspilationEnv:
         assert not routing_env._is_connected(0, 2)  # No conectados
 
     def test_get_physical_qubit_trivial_layout(self, routing_env):
-        """FIX #1: _get_physical_qubit retorna acceso O(1) con layout trivial."""
+        """_get_physical_qubit retorna acceso O(1) con layout trivial."""
         routing_env.reset(seed=42)
         # Layout trivial: [0, 1, 2] → logical 0 está en physical 0
         assert routing_env._get_physical_qubit(0) == 0
@@ -679,7 +781,7 @@ class TestQuantumTranspilationEnv:
         assert routing_env._get_physical_qubit(2) == 2
 
     def test_get_physical_qubit_custom_layout(self, routing_env):
-        """FIX #1: _get_physical_qubit funciona con layout no trivial."""
+        """_get_physical_qubit funciona con layout no trivial."""
         routing_env.reset(seed=42, options={"initial_layout": [2, 0, 1]})
         # Layout: [2, 0, 1] → logical 0 en physical 2, logical 1 en physical 0, logical 2 en physical 1
         assert routing_env._get_physical_qubit(0) == 2
@@ -694,6 +796,7 @@ class TestQuantumTranspilationEnv:
         assert "is_valid_action" in info
         assert "gates_executed" in info
         assert "is_completed" in info
+        assert "is_truncated" in info
         assert info["action_type"] == "swap"
 
     def test_multiple_resets(self, routing_env):
@@ -723,7 +826,7 @@ class TestQuantumTranspilationEnv:
             steps += 1
 
     def test_synthesis_mode_step_handles_gate_action(self, simple_circuit_3q, linear_coupling_3q):
-        """FIX #8: El modo synthesis maneja acciones 'gate' sin error."""
+        """El modo synthesis maneja acciones 'gate' sin error."""
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
@@ -734,11 +837,26 @@ class TestQuantumTranspilationEnv:
         for _ in range(10):
             action = env.action_space.sample()
             obs, reward, terminated, truncated, info = env.step(action)
-            # FIX #8: Las acciones gate deben llevar gate_matched_target en info
+            # Las acciones gate deben llevar gate_matched_target en info
             if info.get("action_type") == "gate":
                 assert "gate_matched_target" in info
             if terminated or truncated:
                 break
+
+    def test_synthesis_mode_gate_action_with_invalid_indices(self, simple_circuit_3q, linear_coupling_3q):
+        """Las acciones inválidas en modo synthesis se manejan correctamente."""
+        env = QuantumTranspilationEnv(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="synthesis",
+            max_steps=10,
+        )
+        env.reset(seed=42)
+        # No hay acción OOB porque SB3 genera acciones dentro del espacio,
+        # pero el decode_action ahora tiene validación
+        strategy = env.strategy
+        result = strategy.decode_action(np.array([99, 0, 0]))
+        assert result["type"] == "invalid"
 
 
 # ===========================================================================
@@ -795,7 +913,7 @@ class TestQuantumRLAgent:
         assert routing_env.action_space.contains(action)
 
     def test_save_and_load(self, routing_env):
-        """FIX #6: save() y load() persisten y restauran sin crear modelo descartable."""
+        """save() y load() persisten y restauran sin crear modelo descartable."""
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "test_model")
             
@@ -815,7 +933,7 @@ class TestQuantumRLAgent:
             assert np.array_equal(action_before, action_after)
 
     def test_save_bare_filename(self, routing_env):
-        """FIX #7: save() funciona con un nombre de archivo sin directorio."""
+        """save() funciona con un nombre de archivo sin directorio."""
         agent = QuantumRLAgent(env=routing_env, algorithm="PPO", verbose=0)
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "bare_model")
@@ -830,7 +948,7 @@ class TestQuantumRLAgent:
         assert agent.device == expected
 
     def test_loaded_agent_has_all_attributes(self, routing_env):
-        """FIX #6: El agente cargado tiene algorithm_name, env y device."""
+        """El agente cargado tiene algorithm_name, env y device."""
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "test_model")
             agent = QuantumRLAgent(env=routing_env, algorithm="PPO", verbose=0)
@@ -875,6 +993,13 @@ class TestTrainingUtilities:
         set_global_seeds(99)
         arr2 = np.random.rand(10)
         assert not np.array_equal(arr1, arr2)
+
+    def test_set_global_seeds_uses_logger(self, caplog):
+        """set_global_seeds usa logger en vez de print."""
+        import logging
+        with caplog.at_level(logging.INFO, logger="src.rl_module.training"):
+            set_global_seeds(42)
+        assert any("42" in record.message for record in caplog.records)
 
 
 # ===========================================================================

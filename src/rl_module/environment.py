@@ -7,6 +7,7 @@ y se comunica con Qiskit 2.3 para validar el estado del circuito.
 
 import logging
 import warnings
+from collections import deque
 import gymnasium as gym
 import numpy as np
 from typing import Optional, Tuple, Dict, Any, List
@@ -20,14 +21,22 @@ class QuantumTranspilationEnv(gym.Env):
     """
     Entorno Gymnasium compatible con Stable-Baselines3.
 
-    Convención de layout
-    --------------------
-    ``current_layout`` es un array de tamaño ``num_qubits`` donde:
+    Convención de layouts
+    ---------------------
+    Se mantienen **dos** arrays complementarios de tamaño ``num_qubits``:
 
-        current_layout[logical_qubit] = physical_qubit
+    ``current_layout[logical_qubit]  = physical_qubit``
+        La posición ``i`` indica el qubit lógico ``i`` y el valor
+        almacenado es el qubit físico donde está mapeado.  Se usa
+        para traducir las puertas lógicas a posiciones físicas.
 
-    Es decir, la posición ``i`` indica el qubit lógico ``i`` y el
-    valor almacenado es el qubit físico donde está mapeado.
+    ``_inverse_layout[physical_qubit] = logical_qubit``
+        Mapa inverso: dado un qubit físico, obtiene qué qubit lógico
+        reside allí.  Necesario para ejecutar SWAPs en O(1), ya que
+        al intercambiar dos posiciones físicas necesitamos saber qué
+        qubits lógicos están implicados.
+
+    Ambos arrays se actualizan de forma sincronizada en cada SWAP.
     """
     metadata = {"render_modes": ["human", "ansi"]}
 
@@ -38,11 +47,11 @@ class QuantumTranspilationEnv(gym.Env):
         mode: str = "routing",
         lookahead_window: int = 10,
         max_steps: int = 1000,
-        render_mode: Optional[str] = None,           # FIX #3: render_mode como parámetro
+        render_mode: Optional[str] = None,
     ):
         super().__init__()
         
-        self.render_mode = render_mode                # FIX #3: almacenar render_mode
+        self.render_mode = render_mode
         self.target_circuit = target_circuit
         self.num_qubits = target_circuit.num_qubits
         self.coupling_map_list = coupling_map
@@ -50,7 +59,7 @@ class QuantumTranspilationEnv(gym.Env):
         self.lookahead_window = lookahead_window
         self.max_steps = max_steps
         
-        # FIX #4: Precomputar set para búsquedas O(1)
+        # Precomputar set bidireccional para búsquedas O(1)
         self._coupling_set: set = set(coupling_map) | {(b, a) for a, b in coupling_map}
         
         # 1. Inicializar la Estrategia (Action/Observation Spaces)
@@ -66,8 +75,12 @@ class QuantumTranspilationEnv(gym.Env):
         self.action_space = self.strategy.get_action_space()
         self.observation_space = self.strategy.get_observation_space()
         
+        # Layout directo e inverso (ver docstring de la clase)
         self.current_layout: np.ndarray = np.arange(self.num_qubits, dtype=np.int32)
-        self.remaining_gates: List[Tuple[str, int, int]] = []
+        self._inverse_layout: np.ndarray = np.arange(self.num_qubits, dtype=np.int32)
+
+        # Cola de puertas pendientes — deque para popleft() en O(1)
+        self.remaining_gates: deque = deque()
         self.current_step = 0
         self.total_swaps = 0
 
@@ -108,26 +121,41 @@ class QuantumTranspilationEnv(gym.Env):
         
         self.current_step = 0
         self.total_swaps = 0
-        self.remaining_gates = self._extract_gates_from_circuit()
+        self.remaining_gates = deque(self._extract_gates_from_circuit())
         
         # Integración con el Módulo MO: Inyectar layout
         if options and "initial_layout" in options:
             layout = np.array(options["initial_layout"], dtype=np.int32)
-            # FIX #12: Validar el layout inyectado
+            # Validar longitud
             if len(layout) != self.num_qubits:
                 raise ValueError(
                     f"initial_layout tiene longitud {len(layout)}, "
                     f"se esperan {self.num_qubits} qubits."
                 )
+            # Validar duplicados
             if len(set(layout.tolist())) != len(layout):
                 raise ValueError(
                     f"initial_layout contiene qubits duplicados: {layout.tolist()}"
+                )
+            # Validar rango [0, num_qubits)
+            if layout.min() < 0 or layout.max() >= self.num_qubits:
+                raise ValueError(
+                    f"initial_layout contiene valores fuera del rango "
+                    f"[0, {self.num_qubits}): {layout.tolist()}"
                 )
             self.current_layout = layout
         else:
             # Layout trivial por defecto [0, 1, 2, ..., n]
             self.current_layout = np.arange(self.num_qubits, dtype=np.int32)
-            
+        
+        # Reconstruir el mapa inverso: _inverse_layout[physical] = logical
+        self._inverse_layout = np.empty(self.num_qubits, dtype=np.int32)
+        for lq in range(self.num_qubits):
+            self._inverse_layout[self.current_layout[lq]] = lq
+
+        # Ejecutar puertas ya satisfechas por el layout inicial
+        self._try_execute_front_layer()
+
         obs = self.strategy.build_observation(self.current_layout, self.remaining_gates)
         info = {
             "initial_layout_loaded": (options is not None and "initial_layout" in options),
@@ -155,7 +183,8 @@ class QuantumTranspilationEnv(gym.Env):
         Ejecuta todas las puertas consecutivas de la cabeza (front layer) cuyos
         qubits lógicos ya están mapeados a qubits físicos conectados.
 
-        FIX #2: Evalúa en cascada, no solo la primera puerta.
+        Evalúa en cascada: si la primera puerta se ejecuta, revisa la siguiente,
+        y así sucesivamente hasta encontrar una puerta bloqueada.
         """
         executed_count = 0
         progress = True
@@ -168,7 +197,7 @@ class QuantumTranspilationEnv(gym.Env):
             
             # Puertas de 1 qubit siempre se pueden ejecutar. Puertas de 2 requieren conectividad.
             if lq1 == lq2 or self._is_connected(pq1, pq2):
-                self.remaining_gates.pop(0)
+                self.remaining_gates.popleft()  # O(1) con deque
                 executed_count += 1
                 progress = True
             # Si la primera puerta está bloqueada, detenemos
@@ -194,17 +223,27 @@ class QuantumTranspilationEnv(gym.Env):
             pq1 = action_info["physical_q1"]
             pq2 = action_info["physical_q2"]
             
-            # FIX #1: SWAP con convención current_layout[logical] = physical
-            # Encontrar qué qubits lógicos están en pq1 y pq2
-            logical_at_pq1 = np.where(self.current_layout == pq1)[0]
-            logical_at_pq2 = np.where(self.current_layout == pq2)[0]
-            
-            if len(logical_at_pq1) > 0 and len(logical_at_pq2) > 0:
-                lq1 = logical_at_pq1[0]
-                lq2 = logical_at_pq2[0]
-                self.current_layout[lq1], self.current_layout[lq2] = (
-                    self.current_layout[lq2], self.current_layout[lq1]
-                )
+            # ── SWAP usando el mapa inverso ──────────────────────────
+            #  _inverse_layout[physical] = logical   →   O(1) lookup
+            #
+            #  Dado que queremos intercambiar los contenidos de dos
+            #  posiciones *físicas*, necesitamos:
+            #    1. Saber qué qubit lógico reside en cada posición física
+            #       (lectura directa de _inverse_layout).
+            #    2. Intercambiar los valores en current_layout (directo)
+            #       y en _inverse_layout (inverso).
+            # ─────────────────────────────────────────────────────────
+            lq1 = int(self._inverse_layout[pq1])  # lógico en posición física pq1
+            lq2 = int(self._inverse_layout[pq2])  # lógico en posición física pq2
+
+            # Actualizar layout directo: current_layout[logical] = physical
+            self.current_layout[lq1], self.current_layout[lq2] = (
+                self.current_layout[lq2], self.current_layout[lq1]
+            )
+            # Actualizar layout inverso: _inverse_layout[physical] = logical
+            self._inverse_layout[pq1], self._inverse_layout[pq2] = (
+                self._inverse_layout[pq2], self._inverse_layout[pq1]
+            )
             
             self.total_swaps += 1
             
@@ -212,10 +251,22 @@ class QuantumTranspilationEnv(gym.Env):
             info["gates_executed"] = self._try_execute_front_layer()
         
         elif action_info["type"] == "gate":
-            # FIX #8: Placeholder para modo synthesis
-            # En el modo síntesis, la acción "gate" intenta aplicar una puerta.
-            # Por ahora marcamos la info para que el reward pueda evaluarla.
-            info["gate_matched_target"] = False  # Placeholder: síntesis no implementada aún
+            # ── PLACEHOLDER: Modo Synthesis ──────────────────────────
+            #  La lógica de síntesis aún no está implementada.
+            #  Consultar docs/synthesis_mode_status.md para el estado
+            #  actual y las opciones de diseño pendientes de decisión.
+            #
+            #  Cuando se implemente, este bloque debería:
+            #    - Aplicar la puerta al circuito sintetizado.
+            #    - Comparar con el circuito target (unitaria, tableau, etc.).
+            #    - Actualizar remaining_gates o un indicador de fidelidad.
+            #    - Fijar gate_matched_target según corresponda.
+            # ─────────────────────────────────────────────────────────
+            logger.debug(
+                "Synthesis gate action recibida (placeholder): %s",
+                action_info.get("gate_name"),
+            )
+            info["gate_matched_target"] = False
             
         elif action_info["type"] == "invalid":
              info["is_valid_action"] = False
@@ -226,6 +277,9 @@ class QuantumTranspilationEnv(gym.Env):
         
         if terminated:
             info["is_completed"] = True
+
+        # Marcar si el episodio fue truncado (para la función de recompensa)
+        info["is_truncated"] = truncated
             
         # 4. Calcular Recompensa
         obs = self.strategy.build_observation(self.current_layout, self.remaining_gates)

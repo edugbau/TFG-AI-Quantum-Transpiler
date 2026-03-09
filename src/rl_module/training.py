@@ -7,6 +7,7 @@ y lanzar el proceso de entrenamiento.
 """
 
 import os
+import logging
 import random
 import numpy as np
 import torch
@@ -18,6 +19,8 @@ from .agent import QuantumRLAgent
 from .environment import QuantumTranspilationEnv
 from qiskit import QuantumCircuit
 from typing import Tuple, List, Optional
+
+logger = logging.getLogger(__name__)
 
 def set_global_seeds(seed: int = 42):
     """
@@ -31,7 +34,7 @@ def set_global_seeds(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-    print(f"Semillas globales fijadas a {seed}.")
+    logger.info("Semillas globales fijadas a %d.", seed)
 
 
 def setup_training_pipeline(
@@ -43,6 +46,8 @@ def setup_training_pipeline(
     seed: int = 42,
     log_dir: str = "./experiments/logs/rl_logs",
     model_save_dir: str = "./experiments/models/rl_models",
+    lookahead_window: int = 10,
+    max_steps: int = 1000,
     hyperparams: Optional[dict] = None
 ) -> QuantumRLAgent:
     """
@@ -57,6 +62,8 @@ def setup_training_pipeline(
         seed: Semilla de reproducibilidad.
         log_dir: Directorio para logs de TensorBoard.
         model_save_dir: Directorio para guardar los checkpoints.
+        lookahead_window: Número de puertas futuras visibles para el agente.
+        max_steps: Máximo de pasos por episodio antes de truncar.
         hyperparams: Diccionario con hiperparámetros para PPO/DQN.
         
     Returns:
@@ -71,7 +78,9 @@ def setup_training_pipeline(
     raw_env = QuantumTranspilationEnv(
         target_circuit=target_circuit,
         coupling_map=coupling_map,
-        mode=mode
+        mode=mode,
+        lookahead_window=lookahead_window,
+        max_steps=max_steps,
     )
     env = Monitor(raw_env)
     
@@ -79,7 +88,9 @@ def setup_training_pipeline(
     eval_raw_env = QuantumTranspilationEnv(
         target_circuit=target_circuit,
         coupling_map=coupling_map,
-        mode=mode
+        mode=mode,
+        lookahead_window=lookahead_window,
+        max_steps=max_steps,
     )
     eval_env = Monitor(eval_raw_env)
     

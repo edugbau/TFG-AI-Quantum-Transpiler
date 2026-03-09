@@ -168,6 +168,7 @@ class RLBenchmarkGUI(ctk.CTk):
         self._agent: QuantumRLAgent | None = None
         self._env: QuantumTranspilationEnv | None = None
         self._last_callback: GUIProgressCallback | None = None
+        self._training_cfg: dict | None = None  # Configuración usada en el entrenamiento
         self._eval_log: list[dict] = []
 
         self._create_sidebar()
@@ -438,6 +439,8 @@ class RLBenchmarkGUI(ctk.CTk):
         self._log(f"Seed: {cfg['seed']}")
         self._log("=" * 60)
 
+        self._training_cfg = cfg  # Guardar para reutilizar en evaluación
+
         threading.Thread(
             target=self._training_thread, args=(cfg,), daemon=True
         ).start()
@@ -528,48 +531,52 @@ class RLBenchmarkGUI(ctk.CTk):
         lengths = cb.episode_lengths
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-        fig.suptitle("Métricas de Entrenamiento", fontsize=13, fontweight="bold")
+        try:
+            fig.suptitle("Métricas de Entrenamiento", fontsize=13, fontweight="bold")
 
-        # --- Reward por episodio ---
-        ax1 = axes[0]
-        ax1.plot(rewards, alpha=0.4, linewidth=1, color="#3498db", label="Reward")
-        # Media móvil
-        if len(rewards) >= 5:
-            window = min(20, len(rewards) // 2)
-            moving_avg = np.convolve(rewards, np.ones(window) / window, mode="valid")
-            ax1.plot(
-                range(window - 1, len(rewards)),
-                moving_avg,
-                linewidth=2, color="#e74c3c", label=f"Media móvil ({window})",
-            )
-        ax1.set_xlabel("Episodio")
-        ax1.set_ylabel("Reward Total")
-        ax1.set_title("Reward por Episodio")
-        ax1.legend(fontsize=9)
-        ax1.grid(True, alpha=0.3)
+            # --- Reward por episodio ---
+            ax1 = axes[0]
+            ax1.plot(rewards, alpha=0.4, linewidth=1, color="#3498db", label="Reward")
+            # Media móvil
+            if len(rewards) >= 5:
+                window = min(20, len(rewards) // 2)
+                moving_avg = np.convolve(rewards, np.ones(window) / window, mode="valid")
+                ax1.plot(
+                    range(window - 1, len(rewards)),
+                    moving_avg,
+                    linewidth=2, color="#e74c3c", label=f"Media móvil ({window})",
+                )
+            ax1.set_xlabel("Episodio")
+            ax1.set_ylabel("Reward Total")
+            ax1.set_title("Reward por Episodio")
+            ax1.legend(fontsize=9)
+            ax1.grid(True, alpha=0.3)
 
-        # --- Longitud de episodio ---
-        ax2 = axes[1]
-        ax2.plot(lengths, alpha=0.4, linewidth=1, color="#2ecc71", label="Longitud")
-        if len(lengths) >= 5:
-            window = min(20, len(lengths) // 2)
-            moving_avg_l = np.convolve(lengths, np.ones(window) / window, mode="valid")
-            ax2.plot(
-                range(window - 1, len(lengths)),
-                moving_avg_l,
-                linewidth=2, color="#8e44ad", label=f"Media móvil ({window})",
-            )
-        ax2.set_xlabel("Episodio")
-        ax2.set_ylabel("Steps")
-        ax2.set_title("Longitud de Episodio")
-        ax2.legend(fontsize=9)
-        ax2.grid(True, alpha=0.3)
+            # --- Longitud de episodio ---
+            ax2 = axes[1]
+            ax2.plot(lengths, alpha=0.4, linewidth=1, color="#2ecc71", label="Longitud")
+            if len(lengths) >= 5:
+                window = min(20, len(lengths) // 2)
+                moving_avg_l = np.convolve(lengths, np.ones(window) / window, mode="valid")
+                ax2.plot(
+                    range(window - 1, len(lengths)),
+                    moving_avg_l,
+                    linewidth=2, color="#8e44ad", label=f"Media móvil ({window})",
+                )
+            ax2.set_xlabel("Episodio")
+            ax2.set_ylabel("Steps")
+            ax2.set_title("Longitud de Episodio")
+            ax2.legend(fontsize=9)
+            ax2.grid(True, alpha=0.3)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.93])
+            plt.tight_layout(rect=[0, 0, 1, 0.93])
 
-        canvas = FigureCanvasTkAgg(fig, master=self._plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+            canvas = FigureCanvasTkAgg(fig, master=self._plot_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill="both", expand=True)
+        finally:
+            # Cerrar la figura de matplotlib para liberar memoria
+            plt.close(fig)
 
     # -----------------------------------------------------------------------
     #  Evaluación
@@ -586,7 +593,10 @@ class RLBenchmarkGUI(ctk.CTk):
 
     def _evaluation_thread(self):
         try:
-            cfg = self._get_config()
+            # Reutilizar la configuración del entrenamiento para que el entorno
+            # de evaluación sea idéntico al que se usó para entrenar.
+            # Si no hay entrenamiento previo, leer la config actual del sidebar.
+            cfg = self._training_cfg if self._training_cfg is not None else self._get_config()
             set_global_seeds(cfg["seed"])
 
             # Crear entorno limpio para evaluación
