@@ -64,7 +64,7 @@ class RoutingReward(RewardStrategy):
         de pasos.  Configurar a ``0.0`` para deshabilitar la penalización.
     """
 
-    def __init__(
+    def __init__( #TODO: REVISAR VALORES DE PENALIZACIÓN Y REWARD CON TUTORES
         self,
         swap_penalty: float = -1.0,
         gate_execution_reward: float = 10.0,
