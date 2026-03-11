@@ -58,6 +58,13 @@ class QuantumRLAgent:
         
         AlgorithmClass = self.ALGORITHMS[algorithm]
         
+        # Inyectar hiperparámetros por defecto para DQN si no se proporcionan,
+        # para estabilizar el entrenamiento en un entorno de penalizaciones densas.
+        if algorithm == "DQN":
+            kwargs.setdefault("exploration_fraction", 0.5)
+            kwargs.setdefault("tau", 0.05)
+            kwargs.setdefault("learning_starts", 1000)
+            
         # Instanciar modelo de SB3
         self.model = AlgorithmClass(
             policy=policy,

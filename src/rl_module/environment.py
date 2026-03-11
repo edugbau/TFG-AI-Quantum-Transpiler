@@ -59,15 +59,25 @@ class QuantumTranspilationEnv(gym.Env):
         self.lookahead_window = lookahead_window
         self.max_steps = max_steps
         
+        # Determinar el número de qubits físicos a partir del coupling map
+        if self.coupling_map_list:
+            self.num_physical_qubits = max(max(a, b) for a, b in self.coupling_map_list) + 1
+        else:
+            self.num_physical_qubits = self.num_qubits
+
+        # Asegurar que el hardware físico pueda albergar el circuito lógico
+        if self.num_physical_qubits < self.num_qubits:
+            raise ValueError(f"Coupling map ({self.num_physical_qubits} qubits) es más pequeño que el circuito ({self.num_qubits} qubits).")
+            
         # Precomputar set bidireccional para búsquedas O(1)
         self._coupling_set: set = set(coupling_map) | {(b, a) for a, b in coupling_map}
         
         # 1. Inicializar la Estrategia (Action/Observation Spaces)
         if self.mode == "routing":
-            self.strategy = RoutingStrategy(self.num_qubits, self.coupling_map_list, self.lookahead_window)
+            self.strategy = RoutingStrategy(self.num_qubits, self.num_physical_qubits, self.coupling_map_list, self.lookahead_window)
             self.reward_function = RoutingReward()
         elif self.mode == "synthesis":
-            self.strategy = SynthesisStrategy(self.num_qubits, self.coupling_map_list, self.lookahead_window)
+            self.strategy = SynthesisStrategy(self.num_qubits, self.num_physical_qubits, self.coupling_map_list, self.lookahead_window)
             self.reward_function = SynthesisReward()
         else:
             raise ValueError(f"Modo '{self.mode}' no soportado. Usa 'routing' o 'synthesis'.")
@@ -75,9 +85,10 @@ class QuantumTranspilationEnv(gym.Env):
         self.action_space = self.strategy.get_action_space()
         self.observation_space = self.strategy.get_observation_space()
         
-        # Layout directo e inverso (ver docstring de la clase)
-        self.current_layout: np.ndarray = np.arange(self.num_qubits, dtype=np.int32)
-        self._inverse_layout: np.ndarray = np.arange(self.num_qubits, dtype=np.int32)
+        # Layout directo e inverso
+        # Se inicializan a tamaño de hardware físico para permitir hacer SWAPs libres
+        self.current_layout: np.ndarray = np.full(self.num_qubits, -1, dtype=np.int32)
+        self._inverse_layout: np.ndarray = np.full(self.num_physical_qubits, -1, dtype=np.int32)
 
         # Cola de puertas pendientes — deque para popleft() en O(1)
         self.remaining_gates: deque = deque()
@@ -125,41 +136,69 @@ class QuantumTranspilationEnv(gym.Env):
         
         # Integración con el Módulo MO: Inyectar layout
         if options and "initial_layout" in options:
+            # Layout es [q_logical] -> q_physical
             layout = np.array(options["initial_layout"], dtype=np.int32)
             # Validar longitud
             if len(layout) != self.num_qubits:
                 raise ValueError(
                     f"initial_layout tiene longitud {len(layout)}, "
-                    f"se esperan {self.num_qubits} qubits."
+                    f"se esperan {self.num_qubits} qubits logicos."
                 )
             # Validar duplicados
             if len(set(layout.tolist())) != len(layout):
                 raise ValueError(
                     f"initial_layout contiene qubits duplicados: {layout.tolist()}"
                 )
-            # Validar rango [0, num_qubits)
-            if layout.min() < 0 or layout.max() >= self.num_qubits:
+            # Validar rango [0, num_physical_qubits)
+            if layout.min() < 0 or layout.max() >= self.num_physical_qubits:
                 raise ValueError(
                     f"initial_layout contiene valores fuera del rango "
-                    f"[0, {self.num_qubits}): {layout.tolist()}"
+                    f"físico [0, {self.num_physical_qubits}): {layout.tolist()}"
                 )
             self.current_layout = layout
         else:
-            # Layout trivial por defecto [0, 1, 2, ..., n]
+            # Layout trivial lógico->físico por defecto [0, 1, 2, ..., n-1]
             self.current_layout = np.arange(self.num_qubits, dtype=np.int32)
         
         # Reconstruir el mapa inverso: _inverse_layout[physical] = logical
-        self._inverse_layout = np.empty(self.num_qubits, dtype=np.int32)
+        self._inverse_layout = np.full(self.num_physical_qubits, -1, dtype=np.int32)
         for lq in range(self.num_qubits):
             self._inverse_layout[self.current_layout[lq]] = lq
 
         # Ejecutar puertas ya satisfechas por el layout inicial
-        self._try_execute_front_layer()
+        initial_gates_executed = self._try_execute_front_layer()
 
-        obs = self.strategy.build_observation(self.current_layout, self.remaining_gates)
+        # Evitar episodios de 0 steps: si se resolvió todo de golpe al hacer reset 
+        # (por un preset demasiado fácil o suerte aleatoria), "desordenamos" el layout a propósito.
+        # (A menos que nos hayan forzado un `initial_layout` específico por options, que respetamos ciegamente)
+        if len(self.remaining_gates) == 0 and not (options and "initial_layout" in options):
+            max_retries = 10
+            while len(self.remaining_gates) == 0 and max_retries > 0:
+                # Restauramos las puertas
+                self.remaining_gates = deque(self._extract_gates_from_circuit())
+                
+                # Shuffle aleatorio usando los qubits físicos disponibles
+                available_physical = np.random.choice(self.num_physical_qubits, size=self.num_qubits, replace=False)
+                self.current_layout = available_physical.astype(np.int32)
+                
+                self._inverse_layout.fill(-1)
+                for lq in range(self.num_qubits):
+                    self._inverse_layout[self.current_layout[lq]] = lq
+                # Re-intentamos
+                initial_gates_executed = self._try_execute_front_layer()
+                max_retries -= 1
+
+        # Guardar en info si ya estaba completado al iniciar
+        self.was_completed_at_reset = len(self.remaining_gates) == 0
+
+        obs = self.strategy.build_observation(
+            self.current_layout, self.remaining_gates,
+            step_progress=self.current_step / self.max_steps,
+        )
         info = {
             "initial_layout_loaded": (options is not None and "initial_layout" in options),
-            "total_gates": len(self.remaining_gates)
+            "total_gates": len(self.remaining_gates) + initial_gates_executed,
+            "already_completed_at_reset": self.was_completed_at_reset
         }
         
         return obs, info
@@ -209,7 +248,10 @@ class QuantumTranspilationEnv(gym.Env):
         
         # 1. Decodificar Acción usando la estrategia
         action_info = self.strategy.decode_action(action)
-        prev_obs = self.strategy.build_observation(self.current_layout, self.remaining_gates)
+        prev_obs = self.strategy.build_observation(
+            self.current_layout, self.remaining_gates,
+            step_progress=(self.current_step - 1) / self.max_steps,
+        )
         
         info = {
             "action_type": action_info.get("type"),
@@ -225,25 +267,24 @@ class QuantumTranspilationEnv(gym.Env):
             
             # ── SWAP usando el mapa inverso ──────────────────────────
             #  _inverse_layout[physical] = logical   →   O(1) lookup
-            #
-            #  Dado que queremos intercambiar los contenidos de dos
-            #  posiciones *físicas*, necesitamos:
-            #    1. Saber qué qubit lógico reside en cada posición física
-            #       (lectura directa de _inverse_layout).
-            #    2. Intercambiar los valores en current_layout (directo)
-            #       y en _inverse_layout (inverso).
+            #  Si la posición física está vacía, su valor lógico es -1.
             # ─────────────────────────────────────────────────────────
-            lq1 = int(self._inverse_layout[pq1])  # lógico en posición física pq1
-            lq2 = int(self._inverse_layout[pq2])  # lógico en posición física pq2
+            lq1 = int(self._inverse_layout[pq1])  # lógico en posición física pq1 (puede ser -1)
+            lq2 = int(self._inverse_layout[pq2])  # lógico en posición física pq2 (puede ser -1)
 
-            # Actualizar layout directo: current_layout[logical] = physical
-            self.current_layout[lq1], self.current_layout[lq2] = (
-                self.current_layout[lq2], self.current_layout[lq1]
-            )
-            # Actualizar layout inverso: _inverse_layout[physical] = logical
-            self._inverse_layout[pq1], self._inverse_layout[pq2] = (
-                self._inverse_layout[pq2], self._inverse_layout[pq1]
-            )
+            if lq1 == -1 and lq2 == -1:
+                # Mover dos nodos vacíos no aporta nada lógico y congela la observación
+                info["is_valid_action"] = False
+            else:
+                # Actualizar layout directo current_layout[logical] = physical
+                if lq1 != -1:
+                    self.current_layout[lq1] = pq2
+                if lq2 != -1:
+                    self.current_layout[lq2] = pq1
+
+                # Actualizar layout inverso: _inverse_layout[physical] = logical
+                self._inverse_layout[pq1] = lq2
+                self._inverse_layout[pq2] = lq1
             
             self.total_swaps += 1
             
@@ -274,15 +315,23 @@ class QuantumTranspilationEnv(gym.Env):
         # Evaluar estado final
         terminated = len(self.remaining_gates) == 0
         truncated = self.current_step >= self.max_steps
-        
-        if terminated:
+
+        # Solo dar is_completed si acaba de terminar AHORA (y no lo estaba en el reset)
+        if terminated and not getattr(self, "was_completed_at_reset", False):
             info["is_completed"] = True
+        elif terminated and getattr(self, "was_completed_at_reset", False):
+            # Si ya estaba terminado en el reset, forzamos la finalización de la partida 
+            # sin entregar un "is_completed" que activaría el bonus masivo repetidamente.
+            info["is_completed"] = False
 
         # Marcar si el episodio fue truncado (para la función de recompensa)
         info["is_truncated"] = truncated
             
         # 4. Calcular Recompensa
-        obs = self.strategy.build_observation(self.current_layout, self.remaining_gates)
+        obs = self.strategy.build_observation(
+            self.current_layout, self.remaining_gates,
+            step_progress=self.current_step / self.max_steps,
+        )
         reward = self.reward_function.compute_reward(prev_obs, action, obs, info)
         
         return obs, reward, terminated, truncated, info

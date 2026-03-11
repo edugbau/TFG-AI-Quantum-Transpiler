@@ -611,7 +611,7 @@ class RLBenchmarkGUI(ctk.CTk):
             obs, info = eval_env.reset(seed=cfg["seed"])
 
             self.after(0, self._eval_log_write, "=" * 70)
-            self.after(0, self._eval_log_write, "  EVALUACIÓN DE EPISODIO (Política Determinista)")
+            self.after(0, self._eval_log_write, "  EVALUACIÓN DE EPISODIO (Política Estocástica)")
             self.after(0, self._eval_log_write, "=" * 70)
             self.after(0, self._eval_log_write, f"Circuito: {cfg['circuit_name']}  |  Modo: {cfg['mode']}")
             self.after(0, self._eval_log_write, f"Layout inicial: {eval_env.current_layout.tolist()}")
@@ -624,14 +624,28 @@ class RLBenchmarkGUI(ctk.CTk):
             total_reward = 0.0
             done = False
             step = 0
+            cycle_detected = False
+
+            # Detección de bucles (solo visual, no afecta al entorno de entrenamiento)
+            from collections import Counter
+            layout_visit_counts = Counter()
+            layout_visit_counts[tuple(eval_env.current_layout.tolist())] = 1
+            CYCLE_THRESHOLD = 3  # Un layout visitado 3 veces = bucle claro
 
             while not done:
-                action, _ = self._agent.predict(obs, deterministic=True)
+                action, _ = self._agent.predict(obs, deterministic=False)
                 obs, reward, terminated, truncated, info = eval_env.step(action)
 
                 total_reward += reward
                 step += 1
                 done = terminated or truncated
+
+                # Detectar oscilación (solo afecta al display, no al entorno)
+                current_layout_tuple = tuple(eval_env.current_layout.tolist())
+                layout_visit_counts[current_layout_tuple] += 1
+                if layout_visit_counts[current_layout_tuple] >= CYCLE_THRESHOLD:
+                    cycle_detected = True
+                    done = True
 
                 # Describir acción
                 action_desc = info.get("action_type", "?")
@@ -654,7 +668,12 @@ class RLBenchmarkGUI(ctk.CTk):
 
             self.after(0, self._eval_log_write, "-" * 70)
 
-            status = "COMPLETADO ✓" if info.get("is_completed") else "TRUNCADO (max_steps)"
+            if cycle_detected:
+                status = "CICLO DETECTADO ⚠ (agente oscila sin avanzar)"
+            elif info.get("is_completed"):
+                status = "COMPLETADO ✓"
+            else:
+                status = "TRUNCADO (max_steps)"
             self.after(0, self._eval_log_write, f"\nResultado: {status}")
             self.after(0, self._eval_log_write, f"Steps totales: {step}")
             self.after(0, self._eval_log_write, f"SWAPs insertados: {eval_env.total_swaps}")

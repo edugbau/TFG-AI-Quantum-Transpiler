@@ -17,8 +17,9 @@ class RLEnvStrategy(ABC):
     Clase base para inyectar la lógica de estado/acción en el entorno principal.
     Permite escalar fácilmente añadiendo nuevas estrategias (ej. Synthesis).
     """
-    def __init__(self, num_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int):
+    def __init__(self, num_qubits: int, num_physical_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int):
         self.num_qubits = num_qubits
+        self.num_physical_qubits = num_physical_qubits
         self.coupling_map = coupling_map
         self.lookahead_window = lookahead_window
 
@@ -34,6 +35,7 @@ class RLEnvStrategy(ABC):
         self,
         current_layout: np.ndarray,
         remaining_gates: Union[List[Tuple[str, int, int]], deque],
+        step_progress: float = 0.0,
     ) -> Dict[str, np.ndarray]:
         """
         Construye la observación que se pasa al agente.
@@ -45,6 +47,15 @@ class RLEnvStrategy(ABC):
 
         Si hay menos puertas que ``lookahead_window``, las posiciones
         restantes se rellenan con ``-1``.
+
+        Parameters
+        ----------
+        step_progress : float
+            Valor normalizado en [0, 1] que indica cuánto del episodio
+            ha transcurrido (``current_step / max_steps``).  Proporciona
+            al agente **contexto temporal** para distinguir estados
+            idénticos visitados en momentos distintos del episodio,
+            rompiendo oscilaciones A→B→A.
         """
         lookahead_array = np.full(self.lookahead_window * 2, -1, dtype=np.int32)
 
@@ -56,9 +67,14 @@ class RLEnvStrategy(ABC):
             lookahead_array[i * 2]     = gate[1]
             lookahead_array[i * 2 + 1] = gate[2]
 
+        # Layout pad-ready: copy the current logic-to-physical layout array
+        # Array length es `num_qubits`, con valores entre -1 (vacío) y `num_physical_qubits-1`
+        # NOTA: En `environment.py`, current_layout tiene tamaño `num_qubits`.
+        
         return {
             'layout': current_layout.copy(),
-            'lookahead': lookahead_array
+            'lookahead': lookahead_array,
+            'step_progress': np.array([step_progress], dtype=np.float32),
         }
 
     @abstractmethod
@@ -71,8 +87,8 @@ class RoutingStrategy(RLEnvStrategy):
     Acción: Elegir una arista (conexión física en el coupling map) para insertar un SWAP.
     Observación: Layout actual y las próximas N puertas lógicas (lookahead).
     """
-    def __init__(self, num_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int):
-        super().__init__(num_qubits, coupling_map, lookahead_window)
+    def __init__(self, num_qubits: int, num_physical_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int):
+        super().__init__(num_qubits, num_physical_qubits, coupling_map, lookahead_window)
         # Limpiamos el coupling map (evitamos aristas duplicadas si es bidireccional para los SWAPs)
         # Orden determinista con sorted() para reproducibilidad
         self.edges = sorted(set(tuple(sorted(edge)) for edge in coupling_map))
@@ -86,10 +102,12 @@ class RoutingStrategy(RLEnvStrategy):
           Cada puerta se codifica como [qubit_logico_control, qubit_logico_target].
         """
         return gym.spaces.Dict({
-            'layout': gym.spaces.Box(low=0, high=self.num_qubits - 1, shape=(self.num_qubits,), dtype=np.int32),
+            'layout': gym.spaces.Box(low=-1, high=self.num_physical_qubits - 1, shape=(self.num_qubits,), dtype=np.int32),
             # Para la ventana, codificamos cada puerta como un par de qubits lógicos (control, target)
             # Rellenamos con -1 si no hay suficientes puertas
-            'lookahead': gym.spaces.Box(low=-1, high=self.num_qubits - 1, shape=(self.lookahead_window * 2,), dtype=np.int32)
+            'lookahead': gym.spaces.Box(low=-1, high=self.num_qubits - 1, shape=(self.lookahead_window * 2,), dtype=np.int32),
+            # Progreso temporal normalizado [0, 1] para romper oscilaciones
+            'step_progress': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
         })
 
     def get_action_space(self) -> gym.Space:
@@ -112,22 +130,23 @@ class SynthesisStrategy(RLEnvStrategy):
     Estrategia de Síntesis Completa. (Plantilla escalable)
     Acción: Elegir una puerta de la base (ej. CX, RX, RZ) y los qubits físicos donde aplicarla.
     """
-    def __init__(self, num_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int, basis_gates: List[str] = ['cx', 'sx', 'rz', 'x']):
-        super().__init__(num_qubits, coupling_map, lookahead_window)
+    def __init__(self, num_qubits: int, num_physical_qubits: int, coupling_map: List[Tuple[int, int]], lookahead_window: int, basis_gates: List[str] = ['cx', 'sx', 'rz', 'x']):
+        super().__init__(num_qubits, num_physical_qubits, coupling_map, lookahead_window)
         self.basis_gates = basis_gates
         
     def get_observation_space(self) -> gym.Space:
         # Observación más compleja para síntesis (ej. Tableau estabilizador o equivalente)
         # Por ahora devolvemos lo mismo que routing como scaffolding.
         return gym.spaces.Dict({
-            'layout': gym.spaces.Box(low=0, high=self.num_qubits - 1, shape=(self.num_qubits,), dtype=np.int32),
-            'lookahead': gym.spaces.Box(low=-1, high=self.num_qubits - 1, shape=(self.lookahead_window * 2,), dtype=np.int32)
+            'layout': gym.spaces.Box(low=-1, high=self.num_physical_qubits - 1, shape=(self.num_qubits,), dtype=np.int32),
+            'lookahead': gym.spaces.Box(low=-1, high=self.num_qubits - 1, shape=(self.lookahead_window * 2,), dtype=np.int32),
+            'step_progress': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
         })
 
     def get_action_space(self) -> gym.Space:
         # MultiDiscrete: [Seleccionar_puerta, q_fisico_1, q_fisico_2]
         # (q_fisico_2 se ignora si la puerta es de 1 qubit)
-        return gym.spaces.MultiDiscrete([len(self.basis_gates), self.num_qubits, self.num_qubits])
+        return gym.spaces.MultiDiscrete([len(self.basis_gates), self.num_physical_qubits, self.num_physical_qubits])
 
     def decode_action(self, action: np.ndarray) -> Dict[str, Any]:
         """Decodifica una acción MultiDiscrete en una operación de puerta.
@@ -139,7 +158,7 @@ class SynthesisStrategy(RLEnvStrategy):
 
         if gate_idx < 0 or gate_idx >= len(self.basis_gates):
             return {"type": "invalid"}
-        if pq1 < 0 or pq1 >= self.num_qubits or pq2 < 0 or pq2 >= self.num_qubits:
+        if pq1 < 0 or pq1 >= self.num_physical_qubits or pq2 < 0 or pq2 >= self.num_physical_qubits:
             return {"type": "invalid"}
 
         return {
