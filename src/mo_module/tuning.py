@@ -106,8 +106,8 @@ class HyperparameterSpace:
 
     population_size_range: tuple[int, int] = (20, 100)
     n_generations_range: tuple[int, int] = (30, 150)
-    prob_swap_mutation_range: tuple[float, float] = (0.1, 0.9)
-    prob_replace_mutation_range: tuple[float, float] = (0.1, 0.7)
+    prob_swap_mutation_range: tuple[float, float] = (0.1, 0.7)
+    prob_replace_mutation_range: tuple[float, float] = (0.1, 0.9)
     crossover_operators: list[str] = field(
         default_factory=lambda: ["dpx", "ox"]
     )

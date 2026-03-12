@@ -146,8 +146,8 @@ class OptimizerConfig:
     optimization_level: int = 1
     crossover_operator: str = "dpx"
     prob_crossover: float = 0.9
-    prob_swap_mutation: float = 0.5
-    prob_replace_mutation: float = 0.3
+    prob_swap_mutation: float = 0.3
+    prob_replace_mutation: float = 0.7
     seed: int = 42
     verbose: bool = True
 
