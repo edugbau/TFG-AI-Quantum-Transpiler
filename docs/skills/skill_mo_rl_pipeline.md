@@ -1,22 +1,22 @@
 # Skill: MO -> RL Pipeline (Integration)
-**Contexto para el Módulo 4 (`integration`).**
+**Context for Module 4 (`integration`).**
 
-## Objetivo
-El traspaso de información genotípica desde el Módulo de Optimización (MO) al Agente de Refuerzo (RL) y su orquestación.
+## Objective
+Transfer genotypic information from the Optimization Module (MO) to the Reinforcement Learning Agent (RL) and orchestrate the full flow.
 
-## Reglas de Implementación
+## Implementation Rules
 
-1. **El Handshake (Intercambio de Estados)**
-   - **Salida MO:** El proceso `pymoo` finaliza y retorna un conjunto de individuos Pareto-óptimos (el Frente de Pareto). Cada individuo es un layout inicial válido (ej. `[1, 0, 3, 2]`).
-   - **Ingesta RL:** El entorno Gymnasium debe instanciarse (o resetearse) aceptando **directamente** uno de estos layouts óptimos como su estado inicial o `initial_layout`. El método `env.reset(options={"initial_layout": layout})` es el lugar idóneo para esto.
+1. **The Handoff (State Transfer)**
+   - **MO Output:** The `pymoo` process finishes and returns a set of Pareto-optimal individuals (the Pareto Front). Each individual is a valid initial layout (e.g. `[1, 0, 3, 2]`).
+   - **RL Ingestion:** The Gymnasium environment should be created (or reset) by accepting one of these optimal layouts directly as initial state or `initial_layout`. The method `env.reset(options={"initial_layout": layout})` is the recommended entry point.
 
-2. **Benchmarking Estructural**
-   - El pipeline debe correr múltiples experimentos secuencialmente:
-     - `Baseline`: Qiskit (SABRE o Default Transpilation Nivel 3).
-     - `MO_Only`: Qiskit usando **sólo** el layout obtenido del MO (sin RL extra).
-     - `RL_Only`: Qiskit con un layout aleatorio (o trivial) + Síntesis RL.
-     - `MO+RL`: El layout obtenido del MO se pasa al agente RL. Comparativa final.
+2. **Structured Benchmarking**
+   - The pipeline should run multiple experiments sequentially:
+     - `Baseline`: Qiskit (SABRE or default transpilation level 3).
+     - `MO_Only`: Qiskit using only the layout obtained from MO (no extra RL).
+     - `RL_Only`: Qiskit with a random (or trivial) layout + RL synthesis.
+     - `MO+RL`: Layout obtained from MO is passed to RL agent. Final comparison.
 
-3. **Manejo de Qubits (Físicos vs. Lógicos)**
-   - Al traspasar el layout, asegurar que el array devuelto por el MO representa el mapeo correcto (`logical_qubit -> physical_qubit` o viceversa, dependiendo de la convención interna del proyecto). **Documentar siempre** qué representa cada índice.
-   - El RL debe iniciar su `state` (observación) considerando que las puertas del circuito abstracto ya están mapeadas a esa asignación inicial, y sus acciones consisten en insertar SWAPs para resolver el enrutamiento (routing) restante si la conectividad no se satisface, o en sintetizar el circuito directamente sobre ese mapa.
+3. **Qubit Handling (Physical vs Logical)**
+   - During handoff, ensure the MO-returned array follows the correct mapping (`logical_qubit -> physical_qubit` or the inverse, depending on project convention). Always document what each index means.
+   - RL should initialize its `state` (observation) assuming abstract-circuit gates are already mapped to that initial assignment, and actions either insert SWAPs to resolve remaining routing constraints or synthesize directly on top of that mapping.

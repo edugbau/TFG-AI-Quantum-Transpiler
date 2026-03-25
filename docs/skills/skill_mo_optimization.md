@@ -1,27 +1,27 @@
 # Skill: MO Optimization (Multi-Objective)
-**Contexto para el Módulo 3 (`mo_module`).**
+**Context for Module 3 (`mo_module`).**
 
-## Objetivo
-Estandarizar el diseño y evaluación de algoritmos evolutivos multiobjetivo para el Layout Cuántico.
+## Objective
+Standardize the design and evaluation of multi-objective evolutionary algorithms for quantum layout optimization.
 
-## Librería Principal
-- **pymoo**: Usar la API de `pymoo` para la definición de problemas y ejecución de NSGA-II o MOEA/D.
+## Main Library
+- **pymoo**: Use the `pymoo` API for problem definition and NSGA-II or MOEA/D execution.
 
-## Reglas de Implementación
+## Implementation Rules
 
-1. **Definición del Problema (`pymoo.core.problem.Problem`)**
-   - **Genotipo (Representación):** El individuo (cromosoma) debe representar una permutación de enteros o un mapeo directo de qubits lógicos a físicos (`integer` o `permutation` variables).
-   - **Evaluación (Fitness):** Minimización de los múltiples objetivos. Por defecto:
-     - Profundidad (`depth`) del circuito transpilado.
-     - Equivalente de CNOTs (o recuento de puertas nativas bi-qubit).
+1. **Problem Definition (`pymoo.core.problem.Problem`)**
+   - **Genotype (Representation):** The individual (chromosome) should represent an integer permutation or a direct logical-to-physical qubit mapping (`integer` or `permutation` variables).
+   - **Evaluation (Fitness):** Multi-objective minimization. By default:
+     - Transpiled circuit depth (`depth`).
+     - CNOT-equivalent count (or native two-qubit gate count).
 
-2. **Operadores Genéticos Recomendados**
-   - **Cruce (Crossover):** Usar **DPX (Dynastic Potential Crossover)** por defecto. Preserva mejor las asignaciones de layout comunes entre padres (baja epistasis).
-   - **Mutación (Mutation):** Intercambio de posiciones (SWAP mutator).
+2. **Recommended Genetic Operators**
+   - **Crossover:** Use **DPX (Dynastic Potential Crossover)** by default. It better preserves shared parent layout assignments (low epistasis).
+   - **Mutation:** Position swap (SWAP mutator).
 
-3. **Análisis de Resultados y Frente de Pareto**
-   - Extraer individuos no-dominados de la ejecución de `pymoo`.
-   - Utilizar Hypervolume (HV) como métrica principal para comparar calidades del frente.
+3. **Result Analysis and Pareto Front**
+   - Extract non-dominated individuals from `pymoo` execution.
+   - Use Hypervolume (HV) as the primary metric for front quality comparison.
 
-4. **Tuning de Hiperparámetros (Optuna)**
-   - Utilizar el módulo `optuna` (TPE) para optimizar el tamaño de la población, tasa de cruce, y tasa de mutación, maximizando la media del Hipervolumen (o minimizando penalizaciones).
+4. **Hyperparameter Tuning (Optuna)**
+   - Use `optuna` (TPE) to optimize population size, crossover rate, and mutation rate, maximizing mean Hypervolume (or minimizing penalties).

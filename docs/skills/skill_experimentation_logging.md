@@ -1,13 +1,13 @@
 # Skill: Experimentation Logging
-**Contexto transversal para Análisis y Benchmark (`integration` / transversal).**
+**Cross-cutting context for analysis and benchmarking (`integration` / transversal).**
 
-## Objetivo
-Unificar la generación de gráficas (Matplotlib), el guardado de datos tabulares (Pandas) y la reproducibilidad de todo experimento mediante semillas estrictas y logs de TensorBoard.
+## Objective
+Unify plot generation (Matplotlib), tabular data persistence (Pandas), and experiment reproducibility through strict seeds and TensorBoard logs.
 
-## Reglas de Implementación
+## Implementation Rules
 
-1. **Semillas Aleatorias Globales (Seeds)**
-   - **Absolutamente OBLIGATORIO** fijar las semillas antes de cualquier ejecución que deba ser reproducible (incluyendo scripts de Optuna, pymoo, Gymnasium, y PyTorch).
+1. **Global Random Seeds**
+   - It is **mandatory** to set seeds before any run that must be reproducible (including Optuna, pymoo, Gymnasium, and PyTorch scripts).
    ```python
    import random
    import numpy as np
@@ -19,21 +19,21 @@ Unificar la generación de gráficas (Matplotlib), el guardado de datos tabulare
        np.random.seed(seed)
        torch.manual_seed(seed)
        torch.cuda.manual_seed_all(seed)
-       # Evitar la no-determinismo de cudnn:
+       # Avoid cuDNN non-determinism:
        torch.backends.cudnn.deterministic = True
        torch.backends.cudnn.benchmark = False
-       # Gymnasium usa el propio parámetro `seed` en env.reset(seed=...)
-       # pymoo requiere usar la clase `pymoo.util.misc.set_random_seed(seed)`
+       # Gymnasium uses the `seed` parameter in env.reset(seed=...)
+       # pymoo requires `pymoo.util.misc.set_random_seed(seed)`
    ```
 
-2. **Registro de RL (Stable-Baselines3)**
-   - Siempre activar `tensorboard_log` en la inicialización de PPO/DQN (e.g. `PPO(..., tensorboard_log="./experiments/logs/rl_logs/")`).
-   - Usar un callback periódico `CheckpointCallback` para guardar los pesos del modelo cada N timesteps (e.g., `save_path="./experiments/logs/rl_models/"`).
+2. **RL Logging (Stable-Baselines3)**
+   - Always enable `tensorboard_log` when initializing PPO/DQN (e.g. `PPO(..., tensorboard_log="./experiments/logs/rl_logs/")`).
+   - Use periodic `CheckpointCallback` to save model weights every N timesteps (e.g., `save_path="./experiments/logs/rl_models/"`).
 
-3. **Métricas Estructuradas (Pandas)**
-   - Al realizar barridos de experimentos (ej. Comparar MO+RL vs. SABRE en 20 circuitos), exportar los resultados finales en formato tabular (`.csv` o `.parquet`) utilizando Pandas. Las columnas deben incluir al menos: `Circuito`, `Método`, `Profundidad`, `CNOTs`, `Fidelidad/Error`, `Tiempo_Ejecución`, `Seed`.
+3. **Structured Metrics (Pandas)**
+   - During experiment sweeps (e.g. MO+RL vs. SABRE over 20 circuits), export final results to tabular format (`.csv` or `.parquet`) using Pandas. Columns should include at least: `Circuit`, `Method`, `Depth`, `CNOTs`, `Fidelity/Error`, `Execution_Time`, `Seed`.
 
-4. **Visualización Estándar (Matplotlib)**
-   - Frentes de Pareto: Scatter plot 2D (ej. Profundidad vs. CNOTs). Destacar las soluciones no dominadas respecto al baseline (SABRE o Qiskit O3).
-   - Curvas de Aprendizaje RL: Eje X (Timesteps), Eje Y (Recompensa Acumulada o Profundidad Final). Sombrear la desviación estándar si se evalúa en varias semillas.
-   - Todas las gráficas deben llevar títulos, leyendas explícitas, ejes con sus unidades (ej. "Depth (Gates)") y guardarse en alta resolución (`.png` a 300 DPI) en `experiments/plots/`.
+4. **Standard Visualization (Matplotlib)**
+   - Pareto fronts: 2D scatter plot (e.g. Depth vs. CNOTs). Highlight non-dominated solutions against the baseline (SABRE or Qiskit O3).
+   - RL learning curves: X-axis (Timesteps), Y-axis (Cumulative Reward or Final Depth). Shade standard deviation when evaluated across seeds.
+   - All plots must include titles, explicit legends, axes with units (e.g. "Depth (Gates)"), and be saved at high resolution (`.png` at 300 DPI) in `experiments/plots/`.

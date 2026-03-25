@@ -1,30 +1,30 @@
 # Skill: Qiskit 2.x Compliance
-**Contexto transversal para todo el proyecto.**
+**Cross-cutting context for the entire project.**
 
-## Objetivo
-Garantizar la correcta compatibilidad del código generado con **Qiskit >= 2.0** (actualmente 2.3.0). En esta versión principal, la API ha sufrido cambios disruptivos ("breaking changes") masivos frente a la serie 0.x.
+## Objective
+Guarantee compatibility of generated code with **Qiskit >= 2.0** (currently 2.3.0). This major version introduced extensive API breaking changes compared to the 0.x series.
 
-## Reglas Inviolables (The Monolith is Gone)
+## Non-Negotiable Rules (The Monolith is Gone)
 
-1. **Importaciones (Packages):**
-   - ❌ **PROHIBIDO:** `qiskit.terra`, `qiskit.aer`, `qiskit.ignis`, `qiskit.aqua`, `qiskit.providers.ibmq`.
-   - ✅ **CORRECTO:** `import qiskit`, `from qiskit import QuantumCircuit`.
-   - ✅ **Simulador:** `import qiskit_aer` (como paquete independiente).
-   - ✅ **Hardware / Fake Backends:** `from qiskit_ibm_runtime.fake_provider import FakeTorino` (o similares).
+1. **Imports (Packages):**
+   - ❌ **FORBIDDEN:** `qiskit.terra`, `qiskit.aer`, `qiskit.ignis`, `qiskit.aqua`, `qiskit.providers.ibmq`.
+   - ✅ **CORRECT:** `import qiskit`, `from qiskit import QuantumCircuit`.
+   - ✅ **Simulator:** `import qiskit_aer` (standalone package).
+   - ✅ **Hardware / Fake Backends:** `from qiskit_ibm_runtime.fake_provider import FakeTorino` (or similar).
 
-2. **Ejecución y Simulación:**
-   - ❌ **PROHIBIDO:** `qiskit.execute()`, `QuantumInstance`.
-   - ✅ **CORRECTO:** `backend.run(circuit, **kwargs)`.
-   - ✅ **CORRECTO:** Primitivas V2 (`SamplerV2`, `EstimatorV2`) para extracción de valores de expectación.
+2. **Execution and Simulation:**
+   - ❌ **FORBIDDEN:** `qiskit.execute()`, `QuantumInstance`.
+   - ✅ **CORRECT:** `backend.run(circuit, **kwargs)`.
+   - ✅ **CORRECT:** V2 primitives (`SamplerV2`, `EstimatorV2`) for expectation-value extraction.
 
-3. **Operaciones sobre Circuitos:**
-   - ❌ **PROHIBIDO:** `circuit.qasm()` (método string antiguo).
-   - ✅ **CORRECTO:** Usar el módulo `qiskit.qasm2` o `qiskit.qasm3` para exportar/importar.
-   - ✅ **Parametrización:** Usar `assign_parameters()` en lugar de `bind_parameters()` en contextos deprecados.
+3. **Circuit Operations:**
+   - ❌ **FORBIDDEN:** `circuit.qasm()` (legacy string method).
+   - ✅ **CORRECT:** Use `qiskit.qasm2` or `qiskit.qasm3` for export/import.
+   - ✅ **Parameter binding:** Use `assign_parameters()` instead of `bind_parameters()` in deprecated contexts.
 
-4. **Transpilación:**
-   - ✅ **CORRECTO:** Construir pipelines con `PassManager` (`from qiskit.transpiler import PassManager`). Evitar llamar iterativamente a `transpile` si se pueden agrupar los pases.
-   - ✅ Extraer propiedades físicas desde el `Target` o el `CouplingMap` del backend.
+4. **Transpilation:**
+   - ✅ **CORRECT:** Build pipelines with `PassManager` (`from qiskit.transpiler import PassManager`). Avoid iterative `transpile` calls when passes can be grouped.
+   - ✅ Extract physical properties from backend `Target` or `CouplingMap`.
 
-5. **Entorno de Pruebas:**
-   - No se envían circuitos a hardware real. Siempre usar `FakeBackend` para simular la topología, el conjunto de puertas nativas y el mapa de acoplamiento.
+5. **Testing Environment:**
+   - Do not send circuits to real hardware. Always use `FakeBackend` to simulate topology, native gate set, and coupling map.
