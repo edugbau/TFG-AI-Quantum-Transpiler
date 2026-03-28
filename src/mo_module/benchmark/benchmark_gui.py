@@ -85,7 +85,7 @@ class BenchmarkGUI(ctk.CTk):
 
         self.title("Benchmark Multi-Objective Layout Optimizer")
         self.geometry("1400x900")
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         
         # Grid Layout (1 row, 1 column)
         self.grid_columnconfigure(0, weight=1)
@@ -603,7 +603,21 @@ class BenchmarkGUI(ctk.CTk):
         )
         BenchmarkGUI._restore_tuning_ui(self, enable_copy_button=False)
 
+    def _on_close(self):
+        """Cierre limpio: cancela callbacks pendientes y sale del mainloop.
+
+        Al llamar quit() en lugar de destroy() directamente, el mainloop de Tk
+        termina de forma ordenada antes de que se destruya el intérprete. Esto
+        evita los errores "invalid command name" que ocurren cuando callbacks
+        de after() ya encolados (check_dpi_scaling, AppearanceModeTracker.update)
+        intentan ejecutarse sobre widgets ya destruidos.
+        destroy() se llama desde fuera del mainloop, en el punto de entrada __main__.
+        """
+        self._stop_tuning_event_polling()
+        self.quit()
+
     def destroy(self):
+        # Llamado desde fuera del mainloop (tras quit()) o directamente en tests.
         BenchmarkGUI._stop_tuning_event_polling(self)
         super().destroy()
 
@@ -1138,6 +1152,7 @@ class BenchmarkGUI(ctk.CTk):
         canvas = FigureCanvasTkAgg(fig, master=parent_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="x", expand=False, pady=(0, 20))
+        plt.close(fig)
 
     def _render_boxplots(self, parent_frame):
         circuit_names = self._last_results.circuit_names
@@ -1200,7 +1215,12 @@ class BenchmarkGUI(ctk.CTk):
         canvas = FigureCanvasTkAgg(fig, master=parent_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+        plt.close(fig)
 
 if __name__ == "__main__":
     app = BenchmarkGUI()
-    app.mainloop()
+    app.mainloop()   # returns when _on_close() calls quit()
+    try:
+        app.destroy()
+    except Exception:
+        pass
