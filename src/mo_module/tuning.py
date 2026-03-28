@@ -897,7 +897,13 @@ class LayoutTuner:
         self,
         calibration_configs: Sequence[OptimizerConfig],
     ) -> np.ndarray:
-        """Ejecuta una calibración conservadora y fija el ref_point de sesión."""
+        """Ejecuta una calibración conservadora y fija el ref_point de sesión.
+
+        El margen aplicado es del 30 % (multiplicador 1.3×) para absorber la
+        variabilidad estocástica entre seeds y entre configuraciones de mayor
+        tamaño que las anclas del warm-up. Con ``n_seeds`` seeds y 3 anclas por
+        seed, el warm-up ejecuta hasta ``n_seeds × 3`` optimizaciones.
+        """
         pareto_fronts: list[np.ndarray] = []
         total_steps = len(calibration_configs)
 

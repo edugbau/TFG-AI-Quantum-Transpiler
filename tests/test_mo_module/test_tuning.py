@@ -694,7 +694,7 @@ class TestLayoutTuner:
             "trial_completed",
             "tuning_completed",
         ]
-        assert events[0]["calibration_config_count"] == 3
+        assert events[0]["calibration_config_count"] == 3  # 1 seed × 3 anchors
         assert [event["current_step"] for event in calibration_progress_events] == [1, 2, 3]
         assert all(event["total_steps"] == 3 for event in calibration_progress_events)
         assert all(set(("current_step", "total_steps", "config", "ref_point_candidate")).issubset(event) for event in calibration_progress_events)
@@ -708,7 +708,7 @@ class TestLayoutTuner:
         assert events[6]["best_score"] == pytest.approx(0.8)
         assert events[7]["ref_point_mode"] == "calibrated"
 
-    def test_calibrated_warmup_builds_at_most_three_configs(
+    def test_calibrated_warmup_builds_at_most_n_seeds_times_three_configs(
         self,
         small_circuit,
         backend_torino,
@@ -733,7 +733,7 @@ class TestLayoutTuner:
         assert calibration_configs[0].algorithm == "nsga2"
         assert calibration_configs[0].crossover_operator == "dpx"
 
-    def test_calibrated_warmup_uses_one_fixed_seed_only(
+    def test_calibrated_warmup_iterates_over_all_seeds(
         self,
         small_circuit,
         backend_torino,
@@ -996,8 +996,6 @@ class TestLayoutTuner:
         self, small_circuit, backend_torino, monkeypatch
     ):
         """El ref_point calibrado usa margen del 30% (no 10%)."""
-        import numpy as np
-        from src.mo_module.optimizer import OptimizationResult
         from src.mo_module import tuning as tuning_module
 
         warmup_front = np.array([[4.0, 7.0], [5.0, 6.0]])
