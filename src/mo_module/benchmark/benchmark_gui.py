@@ -32,6 +32,10 @@ def _run_mo_one(bc_name, circuit, seed, backend, config):
         n_generations=config.n_generations,
         objectives=list(config.objectives),
         optimization_level=config.optimization_level,
+        crossover_operator=config.crossover_operator,
+        prob_crossover=config.prob_crossover,
+        prob_swap_mutation=config.prob_swap_mutation,
+        prob_replace_mutation=config.prob_replace_mutation,
         seed=seed,
         verbose=False,
     )
@@ -139,35 +143,55 @@ class BenchmarkGUI(ctk.CTk):
         self.algo_label.grid(row=7, column=0, padx=20, pady=(10, 0), sticky="w")
         self.algo_option = ctk.CTkOptionMenu(self.sidebar_frame, values=['nsga2', 'moead'])
         self.algo_option.grid(row=8, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        self.swap_mut_label = ctk.CTkLabel(self.sidebar_frame, text="Swap Mutation: 0.3", anchor="w")
+        self.swap_mut_label.grid(row=9, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.swap_mut_option = ctk.CTkOptionMenu(
+            self.sidebar_frame,
+            values=["0.1", "0.3", "0.5", "0.7"],
+            command=self._update_swap_mut_label,
+        )
+        self.swap_mut_option.set("0.3")
+        self.swap_mut_option.grid(row=10, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        self.replace_mut_label = ctk.CTkLabel(self.sidebar_frame, text="Replace Mutation: 0.7", anchor="w")
+        self.replace_mut_label.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.replace_mut_option = ctk.CTkOptionMenu(
+            self.sidebar_frame,
+            values=["0.1", "0.3", "0.5", "0.7", "0.9"],
+            command=self._update_replace_mut_label,
+        )
+        self.replace_mut_option.set("0.7")
+        self.replace_mut_option.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="ew")
         
         # Separator for second part
         # Población
         self.pop_label = ctk.CTkLabel(self.sidebar_frame, text="Población: 30", anchor="w")
-        self.pop_label.grid(row=9, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.pop_label.grid(row=13, column=0, padx=20, pady=(10, 0), sticky="w")
         self.pop_slider = ctk.CTkSlider(self.sidebar_frame, from_=6, to=100, number_of_steps=94, command=self._update_pop_label)
         self.pop_slider.set(30)
-        self.pop_slider.grid(row=10, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self.pop_slider.grid(row=14, column=0, padx=20, pady=(0, 10), sticky="ew")
 
         # Generaciones
         self.gens_label = ctk.CTkLabel(self.sidebar_frame, text="Generaciones: 50", anchor="w")
-        self.gens_label.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.gens_label.grid(row=15, column=0, padx=20, pady=(10, 0), sticky="w")
         self.gens_slider = ctk.CTkSlider(self.sidebar_frame, from_=5, to=200, number_of_steps=195, command=self._update_gens_label)
         self.gens_slider.set(50)
-        self.gens_slider.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self.gens_slider.grid(row=16, column=0, padx=20, pady=(0, 10), sticky="ew")
 
         # Workers
         n_cpus = os.cpu_count() or 1
         default_workers = max(1, n_cpus // 2)
         max_workers = max(default_workers * 2, 8)
         self.workers_label = ctk.CTkLabel(self.sidebar_frame, text=f"Workers: {default_workers} (Max {max_workers})", anchor="w")
-        self.workers_label.grid(row=13, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.workers_label.grid(row=17, column=0, padx=20, pady=(10, 0), sticky="w")
         self.workers_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=max_workers, number_of_steps=max_workers-1, command=self._update_workers_label)
         self.workers_slider.set(default_workers)
-        self.workers_slider.grid(row=14, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.workers_slider.grid(row=18, column=0, padx=20, pady=(0, 20), sticky="ew")
 
         # Run Button
         self.run_button = ctk.CTkButton(self.sidebar_frame, text="▶ Ejecutar Benchmark", command=self.start_benchmark)
-        self.run_button.grid(row=15, column=0, padx=20, pady=20, sticky="ew")
+        self.run_button.grid(row=19, column=0, padx=20, pady=20, sticky="ew")
 
     def _create_main_frame(self, parent):
         self.main_frame = ctk.CTkFrame(parent)
@@ -270,37 +294,47 @@ class BenchmarkGUI(ctk.CTk):
         self.t_gen_max.insert(0, "120")
         self.t_gen_max.pack(side="left", padx=(5, 0))
 
+        ctk.CTkLabel(self.t_sidebar, text="Categorías Mutación Swap:", font=ctk.CTkFont(weight="bold")).grid(row=11, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        self.t_swap_choices = ctk.CTkEntry(self.t_sidebar)
+        self.t_swap_choices.insert(0, "0.1,0.3,0.5,0.7")
+        self.t_swap_choices.grid(row=12, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+
+        ctk.CTkLabel(self.t_sidebar, text="Categorías Mutación Replace:", font=ctk.CTkFont(weight="bold")).grid(row=13, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        self.t_replace_choices = ctk.CTkEntry(self.t_sidebar)
+        self.t_replace_choices.insert(0, "0.1,0.3,0.5,0.7,0.9")
+        self.t_replace_choices.grid(row=14, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+
         # Checkboxes Objetivos
-        ctk.CTkLabel(self.t_sidebar, text="Objetivos:", font=ctk.CTkFont(weight="bold")).grid(row=11, column=0, columnspan=2, padx=10, pady=(15,0), sticky="w")
+        ctk.CTkLabel(self.t_sidebar, text="Objetivos:", font=ctk.CTkFont(weight="bold")).grid(row=15, column=0, columnspan=2, padx=10, pady=(15,0), sticky="w")
         self.t_obj_depth = ctk.CTkCheckBox(self.t_sidebar, text="depth")
-        self.t_obj_depth.grid(row=12, column=0, padx=20, sticky="w"); self.t_obj_depth.select()
+        self.t_obj_depth.grid(row=16, column=0, padx=20, sticky="w"); self.t_obj_depth.select()
         self.t_obj_cnot = ctk.CTkCheckBox(self.t_sidebar, text="cnot_count")
-        self.t_obj_cnot.grid(row=13, column=0, padx=20, sticky="w"); self.t_obj_cnot.select()
+        self.t_obj_cnot.grid(row=17, column=0, padx=20, sticky="w"); self.t_obj_cnot.select()
 
         # Checkboxes Algoritmos
-        ctk.CTkLabel(self.t_sidebar, text="Algoritmos Space:", font=ctk.CTkFont(weight="bold")).grid(row=14, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        ctk.CTkLabel(self.t_sidebar, text="Algoritmos Space:", font=ctk.CTkFont(weight="bold")).grid(row=18, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
         self.t_alg_nsga2 = ctk.CTkCheckBox(self.t_sidebar, text="nsga2")
-        self.t_alg_nsga2.grid(row=15, column=0, padx=20, sticky="w"); self.t_alg_nsga2.select()
+        self.t_alg_nsga2.grid(row=19, column=0, padx=20, sticky="w"); self.t_alg_nsga2.select()
         self.t_alg_moead = ctk.CTkCheckBox(self.t_sidebar, text="moead")
-        self.t_alg_moead.grid(row=16, column=0, padx=20, sticky="w")
+        self.t_alg_moead.grid(row=20, column=0, padx=20, sticky="w")
 
         # Workers (Tuning)
         n_cpus = os.cpu_count() or 1
         default_workers = max(1, n_cpus // 2)
         max_workers = max(default_workers * 2, 8)
         self.t_workers_label = ctk.CTkLabel(self.t_sidebar, text=f"Workers: {default_workers} (Max {max_workers})", anchor="w")
-        self.t_workers_label.grid(row=17, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
+        self.t_workers_label.grid(row=21, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
         self.t_workers_slider = ctk.CTkSlider(self.t_sidebar, from_=1, to=max_workers, number_of_steps=max_workers-1, command=lambda v: self.t_workers_label.configure(text=f"Workers: {int(v)} (Max {int(max_workers)})"))
         self.t_workers_slider.set(default_workers)
-        self.t_workers_slider.grid(row=18, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+        self.t_workers_slider.grid(row=22, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
 
         # Config Output (ReadOnly)
         self.t_best_config_btn = ctk.CTkButton(self.t_sidebar, text="Copiar a Benchmark", state="disabled", fg_color="green", command=self._copy_best_to_benchmark)
-        self.t_best_config_btn.grid(row=19, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+        self.t_best_config_btn.grid(row=23, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
 
         # Run Button
         self.t_run_button = ctk.CTkButton(self.t_sidebar, text="▶ Iniciar Tuning Optuna", command=self.start_tuning)
-        self.t_run_button.grid(row=20, column=0, columnspan=2, padx=20, pady=20, sticky="ew")
+        self.t_run_button.grid(row=24, column=0, columnspan=2, padx=20, pady=20, sticky="ew")
 
         # Main Frame Tuning
         self.t_main_frame = ctk.CTkFrame(self.tab_tuning)
@@ -340,6 +374,12 @@ class BenchmarkGUI(ctk.CTk):
     def _update_pop_label(self, value):
         self.pop_label.configure(text=f"Población: {int(value)}")
 
+    def _update_swap_mut_label(self, value):
+        self.swap_mut_label.configure(text=f"Swap Mutation: {value}")
+
+    def _update_replace_mut_label(self, value):
+        self.replace_mut_label.configure(text=f"Replace Mutation: {value}")
+
     def _update_gens_label(self, value):
         self.gens_label.configure(text=f"Generaciones: {int(value)}")
 
@@ -377,21 +417,52 @@ class BenchmarkGUI(ctk.CTk):
         algo_name = self.algo_option.get()
         pop_size = int(self.pop_slider.get())
         gens = int(self.gens_slider.get())
+        prob_swap_mutation = float(self.swap_mut_option.get())
+        prob_replace_mutation = float(self.replace_mut_option.get())
 
         self.log(f'Benchmark: {len(circuits)} circuitos × {len(seeds)} semillas = {len(circuits)*len(seeds)} tareas')
         self.log(f'Backend: {backend_name}  |  Algoritmo: {algo_name}  |  Workers: {n_workers}')
         self.log(f'Población: {pop_size}  |  Generaciones: {gens}')
+        self.log(f'Mutación categórica: swap={prob_swap_mutation}  |  replace={prob_replace_mutation}')
         self.log('=' * 60)
 
-        threading.Thread(target=self._run_benchmark_thread, args=(circuits, seeds, n_workers, backend_name, algo_name, pop_size, gens), daemon=True).start()
+        threading.Thread(
+            target=self._run_benchmark_thread,
+            args=(
+                circuits,
+                seeds,
+                n_workers,
+                backend_name,
+                algo_name,
+                pop_size,
+                gens,
+                prob_swap_mutation,
+                prob_replace_mutation,
+            ),
+            daemon=True,
+        ).start()
 
-    def _run_benchmark_thread(self, circuits, seeds, n_workers, backend_name, algo_name, pop_size, gens):
+    def _run_benchmark_thread(
+        self,
+        circuits,
+        seeds,
+        n_workers,
+        backend_name,
+        algo_name,
+        pop_size,
+        gens,
+        prob_swap_mutation,
+        prob_replace_mutation,
+    ):
         n_total = len(circuits) * len(seeds)
         config = OptimizerConfig(
             algorithm=algo_name,
             population_size=pop_size,
             n_generations=gens,
             objectives=['depth', 'cnot_count'],
+            crossover_operator='dpx',
+            prob_swap_mutation=prob_swap_mutation,
+            prob_replace_mutation=prob_replace_mutation,
             verbose=False,
         )
 
@@ -503,6 +574,21 @@ class BenchmarkGUI(ctk.CTk):
             self.t_log("⚠ Error: Los rangos de población y generaciones deben ser enteros.")
             return
 
+        try:
+            swap_choices = tuple(
+                sorted({float(x.strip()) for x in self.t_swap_choices.get().split(',') if x.strip()})
+            )
+            replace_choices = tuple(
+                sorted({float(x.strip()) for x in self.t_replace_choices.get().split(',') if x.strip()})
+            )
+        except ValueError:
+            self.t_log("⚠ Error: Las categorías de mutación deben ser floats separados por comas.")
+            return
+
+        if not swap_choices or not replace_choices:
+            self.t_log("⚠ Error: Debes indicar al menos una categoría para cada mutación.")
+            return
+
         objs = []
         if self.t_obj_depth.get(): objs.append("depth")
         if self.t_obj_cnot.get(): objs.append("cnot_count")
@@ -529,12 +615,46 @@ class BenchmarkGUI(ctk.CTk):
         self.t_log(f'Workers: {workers}')
         self.t_log(f'Circuito: {circuit_name} | Backend: {backend_name}')
         self.t_log(f'Pop Rango: [{pmin}, {pmax}] | Gen Rango: [{gmin}, {gmax}]')
+        self.t_log(f'Categorías swap: {list(swap_choices)} | Categorías replace: {list(replace_choices)}')
         self.t_log(f'Objetivos: {objs} | Algoritmos: {algs}')
         self.t_log('=' * 60)
 
-        threading.Thread(target=self._run_tuning_thread, args=(circuit_name, backend_name, trials, seeds, workers, pmin, pmax, gmin, gmax, objs, algs), daemon=True).start()
+        threading.Thread(
+            target=self._run_tuning_thread,
+            args=(
+                circuit_name,
+                backend_name,
+                trials,
+                seeds,
+                workers,
+                pmin,
+                pmax,
+                gmin,
+                gmax,
+                swap_choices,
+                replace_choices,
+                objs,
+                algs,
+            ),
+            daemon=True,
+        ).start()
 
-    def _run_tuning_thread(self, c_name, b_name, t, s, w, pmin, pmax, gmin, gmax, objs, algs):
+    def _run_tuning_thread(
+        self,
+        c_name,
+        b_name,
+        t,
+        s,
+        w,
+        pmin,
+        pmax,
+        gmin,
+        gmax,
+        swap_choices,
+        replace_choices,
+        objs,
+        algs,
+    ):
         self.after(0, lambda: self.t_progress_label.configure(text="Ejecutando Optuna (ver salida en consola del script original)..."))
         t0 = time.perf_counter()
 
@@ -546,6 +666,8 @@ class BenchmarkGUI(ctk.CTk):
             space = HyperparameterSpace(
                 population_size_range=(pmin, pmax),
                 n_generations_range=(gmin, gmax),
+                prob_swap_mutation_choices=swap_choices,
+                prob_replace_mutation_choices=replace_choices,
                 algorithms=algs,
             )
 
@@ -628,6 +750,10 @@ class BenchmarkGUI(ctk.CTk):
             self.gens_slider.set(best.n_generations)
             self._update_pop_label(best.population_size)
             self._update_gens_label(best.n_generations)
+            self.swap_mut_option.set(str(best.prob_swap_mutation))
+            self.replace_mut_option.set(str(best.prob_replace_mutation))
+            self._update_swap_mut_label(str(best.prob_swap_mutation))
+            self._update_replace_mut_label(str(best.prob_replace_mutation))
             
             if best.algorithm in ['nsga2', 'moead']:
                  self.algo_option.set(best.algorithm)

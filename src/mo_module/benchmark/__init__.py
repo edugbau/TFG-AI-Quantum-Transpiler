@@ -49,6 +49,8 @@ Uso personalizado::
         config=OptimizerConfig(
             population_size=50,
             n_generations=100,
+            prob_swap_mutation=0.3,
+            prob_replace_mutation=0.7,
             verbose=False,
         ),
     )
@@ -136,6 +138,8 @@ def run_benchmark(
             population_size=population_size,
             n_generations=n_generations,
             objectives=["depth", "cnot_count"],
+            prob_swap_mutation=0.3,
+            prob_replace_mutation=0.7,
             verbose=False,
         ),
     )

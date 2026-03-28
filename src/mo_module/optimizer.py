@@ -95,6 +95,41 @@ from .fitness import (
 logger = logging.getLogger(__name__)
 
 
+# ==========================================================================
+#  Categorias discretas para probabilidades de mutacion
+# ==========================================================================
+
+# Las probabilidades de mutacion se modelan como hiperparametros categoricos
+# a nivel de configuracion y tuning. El operador LayoutMutation sigue
+# aceptando escalares float para mantener el operador reutilizable y facilitar
+# tests deterministas (por ejemplo 0.0 o 1.0), pero las configuraciones de
+# produccion del modulo MO solo admiten estos valores discretos.
+DEFAULT_SWAP_MUTATION_CATEGORIES: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7)
+DEFAULT_REPLACE_MUTATION_CATEGORIES: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7, 0.9)
+
+
+def _normalize_categorical_probability(
+    value: float,
+    allowed_values: Sequence[float],
+    field_name: str,
+) -> float:
+    """Normaliza una probabilidad categorica a su valor canonico.
+
+    Usa ``numpy.isclose`` para tolerar pequenas diferencias de coma flotante
+    y devuelve exactamente uno de los valores permitidos. Si no hay match,
+    lanza ``ValueError`` con un mensaje legible para el usuario.
+    """
+    for allowed in allowed_values:
+        if np.isclose(value, allowed):
+            return float(allowed)
+
+    allowed_str = ", ".join(str(v) for v in allowed_values)
+    raise ValueError(
+        f"{field_name}={value} no es una categoria valida. "
+        f"Valores permitidos: ({allowed_str})."
+    )
+
+
 # ===========================================================================
 #  Configuración del optimizador
 # ===========================================================================
@@ -128,9 +163,9 @@ class OptimizerConfig:
         prob_crossover:
             Probabilidad de cruce.
         prob_swap_mutation:
-            Probabilidad de mutación por swap.
+            Categoria de probabilidad de mutacion por swap.
         prob_replace_mutation:
-            Probabilidad de mutación por reemplazo.
+            Categoria de probabilidad de mutacion por reemplazo.
         seed:
             Semilla global para reproducibilidad.
         verbose:
@@ -146,8 +181,8 @@ class OptimizerConfig:
     optimization_level: int = 1
     crossover_operator: str = "dpx"
     prob_crossover: float = 0.9
-    prob_swap_mutation: float = 0.3
-    prob_replace_mutation: float = 0.7
+    prob_swap_mutation: float = DEFAULT_SWAP_MUTATION_CATEGORIES[1]
+    prob_replace_mutation: float = DEFAULT_REPLACE_MUTATION_CATEGORIES[3]
     seed: int = 42
     verbose: bool = True
 
@@ -167,6 +202,29 @@ class OptimizerConfig:
             raise ValueError("population_size debe ser al menos 4.")
         if self.n_generations < 1:
             raise ValueError("n_generations debe ser al menos 1.")
+        self.prob_swap_mutation = _normalize_categorical_probability(
+            self.prob_swap_mutation,
+            DEFAULT_SWAP_MUTATION_CATEGORIES,
+            "prob_swap_mutation",
+        )
+        self.prob_replace_mutation = _normalize_categorical_probability(
+            self.prob_replace_mutation,
+            DEFAULT_REPLACE_MUTATION_CATEGORIES,
+            "prob_replace_mutation",
+        )
+
+    @property
+    def mutation_categories(self) -> dict[str, tuple[float, ...]]:
+        """Devuelve el catálogo oficial de categorías de mutación.
+
+        Se expone como ayuda para benchmarking, interfaces gráficas y
+        herramientas de revisión que necesiten renderizar o validar las
+        categorías oficiales del módulo.
+        """
+        return {
+            "prob_swap_mutation": DEFAULT_SWAP_MUTATION_CATEGORIES,
+            "prob_replace_mutation": DEFAULT_REPLACE_MUTATION_CATEGORIES,
+        }
 
 
 # ===========================================================================

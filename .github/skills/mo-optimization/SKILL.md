@@ -21,7 +21,7 @@ Standardize the design and evaluation of multi-objective evolutionary algorithms
 ## Procedure
 1. Define the problem with `pymoo.core.problem.Problem` and a valid layout encoding.
 2. Evaluate multi-objective fitness by minimizing depth and CNOT-equivalent cost.
-3. Use DPX as the default crossover and swap-based mutation.
+3. Use DPX as the default crossover and categorical mutation settings.
 4. Extract non-dominated solutions and evaluate with Hypervolume (HV).
 5. Tune hyperparameters with Optuna (TPE).
 
@@ -35,7 +35,7 @@ Standardize the design and evaluation of multi-objective evolutionary algorithms
 
 ### 2) Recommended Genetic Operators
 - Default crossover: DPX (Dynastic Potential Crossover).
-- Mutation: position swap (swap mutator).
+- Mutation: combined swap and replace mutation, configured through categorical probability values reviewed at the config layer.
 
 ### 3) Pareto Front and Analysis
 - Extract non-dominated individuals.
@@ -45,7 +45,8 @@ Standardize the design and evaluation of multi-objective evolutionary algorithms
 - Optimize with Optuna (TPE):
   - Population size.
   - Crossover rate.
-  - Mutation rate.
+  - Categorical swap mutation probability.
+  - Categorical replace mutation probability.
 - Objective: maximize mean HV or minimize penalties.
 
 ## Project References

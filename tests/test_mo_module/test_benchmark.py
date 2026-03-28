@@ -56,6 +56,8 @@ def tiny_config() -> OptimizerConfig:
         population_size=6,
         n_generations=4,
         objectives=["depth", "cnot_count"],
+        prob_swap_mutation=0.3,
+        prob_replace_mutation=0.7,
         verbose=False,
     )
 

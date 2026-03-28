@@ -51,6 +51,8 @@ from src.mo_module.fitness import (
     get_preset_objectives,
 )
 from src.mo_module.optimizer import (
+    DEFAULT_REPLACE_MUTATION_CATEGORIES,
+    DEFAULT_SWAP_MUTATION_CATEGORIES,
     OptimizerConfig,
     LayoutOptimizationProblem,
     OptimizationResult,
@@ -591,6 +593,8 @@ class TestOptimizerConfig:
         assert config.population_size == 50
         assert config.n_generations == 100
         assert config.crossover_operator == "dpx"
+        assert config.prob_swap_mutation == 0.3
+        assert config.prob_replace_mutation == 0.7
 
     def test_dpx_is_default_crossover_operator(self):
         """OptimizerConfig usa DPX como operador de cruce por defecto."""
@@ -624,11 +628,30 @@ class TestOptimizerConfig:
             population_size=100,
             n_generations=200,
             objectives=["depth", "cnot_count"],
+            prob_swap_mutation=0.5,
+            prob_replace_mutation=0.9,
             seed=99,
         )
         assert config.algorithm == "moead"
         assert config.population_size == 100
         assert config.seed == 99
+        assert config.prob_swap_mutation == 0.5
+        assert config.prob_replace_mutation == 0.9
+
+    def test_default_mutation_categories_are_public(self):
+        """Las categorías por defecto están expuestas para tuning y revisión."""
+        assert DEFAULT_SWAP_MUTATION_CATEGORIES == (0.1, 0.3, 0.5, 0.7)
+        assert DEFAULT_REPLACE_MUTATION_CATEGORIES == (0.1, 0.3, 0.5, 0.7, 0.9)
+
+    def test_invalid_swap_mutation_category_raises(self):
+        """Categorías fuera del catálogo deben rechazarse."""
+        with pytest.raises(ValueError, match="prob_swap_mutation"):
+            OptimizerConfig(prob_swap_mutation=0.4)
+
+    def test_invalid_replace_mutation_category_raises(self):
+        """Categorías fuera del catálogo deben rechazarse."""
+        with pytest.raises(ValueError, match="prob_replace_mutation"):
+            OptimizerConfig(prob_replace_mutation=0.8)
 
 
 class TestAlgorithmFactory:

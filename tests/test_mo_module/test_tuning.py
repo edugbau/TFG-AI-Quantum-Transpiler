@@ -60,8 +60,8 @@ class TestHyperparameterSpace:
         space = HyperparameterSpace()
         assert space.population_size_range[0] < space.population_size_range[1]
         assert space.n_generations_range[0] < space.n_generations_range[1]
-        assert space.prob_swap_mutation_range[0] < space.prob_swap_mutation_range[1]
-        assert space.prob_replace_mutation_range[0] < space.prob_replace_mutation_range[1]
+        assert space.prob_swap_mutation_choices == (0.1, 0.3, 0.5, 0.7)
+        assert space.prob_replace_mutation_choices == (0.1, 0.3, 0.5, 0.7, 0.9)
         assert "dpx" in space.crossover_operators
         assert "nsga2" in space.algorithms
 
@@ -75,6 +75,13 @@ class TestHyperparameterSpace:
         )
         assert space.population_size_range == (10, 50)
         assert space.crossover_operators == ["dpx"]
+
+    def test_mutation_choices_cannot_be_empty(self):
+        """Las categorías de mutación deben contener al menos un valor."""
+        with pytest.raises(ValueError, match="prob_swap_mutation_choices"):
+            HyperparameterSpace(prob_swap_mutation_choices=())
+        with pytest.raises(ValueError, match="prob_replace_mutation_choices"):
+            HyperparameterSpace(prob_replace_mutation_choices=())
 
     def test_optimization_level_fixed(self):
         """optimization_level es un campo fijo (no se optimiza)."""
@@ -173,6 +180,20 @@ class TestEvaluateConfig:
         # Ambos deben ser válidos
         assert score_1 >= 0.0
         assert score_3 >= 0.0
+
+    def test_config_accepts_categorical_mutation_values(self, small_circuit, backend_torino):
+        """La evaluación admite valores de mutación pertenecientes al catálogo."""
+        config = OptimizerConfig(
+            algorithm="nsga2",
+            population_size=6,
+            n_generations=3,
+            objectives=["depth", "cnot_count"],
+            prob_swap_mutation=0.5,
+            prob_replace_mutation=0.9,
+            verbose=False,
+        )
+        score = _evaluate_config(config, small_circuit, backend_torino, seeds=[0])
+        assert score >= 0.0
 
 
 # ===========================================================================

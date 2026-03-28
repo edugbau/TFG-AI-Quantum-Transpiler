@@ -12,7 +12,7 @@ Define cómo se representan los layouts como individuos dentro del algoritmo evo
 - **Operadores genéticos custom para pymoo**:
   - `LayoutSampling`: Genera individuos iniciales seleccionando subconjuntos aleatorios de qubits físicos.
   - `LayoutCrossover`: Order Crossover (OX) adaptado a permutaciones parciales.
-  - `LayoutMutation`: Combina *swap mutation* (intercambio de posiciones) y *replace mutation* (reemplazo por qubit no usado).
+- `LayoutMutation`: Combina *swap mutation* (intercambio de posiciones) y *replace mutation* (reemplazo por qubit no usado). A nivel de configuración del módulo, ambas probabilidades se seleccionan de forma categórica para mejorar reproducibilidad y comparabilidad entre experimentos.
 - **Validación y reparación**: `validate_layout()` verifica factibilidad; `repair_layout()` corrige duplicados tras crossover.
 
 ### 2. Funciones de Fitness (`fitness.py`)
@@ -40,9 +40,10 @@ Ambas requieren transpilar el circuito con el layout dado; el `TranspilationCach
 ### 3. Algoritmos Evolutivos (`optimizer.py`)
 Orquesta la ejecución de la optimización con pymoo.
 
-- **OptimizerConfig**: Dataclass centralizada con todos los hiperparámetros (algoritmo, población, generaciones, objetivos, probabilidades de operadores, seed).
+- **OptimizerConfig**: Dataclass centralizada con todos los hiperparámetros (algoritmo, población, generaciones, objetivos, probabilidades/categorías de operadores, seed).
 - **LayoutOptimizationProblem**: Extiende `pymoo.core.problem.Problem` integrando el `FitnessEvaluator`.
 - **Factory de algoritmos**: Crea NSGA-II o MOEA/D según configuración. MOEA/D genera automáticamente los vectores de referencia con `get_reference_directions("uniform", ...)`.
+- **Mutación categórica**: `prob_swap_mutation` y `prob_replace_mutation` se validan contra un catálogo discreto de valores permitidos. Esto fija una rejilla experimental pequeña, reproducible y fácil de comparar entre benchmarks y tuning.
 - **OptimizationResult**: Dataclass con el frente de Pareto completo (layouts, fitness), metadatos (tiempo, generaciones, caché) y métodos de selección (`get_best_layout`, `get_compromise_layout`).
 - **compare_layouts()**: Compara múltiples layouts transpilando con cada uno (útil para contrastar MO vs SABRE vs heurísticas).
 

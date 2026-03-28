@@ -480,7 +480,7 @@ class DPXCrossover(Crossover):
 class LayoutMutation(Mutation):
     """Operador de mutación para layouts.
 
-    Combina dos tipos de mutación controlados por probabilidades:
+    Combina dos tipos de mutacion controlados por probabilidades:
 
       1. **Swap mutation** (prob_swap): intercambia dos posiciones
          aleatorias del layout. Preserva el conjunto de qubits usado
@@ -490,9 +490,16 @@ class LayoutMutation(Mutation):
          layout por otro qubit físico no utilizado actualmente. Esto
          explora regiones diferentes del chip cuántico.
 
-    Decisión: ambos tipos se combinan para equilibrar *intensificación*
+    Decision: ambos tipos se combinan para equilibrar *intensificacion*
     (swap, explora asignaciones dentro del mismo subconjunto de qubits)
-    y *diversificación* (replace, cambia el subconjunto de qubits).
+    y *diversificacion* (replace, cambia el subconjunto de qubits).
+
+    Nota de diseno:
+        En el modulo MO, las probabilidades se configuran como categorias
+        discretas desde ``OptimizerConfig`` y ``HyperparameterSpace``.
+        Sin embargo, este operador acepta floats arbitrarios en ``[0, 1]``
+        para mantenerlo reutilizable en tests unitarios y experimentos
+        controlados.
     """
 
     def __init__(
@@ -504,8 +511,8 @@ class LayoutMutation(Mutation):
         """
         Args:
             search_space: Espacio de búsqueda.
-            prob_swap: Probabilidad de aplicar swap mutation a un gen.
-            prob_replace: Probabilidad de aplicar replace mutation a un gen.
+            prob_swap: Probabilidad de aplicar swap mutation a un individuo.
+            prob_replace: Probabilidad de aplicar replace mutation a un individuo.
         """
         super().__init__()
         self.search_space = search_space

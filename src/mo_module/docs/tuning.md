@@ -16,12 +16,18 @@ Documentación del módulo `tuning.py`, que implementa el ajuste automático de 
 |---|---|---|---|
 | `population_size` | `int` | [20, 100] | Tamaño de la población evolutiva |
 | `n_generations` | `int` | [30, 150] | Número de generaciones (presupuesto evolutivo) |
-| `prob_swap_mutation` | `float` | [0.1, 0.7] | Probabilidad de mutación por intercambio de qubits |
-| `prob_replace_mutation` | `float` | [0.1, 0.9] | Probabilidad de mutación por reemplazo de qubit |
+| `prob_swap_mutation` | `categorical` | `[0.1, 0.3, 0.5, 0.7]` | Categoría de mutación por intercambio de qubits |
+| `prob_replace_mutation` | `categorical` | `[0.1, 0.3, 0.5, 0.7, 0.9]` | Categoría de mutación por reemplazo de qubit |
 | `crossover_operator` | `categorical` | `["dpx", "ox"]` | Operador de cruce (DPX o OX) |
 | `algorithm` | `categorical` | `["nsga2"]` | Algoritmo evolutivo (ampliable a `moead`, etc.) |
 
-Los rangos se configuran en `HyperparameterSpace`. Los valores por defecto están calibrados para circuitos de ≤ 10 qubits en backends de tamaño medio (ej. FakeTorino 133q).
+Las categorías se configuran en `HyperparameterSpace`. Los valores por defecto están calibrados para circuitos de ≤ 10 qubits en backends de tamaño medio (ej. FakeTorino 133q).
+
+Motivación del cambio a categórico:
+
+- hace que el espacio de búsqueda de Optuna sea más estable y revisable;
+- evita comparar valores casi idénticos sin significado experimental claro;
+- alinea el tuning con un catálogo discreto de configuraciones reproducibles.
 
 ---
 
@@ -47,6 +53,15 @@ Los rangos se configuran en `HyperparameterSpace`. Los valores por defecto está
 
 El **hipervolumen** (HV) mide el volumen del espacio objetivo dominado por el frente de Pareto respecto a un punto de referencia (nadir + 10% de margen). Un HV mayor indica un frente de mejor calidad (soluciones mejores y más diversas). Optuna **maximiza** esta métrica.
 
+### Espacio categórico de mutación
+
+Las probabilidades de mutación ya no se modelan como continuas durante el tuning. En su lugar, Optuna selecciona entre categorías discretas:
+
+- `prob_swap_mutation`: `[0.1, 0.3, 0.5, 0.7]`
+- `prob_replace_mutation`: `[0.1, 0.3, 0.5, 0.7, 0.9]`
+
+Esto hace que cada trial sea más interpretable y que la `best_config()` resultante sea directamente reutilizable en benchmarking y producción sin redondeos adicionales.
+
 ---
 
 ## ⚠️ Valores reducidos durante el tuning (`DEFAULT_EVAL_*`)
@@ -64,7 +79,7 @@ Esto quiere decir que si Optuna sugiere `population_size=80` para un trial, ese 
 
 ```
                   ┌──────────────────────────┐
- Trial sugerido:  │ pop=80, gen=120, swap=0.4│
+ Trial sugerido:  │ pop=80, gen=120, swap=0.5│
                   └──────────────┬───────────┘
                                  │
               ┌──────────────────▼────────────────────────┐
@@ -110,6 +125,8 @@ backend = get_backend("fake_torino")
 space = HyperparameterSpace(
     population_size_range=(20, 80),
     n_generations_range=(30, 100),
+    prob_swap_mutation_choices=(0.1, 0.3, 0.5),
+    prob_replace_mutation_choices=(0.3, 0.7, 0.9),
 )
 
 tuner = LayoutTuner(

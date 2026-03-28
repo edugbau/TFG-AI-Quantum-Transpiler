@@ -91,6 +91,8 @@ from .fitness import (
 
 # --- optimizer ---
 from .optimizer import (
+    DEFAULT_SWAP_MUTATION_CATEGORIES,
+    DEFAULT_REPLACE_MUTATION_CATEGORIES,
     OptimizerConfig,
     LayoutOptimizationProblem,
     OptimizationResult,
@@ -148,6 +150,8 @@ __all__ = [
     "PRESET_OBJECTIVES",
     "get_preset_objectives",
     # optimizer
+    "DEFAULT_SWAP_MUTATION_CATEGORIES",
+    "DEFAULT_REPLACE_MUTATION_CATEGORIES",
     "OptimizerConfig",
     "LayoutOptimizationProblem",
     "OptimizationResult",

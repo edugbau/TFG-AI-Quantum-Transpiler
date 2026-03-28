@@ -63,9 +63,9 @@ Hijo 1:   [5, 4, 1, | 2, 0 | , 3]
 
 ## 3. Generación por Mutación — `LayoutMutation._do`
 
-Tras el crossover, cada hijo puede sufrir uno o ambos tipos de mutación, controlados por probabilidades independientes:
+Tras el crossover, cada hijo puede sufrir uno o ambos tipos de mutación, controlados por probabilidades independientes tomadas de un catálogo categórico:
 
-### 3a. Swap Mutation (`prob_swap`, por defecto 0.5)
+### 3a. Swap Mutation (`prob_swap`, categorías por defecto: 0.1, 0.3, 0.5, 0.7)
 
 Intercambia dos posiciones aleatorias del layout:
 
@@ -77,7 +77,7 @@ result[i], result[j] = result[j], result[i]
 - No altera el conjunto de qubits usados, solo cambia la asignación lógico→físico.
 - Intensificación: explora asignaciones dentro del mismo subconjunto de qubits.
 
-### 3b. Replace Mutation (`prob_replace`, por defecto 0.3)
+### 3b. Replace Mutation (`prob_replace`, categorías por defecto: 0.1, 0.3, 0.5, 0.7, 0.9)
 
 Sustituye un qubit del layout por otro qubit físico no utilizado:
 
@@ -143,8 +143,8 @@ Se repite durante `n_generations` generaciones. Al finalizar, pymoo extrae el fr
 | `population_size` | 50 | Número de individuos por generación |
 | `n_generations` | 100 | Criterio de parada |
 | `prob_crossover` | 0.9 | Probabilidad de que un par de padres haga crossover |
-| `prob_swap_mutation` | 0.5 | Probabilidad de swap mutation por individuo |
-| `prob_replace_mutation` | 0.3 | Probabilidad de replace mutation por individuo |
+| `prob_swap_mutation` | 0.3 | Categoría de swap mutation por individuo |
+| `prob_replace_mutation` | 0.7 | Categoría de replace mutation por individuo |
 | `algorithm` | `"nsga2"` | Algoritmo evolutivo (`"nsga2"` o `"moead"`) |
 
 **Archivo**: `optimizer.py` → dataclass `OptimizerConfig`.

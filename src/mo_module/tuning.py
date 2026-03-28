@@ -13,8 +13,8 @@ Contexto y motivación:
 
     - ``population_size``      — tamaño de la población evolutiva
     - ``n_generations``        — presupuesto de generaciones
-    - ``prob_swap_mutation``   — tasa de mutación por intercambio
-    - ``prob_replace_mutation``— tasa de mutación por reemplazo de qubit
+    - ``prob_swap_mutation``   — categoría de mutación por intercambio
+    - ``prob_replace_mutation``— categoría de mutación por reemplazo de qubit
     - ``crossover_operator``   — tipo de cruce (DPX o OX)
 
   La elección manual de estos valores es heurística y subóptima. Optuna
@@ -31,7 +31,7 @@ Por qué Optuna y no pymoo HyperparameterProblem:
   más directa y potente.
 
 Pipeline de tuning:
-  1. Se define un ``HyperparameterSpace`` con los rangos de búsqueda.
+  1. Se define un ``HyperparameterSpace`` con los espacios de búsqueda.
   2. ``LayoutTuner.tune()`` lanza un estudio Optuna con ``n_trials``
      evaluaciones (configurable; por defecto 30 — moderado).
   3. Cada trial:
@@ -61,7 +61,13 @@ from typing import Optional, Sequence
 import numpy as np
 from qiskit import QuantumCircuit
 
-from .optimizer import OptimizerConfig, optimize_layout, OptimizationResult
+from .optimizer import (
+    DEFAULT_REPLACE_MUTATION_CATEGORIES,
+    DEFAULT_SWAP_MUTATION_CATEGORIES,
+    OptimizationResult,
+    OptimizerConfig,
+    optimize_layout,
+)
 from ..qiskit_interface.backend_info import get_backend
 
 logger = logging.getLogger(__name__)
@@ -73,7 +79,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HyperparameterSpace:
-    """Define los rangos de búsqueda de hiperparámetros del optimizador.
+    """Define el espacio de búsqueda de hiperparámetros del optimizador.
 
     Cada campo representa los límites (inclusivos) o las opciones
     válidas para el hiperparámetro correspondiente de ``OptimizerConfig``.
@@ -88,10 +94,10 @@ class HyperparameterSpace:
             fuera de este rango se descartan automáticamente.
         n_generations_range:
             Rango ``(min, max)`` para el número de generaciones.
-        prob_swap_mutation_range:
-            Rango ``(min, max)`` para la probabilidad de mutación swap.
-        prob_replace_mutation_range:
-            Rango ``(min, max)`` para la probabilidad de mutación replace.
+        prob_swap_mutation_choices:
+            Categorías discretas para la probabilidad de mutación swap.
+        prob_replace_mutation_choices:
+            Categorías discretas para la probabilidad de mutación replace.
         crossover_operators:
             Lista de operadores de cruce a considerar. El estudio elegirá
             el mejor automáticamente.
@@ -106,8 +112,8 @@ class HyperparameterSpace:
 
     population_size_range: tuple[int, int] = (20, 100)
     n_generations_range: tuple[int, int] = (30, 150)
-    prob_swap_mutation_range: tuple[float, float] = (0.1, 0.7)
-    prob_replace_mutation_range: tuple[float, float] = (0.1, 0.9)
+    prob_swap_mutation_choices: tuple[float, ...] = DEFAULT_SWAP_MUTATION_CATEGORIES
+    prob_replace_mutation_choices: tuple[float, ...] = DEFAULT_REPLACE_MUTATION_CATEGORIES
     crossover_operators: list[str] = field(
         default_factory=lambda: ["dpx", "ox"]
     )
@@ -115,6 +121,13 @@ class HyperparameterSpace:
         default_factory=lambda: ["nsga2"]
     )
     optimization_level: int = 1
+
+    def __post_init__(self):
+        """Valida que las categorías de mutación estén definidas."""
+        if not self.prob_swap_mutation_choices:
+            raise ValueError("prob_swap_mutation_choices no puede estar vacío.")
+        if not self.prob_replace_mutation_choices:
+            raise ValueError("prob_replace_mutation_choices no puede estar vacío.")
 
 
 # ===========================================================================
@@ -404,7 +417,7 @@ class LayoutTuner:
             config = self._suggest_config(trial)
             score = _evaluate_config(config, self.circuit, self.backend, seeds, self.n_jobs)
             logger.info(
-                "Trial %d/%d: pop=%d, gen=%d, cx=%s, swap=%.2f, rep=%.2f → HV=%.6f",
+                "Trial %d/%d: pop=%d, gen=%d, cx=%s, swap=%s, rep=%s -> HV=%.6f",
                 trial.number + 1, self.n_trials,
                 config.population_size, config.n_generations,
                 config.crossover_operator,
@@ -518,15 +531,13 @@ class LayoutTuner:
             space.n_generations_range[0],
             space.n_generations_range[1],
         )
-        prob_swap = trial.suggest_float(
+        prob_swap = trial.suggest_categorical(
             "prob_swap_mutation",
-            space.prob_swap_mutation_range[0],
-            space.prob_swap_mutation_range[1],
+            list(space.prob_swap_mutation_choices),
         )
-        prob_replace = trial.suggest_float(
+        prob_replace = trial.suggest_categorical(
             "prob_replace_mutation",
-            space.prob_replace_mutation_range[0],
-            space.prob_replace_mutation_range[1],
+            list(space.prob_replace_mutation_choices),
         )
         cx_op = trial.suggest_categorical(
             "crossover_operator",
