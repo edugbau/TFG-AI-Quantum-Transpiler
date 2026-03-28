@@ -1030,6 +1030,64 @@ class TestLayoutTuner:
         expected = warmup_front.max(axis=0) * 1.3 + 1e-6
         assert np.allclose(tuner.session_ref_point, expected)
 
+    def test_calibrated_tuning_survives_front_exceeding_warmup_ref_point(
+        self, small_circuit, backend_torino, monkeypatch
+    ):
+        """Regresión: un trial con frente peor que el ref_point calibrado no crashea.
+
+        Simula el escenario real que causó el bug: warm-up (seed=0) produce un
+        ref_point conservador, pero una seed posterior genera un frente que lo viola.
+        El tuning debe completar y asignar score=0.0 a ese trial (no crash).
+        """
+        from src.mo_module import tuning as tuning_module
+
+        warmup_front = np.array([[20.0, 9.0], [24.0, 10.0]])
+        # Calibrated ref_point will be: max([20,24])*1.3+1e-6=31.2+1e-6, max([9,10])*1.3+1e-6=13+1e-6
+        # This trial front exceeds the calibrated ref_point in both objectives
+        trial_front = np.array([[35.0, 15.0]])
+
+        call_count = [0]
+
+        def fake_optimize_layout(circuit, backend, config):
+            call_count[0] += 1
+            # First calls are warm-up calibration configs; rest are trial evaluations.
+            # With n_seeds=3 and 3 anchors, warm-up produces exactly 9 unique configs
+            # (seed is part of the deduplication signature, so 3×3=9 distinct configs).
+            # Deduplication only reduces this count, never increases it, so <= 9 is safe.
+            if call_count[0] <= 9:
+                return OptimizationResult(
+                    pareto_layouts=None,
+                    pareto_fitness=warmup_front.tolist(),
+                    objective_names=["depth", "cnot_count"],
+                )
+            else:
+                return OptimizationResult(
+                    pareto_layouts=None,
+                    pareto_fitness=trial_front.tolist(),
+                    objective_names=["depth", "cnot_count"],
+                )
+
+        monkeypatch.setattr(tuning_module, "optimize_layout", fake_optimize_layout)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=2,
+            n_seeds=3,
+            space=HyperparameterSpace(
+                population_size_range=(20, 80),
+                n_generations_range=(30, 120),
+            ),
+            ref_point_mode="calibrated",
+        )
+
+        # Must not raise — this was the original bug
+        tuner.tune(show_progress_bar=False)
+
+        assert tuner.session_ref_point is not None
+        # All trials get score=0.0 because their front exceeds the ref_point
+        assert tuner._best_score == 0.0
+
 
 # ===========================================================================
 #  Tests - Benchmark GUI helpers
