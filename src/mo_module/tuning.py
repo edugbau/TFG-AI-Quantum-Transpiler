@@ -201,9 +201,15 @@ def _compute_hypervolume_score(
             if not np.all(np.isfinite(hv_ref_point)):
                 raise ValueError("ref_point debe contener valores finitos.")
             if not np.all(hv_ref_point > F.max(axis=0)):
-                raise ValueError(
-                    "ref_point must be strictly greater than the Pareto front maximum in every objective."
+                # El frente de este trial excede el ref_point calibrado.
+                # Devolvemos 0.0 (peor HV posible) en lugar de crashear el estudio.
+                # Optuna aprenderá a evitar estas regiones del espacio de búsqueda.
+                logger.warning(
+                    "ref_point violado: front_max=%s ref_point=%s — trial penalizado con HV=0.0",
+                    F.max(axis=0).tolist(),
+                    hv_ref_point.tolist(),
                 )
+                return 0.0
 
         ind = HV(ref_point=hv_ref_point)
         hv = float(ind(F))
@@ -421,9 +427,13 @@ class LayoutTuner:
             progress_callback:
                 Callback opcional que recibe eventos estructurados ``dict``.
                 Eventos actuales: ``calibration_started``,
-                ``calibration_completed``, ``trial_completed`` y
-                ``tuning_completed``. Incluyen metadatos pensados para GUI,
-                como modo/punto de referencia, recuentos de progreso y métricas.
+                ``calibration_progress``, ``calibration_completed``,
+                ``trial_completed`` y ``tuning_completed``. Incluyen
+                metadatos pensados para GUI, como modo/punto de referencia,
+                recuentos de progreso y métricas. En particular,
+                ``calibration_progress`` emite ``current_step`` y ``total_steps``
+                junto con la ``config`` evaluada y el
+                ``ref_point_candidate`` acumulado hasta ese paso.
         """
         if backend is None:
             backend = get_backend(backend_name)
@@ -776,69 +786,109 @@ class LayoutTuner:
     ) -> list[OptimizerConfig]:
         """Construye configuraciones conservadoras para calibrar el ref_point.
 
-        La calibración usa varias anclas deterministas del espacio de búsqueda
-        para evitar que un único warm-up estrecho produzca un punto de
-        referencia demasiado optimista.
+        La calibración usa un warm-up corto y determinista con anclas
+        low / mid / high, cobertura corta de algoritmos configurados y
+        una sola seed fija para todo el warm-up.
         """
         space = self.space
+        calibration_seed = seeds[0] if seeds else 0
         anchor_specs = [
             (space.population_size_range[0], space.n_generations_range[0]),
-            (space.population_size_range[1], space.n_generations_range[1]),
             (
                 (space.population_size_range[0] + space.population_size_range[1]) // 2,
                 (space.n_generations_range[0] + space.n_generations_range[1]) // 2,
             ),
+            (space.population_size_range[1], space.n_generations_range[1]),
         ]
 
         configs: list[OptimizerConfig] = []
         seen_signatures: set[tuple[Any, ...]] = set()
-
-        for algorithm in space.algorithms:
-            for crossover_operator in space.crossover_operators:
-                for prob_swap in (
+        if len(space.algorithms) == 1:
+            anchor_params: list[tuple[str, str, float, float]] = [
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[0],
                     space.prob_swap_mutation_choices[0],
+                    space.prob_replace_mutation_choices[0],
+                ),
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[-1],
+                    space.prob_swap_mutation_choices[len(space.prob_swap_mutation_choices) // 2],
+                    space.prob_replace_mutation_choices[len(space.prob_replace_mutation_choices) // 2],
+                ),
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[-1],
                     space.prob_swap_mutation_choices[-1],
-                ):
-                    for prob_replace in (
-                        space.prob_replace_mutation_choices[0],
-                        space.prob_replace_mutation_choices[-1],
-                    ):
-                        for population_size, n_generations in anchor_specs:
-                            for seed in seeds:
-                                effective_population_size = min(
-                                    population_size,
-                                    self.DEFAULT_EVAL_POPULATION,
-                                )
-                                effective_n_generations = min(
-                                    n_generations,
-                                    self.DEFAULT_EVAL_GENERATIONS,
-                                )
-                                signature = (
-                                    algorithm,
-                                    crossover_operator,
-                                    prob_swap,
-                                    prob_replace,
-                                    effective_population_size,
-                                    effective_n_generations,
-                                    seed,
-                                )
-                                if signature in seen_signatures:
-                                    continue
-                                seen_signatures.add(signature)
-                                configs.append(
-                                    OptimizerConfig(
-                                        algorithm=algorithm,
-                                        population_size=effective_population_size,
-                                        n_generations=effective_n_generations,
-                                        objectives=self.objectives,
-                                        optimization_level=space.optimization_level,
-                                        crossover_operator=crossover_operator,
-                                        prob_swap_mutation=prob_swap,
-                                        prob_replace_mutation=prob_replace,
-                                        seed=seed,
-                                        verbose=False,
-                                    )
-                                )
+                    space.prob_replace_mutation_choices[-1],
+                ),
+            ]
+        else:
+            anchor_params = [
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[0],
+                    space.prob_swap_mutation_choices[0],
+                    space.prob_replace_mutation_choices[0],
+                ),
+                (
+                    space.algorithms[-1],
+                    space.crossover_operators[0],
+                    space.prob_swap_mutation_choices[0],
+                    space.prob_replace_mutation_choices[0],
+                ),
+                (
+                    space.algorithms[-1],
+                    space.crossover_operators[-1],
+                    space.prob_swap_mutation_choices[-1],
+                    space.prob_replace_mutation_choices[-1],
+                ),
+            ]
+
+        for (population_size, n_generations), (
+            algorithm,
+            crossover_operator,
+            prob_swap,
+            prob_replace,
+        ) in zip(
+            anchor_specs,
+            anchor_params,
+        ):
+            effective_population_size = min(
+                population_size,
+                self.DEFAULT_EVAL_POPULATION,
+            )
+            effective_n_generations = min(
+                n_generations,
+                self.DEFAULT_EVAL_GENERATIONS,
+            )
+            signature = (
+                algorithm,
+                crossover_operator,
+                prob_swap,
+                prob_replace,
+                effective_population_size,
+                effective_n_generations,
+                calibration_seed,
+            )
+            if signature in seen_signatures:
+                continue
+            seen_signatures.add(signature)
+            configs.append(
+                OptimizerConfig(
+                    algorithm=algorithm,
+                    population_size=effective_population_size,
+                    n_generations=effective_n_generations,
+                    objectives=self.objectives,
+                    optimization_level=space.optimization_level,
+                    crossover_operator=crossover_operator,
+                    prob_swap_mutation=prob_swap,
+                    prob_replace_mutation=prob_replace,
+                    seed=calibration_seed,
+                    verbose=False,
+                )
+            )
 
         return configs
 
@@ -848,12 +898,46 @@ class LayoutTuner:
     ) -> np.ndarray:
         """Ejecuta una calibración conservadora y fija el ref_point de sesión."""
         pareto_fronts: list[np.ndarray] = []
+        total_steps = len(calibration_configs)
 
-        for calibration_config in calibration_configs:
+        for current_step, calibration_config in enumerate(calibration_configs, start=1):
             result = optimize_layout(self.circuit, backend=self.backend, config=calibration_config)
+            ref_point_candidate = None
             if result.pareto_fitness is None or len(result.pareto_fitness) == 0:
+                self._emit_progress(
+                    "calibration_progress",
+                    current_step=current_step,
+                    total_steps=total_steps,
+                    config={
+                        "algorithm": calibration_config.algorithm,
+                        "population_size": calibration_config.population_size,
+                        "n_generations": calibration_config.n_generations,
+                        "crossover_operator": calibration_config.crossover_operator,
+                        "prob_swap_mutation": calibration_config.prob_swap_mutation,
+                        "prob_replace_mutation": calibration_config.prob_replace_mutation,
+                        "seed": calibration_config.seed,
+                    },
+                    ref_point_candidate=None,
+                )
                 continue
             pareto_fronts.append(np.asarray(result.pareto_fitness, dtype=float))
+            combined_front = np.vstack(pareto_fronts)
+            ref_point_candidate = combined_front.max(axis=0) * 1.1 + 1e-6
+            self._emit_progress(
+                "calibration_progress",
+                current_step=current_step,
+                total_steps=total_steps,
+                config={
+                    "algorithm": calibration_config.algorithm,
+                    "population_size": calibration_config.population_size,
+                    "n_generations": calibration_config.n_generations,
+                    "crossover_operator": calibration_config.crossover_operator,
+                    "prob_swap_mutation": calibration_config.prob_swap_mutation,
+                    "prob_replace_mutation": calibration_config.prob_replace_mutation,
+                    "seed": calibration_config.seed,
+                },
+                ref_point_candidate=ref_point_candidate,
+            )
 
         if not pareto_fronts:
             raise ValueError(
@@ -869,6 +953,9 @@ class LayoutTuner:
         Contrato actual de eventos:
         - ``calibration_started``: incluye ``ref_point_mode``, ``n_seeds`` y
           ``calibration_config_count``.
+        - ``calibration_progress``: incluye ``current_step``, ``total_steps``, la
+          ``config`` evaluada y ``ref_point_candidate`` (o ``None`` si aun no
+          existe).
         - ``calibration_completed``: incluye ``ref_point`` fijado y
           ``calibration_config_count``.
         - ``trial_completed``: incluye índices de progreso, score actual,
