@@ -179,8 +179,8 @@ def _compute_hypervolume_score(
         opt_result: Resultado de una ejecución de ``optimize_layout()``.
 
     Returns:
-        Hipervolumen calculado. Devuelve 0.0 si no hay soluciones o si el
-        cálculo falla.
+        Hipervolumen calculado. Devuelve 0.0 si no hay soluciones, si el
+        ref_point es violado por el frente de Pareto, o si el cálculo falla.
     """
     if opt_result.pareto_fitness is None or len(opt_result.pareto_fitness) == 0:
         return 0.0

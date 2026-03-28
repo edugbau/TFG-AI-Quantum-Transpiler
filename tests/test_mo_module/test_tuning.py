@@ -18,6 +18,8 @@ Autor: Eduardo González Bautista
 Fecha: 2026-03-03
 """
 
+import logging
+
 import pytest
 import numpy as np
 
@@ -189,16 +191,18 @@ class TestComputeHypervolumeScore:
         # Nota: con referencia relativa, ambos tendrán el mismo HV escalado.
         # Lo importante es que sean > 0 y no crasheen.
 
-    def test_violated_ref_point_returns_zero_instead_of_raising(self):
-        """Cuando ref_point es violado por el frente, score=0.0 (no crash)."""
+    def test_violated_ref_point_returns_zero_instead_of_raising(self, caplog):
+        """Cuando ref_point es violado por el frente, score=0.0 y se emite warning (no crash)."""
         # Front has max values [5.0, 2.0] — ref_point [4.0, 3.0] is violated on obj 0
         result = OptimizationResult(
             pareto_layouts=[[0, 1, 2]],
             pareto_fitness=np.array([[3.0, 2.0], [5.0, 1.0]]),
             objective_names=["depth", "cnot_count"],
         )
-        score = _compute_hypervolume_score(result, ref_point=np.array([4.0, 3.0]))
+        with caplog.at_level(logging.WARNING):
+            score = _compute_hypervolume_score(result, ref_point=np.array([4.0, 3.0]))
         assert score == 0.0
+        assert "ref_point violado" in caplog.text
 
 
 # ===========================================================================
@@ -548,6 +552,7 @@ class TestLayoutTuner:
         # El estudio debe completar sin lanzar excepción; todos los trials quedan con score=0.0
         result = tuner.tune(show_progress_bar=False)
         assert result is not None
+        assert tuner._best_score == 0.0
 
     def test_calibration_failure_surfaces_clearly(
         self,
