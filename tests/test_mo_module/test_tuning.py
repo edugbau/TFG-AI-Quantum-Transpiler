@@ -21,6 +21,13 @@ Fecha: 2026-03-03
 import pytest
 import numpy as np
 
+from src.mo_module.benchmark.tuning_gui_helpers import (
+    _format_ref_point_display,
+    _format_ref_point_mode_help,
+    _resolve_ref_point_display,
+    _parse_manual_ref_point,
+)
+from src.mo_module import tuning
 from src.mo_module.tuning import (
     HyperparameterSpace,
     LayoutTuner,
@@ -88,6 +95,21 @@ class TestHyperparameterSpace:
         space = HyperparameterSpace(optimization_level=2)
         assert space.optimization_level == 2
 
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"population_size_range": (8, 7)}, "population_size_range"),
+            ({"population_size_range": (3, 8)}, "population_size_range"),
+            ({"n_generations_range": (0, 5)}, "n_generations_range"),
+            ({"crossover_operators": []}, "crossover_operators"),
+            ({"algorithms": []}, "algorithms"),
+        ],
+    )
+    def test_invalid_ranges_raise_value_error(self, kwargs, match):
+        """Los rangos y catálogos inválidos se rechazan explícitamente."""
+        with pytest.raises(ValueError, match=match):
+            HyperparameterSpace(**kwargs)
+
 
 # ===========================================================================
 #  Tests — _compute_hypervolume_score
@@ -95,6 +117,29 @@ class TestHyperparameterSpace:
 
 class TestComputeHypervolumeScore:
     """Tests de la función de evaluación de hipervolumen."""
+
+    def test_score_uses_injected_reference_point(self):
+        """Se puede fijar explícitamente el punto de referencia del HV."""
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1, 2]],
+            pareto_fitness=np.array([[2.0, 3.0]]),
+            objective_names=["depth", "cnot_count"],
+        )
+
+        score = _compute_hypervolume_score(result, ref_point=np.array([5.0, 7.0]))
+
+        assert score == pytest.approx(12.0)
+
+    def test_score_rejects_non_dominating_reference_point(self):
+        """El ref_point fijo debe ser estrictamente peor que todo el frente."""
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1, 2]],
+            pareto_fitness=np.array([[2.0, 3.0], [4.0, 5.0]]),
+            objective_names=["depth", "cnot_count"],
+        )
+
+        with pytest.raises(ValueError, match="strictly greater"):
+            _compute_hypervolume_score(result, ref_point=np.array([4.0, 6.0]))
 
     def test_score_positive_for_valid_pareto(self):
         """El hipervolumen es positivo para un frente de Pareto válido."""
@@ -230,6 +275,46 @@ class TestLayoutTuner:
         assert tuner.n_trials == 10
         assert tuner.n_seeds == 2
 
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"n_trials": 0}, "n_trials"),
+            ({"n_seeds": 0}, "n_seeds"),
+            ({"n_jobs": 0}, "n_jobs"),
+            ({"ref_point_mode": "manual"}, "ref_point"),
+            ({"ref_point_mode": "manual", "ref_point": [1.0]}, "ref_point"),
+            ({"ref_point_mode": "unknown"}, "ref_point_mode"),
+        ],
+    )
+    def test_init_rejects_invalid_budgets_and_reference_settings(
+        self,
+        small_circuit,
+        backend_torino,
+        kwargs,
+        match,
+    ):
+        """Los presupuestos y el modo de punto de referencia se validan."""
+        with pytest.raises(ValueError, match=match):
+            LayoutTuner(
+                circuit=small_circuit,
+                backend=backend_torino,
+                **kwargs,
+            )
+
+    def test_init_rejects_extraneous_ref_point_in_calibrated_mode(
+        self,
+        small_circuit,
+        backend_torino,
+    ):
+        """El modo calibrado no acepta un ref_point manual extra."""
+        with pytest.raises(ValueError, match="calibrated"):
+            LayoutTuner(
+                circuit=small_circuit,
+                backend=backend_torino,
+                ref_point_mode="calibrated",
+                ref_point=[9.0, 11.0],
+            )
+
     def test_best_config_before_tune_raises(self, small_circuit, backend_torino):
         """Llamar best_config() antes de tune() lanza RuntimeError."""
         tuner = LayoutTuner(circuit=small_circuit, backend=backend_torino)
@@ -255,9 +340,370 @@ class TestLayoutTuner:
                 crossover_operators=["dpx"],
                 algorithms=["nsga2"],
             ),
+            ref_point_mode="manual",
+            ref_point=[1_000_000.0, 1_000_000.0],
         )
         result = tuner.tune(show_progress_bar=False)
         assert result is tuner
+
+    def test_calibrated_mode_derives_and_stores_session_ref_point(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """El modo calibrado calcula una vez el ref_point y lo reutiliza."""
+        warmup_front = np.array([[4.0, 7.0], [5.0, 6.0]])
+        captured_ref_points = []
+
+        def fake_optimize_layout(circuit, backend, config):
+            return OptimizationResult(
+                pareto_layouts=[[0, 1, 2]],
+                pareto_fitness=warmup_front,
+                objective_names=["depth", "cnot_count"],
+            )
+
+        def fake_evaluate_config(config, circuit, backend, seeds, n_jobs=1, ref_point=None):
+            captured_ref_points.append(np.array(ref_point, dtype=float))
+            return 1.0 + len(captured_ref_points)
+
+        monkeypatch.setattr(tuning, "optimize_layout", fake_optimize_layout)
+        monkeypatch.setattr(tuning, "_evaluate_config", fake_evaluate_config)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=2,
+            n_seeds=2,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+            ),
+            ref_point_mode="calibrated",
+        )
+
+        tuner.tune(show_progress_bar=False)
+
+        expected_ref_point = warmup_front.max(axis=0) * 1.1 + 1e-6
+        assert np.allclose(tuner.session_ref_point, expected_ref_point)
+        assert len(captured_ref_points) == 2
+        assert all(np.allclose(ref_point, expected_ref_point) for ref_point in captured_ref_points)
+
+    def test_calibrated_mode_uses_conservative_search_space_calibration(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """La calibración explora anclas del espacio para fijar un ref_point robusto."""
+        def fake_optimize_layout(circuit, backend, config):
+            if (config.population_size, config.n_generations) == (8, 5):
+                front = np.array([[20.0, 24.0]])
+            elif (config.population_size, config.n_generations) == (7, 4):
+                front = np.array([[18.0, 22.0]])
+            else:
+                front = np.array([[4.0, 7.0]])
+
+            return OptimizationResult(
+                pareto_layouts=[[0, 1, 2]],
+                pareto_fitness=front,
+                objective_names=["depth", "cnot_count"],
+            )
+
+        def fake_suggest_config(self, trial):
+            return OptimizerConfig(
+                algorithm="nsga2",
+                population_size=7,
+                n_generations=4,
+                objectives=["depth", "cnot_count"],
+                optimization_level=1,
+                crossover_operator="dpx",
+                prob_swap_mutation=0.3,
+                prob_replace_mutation=0.5,
+                verbose=False,
+            )
+
+        def fake_trial_to_config(self, trial):
+            return OptimizerConfig(
+                algorithm="nsga2",
+                population_size=7,
+                n_generations=4,
+                objectives=["depth", "cnot_count"],
+                optimization_level=1,
+                crossover_operator="dpx",
+                prob_swap_mutation=0.3,
+                prob_replace_mutation=0.5,
+                verbose=True,
+            )
+
+        monkeypatch.setattr(tuning, "optimize_layout", fake_optimize_layout)
+        monkeypatch.setattr(LayoutTuner, "_suggest_config", fake_suggest_config)
+        monkeypatch.setattr(LayoutTuner, "_trial_to_config", fake_trial_to_config)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=1,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+                prob_swap_mutation_choices=(0.3,),
+                prob_replace_mutation_choices=(0.5,),
+            ),
+            ref_point_mode="calibrated",
+        )
+
+        tuner.tune(show_progress_bar=False)
+
+        expected_ref_point = np.array([22.0, 26.4]) + 1e-6
+        assert np.allclose(tuner.session_ref_point, expected_ref_point)
+
+    def test_manual_mode_uses_supplied_ref_point_without_warmup(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """El modo manual omite el warm-up y usa el ref_point fijo."""
+        captured_ref_points = []
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("manual mode should skip warm-up calibration")
+
+        def fake_evaluate_config(config, circuit, backend, seeds, n_jobs=1, ref_point=None):
+            captured_ref_points.append(np.array(ref_point, dtype=float))
+            return 1.0
+
+        monkeypatch.setattr(LayoutTuner, "_calibrate_reference_point", fail_if_called)
+        monkeypatch.setattr(tuning, "_evaluate_config", fake_evaluate_config)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=2,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+            ),
+            ref_point_mode="manual",
+            ref_point=[9.0, 11.0],
+        )
+
+        tuner.tune(show_progress_bar=False)
+
+        assert np.allclose(tuner.session_ref_point, np.array([9.0, 11.0]))
+        assert len(captured_ref_points) == 2
+        assert all(np.allclose(ref_point, np.array([9.0, 11.0])) for ref_point in captured_ref_points)
+
+    def test_manual_mode_rejects_non_dominating_ref_point_during_tuning(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """Un ref_point manual demasiado pequeño falla claramente."""
+        def fake_optimize_layout(circuit, backend, config):
+            return OptimizationResult(
+                pareto_layouts=[[0, 1, 2]],
+                pareto_fitness=np.array([[5.0, 7.0]]),
+                objective_names=["depth", "cnot_count"],
+            )
+
+        monkeypatch.setattr(tuning, "optimize_layout", fake_optimize_layout)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=1,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+            ),
+            ref_point_mode="manual",
+            ref_point=[5.0, 8.0],
+        )
+
+        with pytest.raises(ValueError, match="strictly greater"):
+            tuner.tune(show_progress_bar=False)
+
+    def test_calibration_failure_surfaces_clearly(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """Si el warm-up no produce frentes válidos, tune() falla claramente."""
+        def fake_optimize_layout(circuit, backend, config):
+            return OptimizationResult(
+                pareto_layouts=[],
+                pareto_fitness=None,
+                objective_names=["depth", "cnot_count"],
+            )
+
+        monkeypatch.setattr(tuning, "optimize_layout", fake_optimize_layout)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=1,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+            ),
+            ref_point_mode="calibrated",
+        )
+
+        with pytest.raises(ValueError, match="No se pudo calibrar"):
+            tuner.tune(show_progress_bar=False)
+
+        assert tuner.session_ref_point is None
+        with pytest.raises(RuntimeError, match="tune\(\)"):
+            tuner.best_config()
+
+    def test_failed_rerun_clears_previous_tuning_session_state(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """Un rerun fallido no debe dejar expuesto el estado de la sesión previa."""
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=1,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+            ),
+            ref_point_mode="manual",
+            ref_point=[1_000_000.0, 1_000_000.0],
+        )
+
+        tuner.tune(show_progress_bar=False)
+        assert tuner.session_ref_point is not None
+        assert isinstance(tuner.best_config(), OptimizerConfig)
+
+        def fail_calibration(self, calibration_configs):
+            raise ValueError("forced calibration failure")
+
+        tuner.ref_point_mode = "calibrated"
+        tuner._manual_ref_point = None
+        monkeypatch.setattr(LayoutTuner, "_calibrate_reference_point", fail_calibration)
+
+        with pytest.raises(ValueError, match="forced calibration failure"):
+            tuner.tune(show_progress_bar=False)
+
+        assert tuner.session_ref_point is None
+        with pytest.raises(RuntimeError, match="tune\(\)"):
+            tuner.best_config()
+
+    def test_progress_callback_receives_meaningful_events(
+        self,
+        monkeypatch,
+        small_circuit,
+        backend_torino,
+    ):
+        """El callback de progreso recibe eventos estructurados del tuning."""
+        events = []
+        scores = iter([0.5, 0.8])
+
+        def fake_calibrate_reference_point(self, seeds):
+            return np.array([10.0, 12.0])
+
+        def fake_evaluate_config(config, circuit, backend, seeds, n_jobs=1, ref_point=None):
+            return next(scores)
+
+        monkeypatch.setattr(LayoutTuner, "_calibrate_reference_point", fake_calibrate_reference_point)
+        monkeypatch.setattr(tuning, "_evaluate_config", fake_evaluate_config)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=2,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(6, 8),
+                n_generations_range=(3, 5),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+            ),
+            ref_point_mode="calibrated",
+            progress_callback=events.append,
+        )
+
+        tuner.tune(show_progress_bar=False)
+
+        event_names = [event["event"] for event in events]
+        assert event_names == [
+            "calibration_started",
+            "calibration_completed",
+            "trial_completed",
+            "trial_completed",
+            "tuning_completed",
+        ]
+        assert events[0]["calibration_config_count"] > 1
+        assert events[1]["ref_point"] == [10.0, 12.0]
+        assert events[2]["trial_number"] == 1
+        assert events[2]["completed_trials"] == 1
+        assert "params" in events[2]
+        assert events[2]["best_score"] == pytest.approx(0.5)
+        assert events[3]["best_score"] == pytest.approx(0.8)
+        assert events[4]["ref_point_mode"] == "calibrated"
+
+    def test_calibration_configs_deduplicate_after_eval_clamping(
+        self,
+        small_circuit,
+        backend_torino,
+    ):
+        """Las anclas de calibración no deben duplicarse tras clamping efectivo."""
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=1,
+            n_seeds=2,
+            space=HyperparameterSpace(
+                population_size_range=(40, 80),
+                n_generations_range=(60, 120),
+                crossover_operators=["dpx"],
+                algorithms=["nsga2"],
+                prob_swap_mutation_choices=(0.1,),
+                prob_replace_mutation_choices=(0.3,),
+            ),
+            ref_point_mode="calibrated",
+        )
+
+        calibration_configs = tuner._build_calibration_configs([0, 1])
+        effective_signatures = {
+            (
+                config.algorithm,
+                config.crossover_operator,
+                config.prob_swap_mutation,
+                config.prob_replace_mutation,
+                config.population_size,
+                config.n_generations,
+                config.seed,
+            )
+            for config in calibration_configs
+        }
+
+        assert len(calibration_configs) == len(effective_signatures)
 
     def test_tune_produces_valid_config(self, small_circuit, backend_torino):
         """Tras tune(), best_config() devuelve una OptimizerConfig válida."""
@@ -272,6 +718,8 @@ class TestLayoutTuner:
                 crossover_operators=["dpx"],
                 algorithms=["nsga2"],
             ),
+            ref_point_mode="manual",
+            ref_point=[1_000_000.0, 1_000_000.0],
         )
         tuner.tune(show_progress_bar=False)
         config = tuner.best_config()
@@ -295,6 +743,8 @@ class TestLayoutTuner:
                 crossover_operators=["dpx"],
                 algorithms=["nsga2"],
             ),
+            ref_point_mode="manual",
+            ref_point=[1_000_000.0, 1_000_000.0],
         )
         tuner.tune(show_progress_bar=False)
 
@@ -315,6 +765,8 @@ class TestLayoutTuner:
                 crossover_operators=["dpx"],
                 algorithms=["nsga2"],
             ),
+            ref_point_mode="manual",
+            ref_point=[1_000_000.0, 1_000_000.0],
         ).tune(show_progress_bar=False).best_config()
 
         assert isinstance(config, OptimizerConfig)
@@ -332,6 +784,8 @@ class TestLayoutTuner:
                 crossover_operators=["dpx"],
                 algorithms=["nsga2"],
             ),
+            ref_point_mode="manual",
+            ref_point=[1_000_000.0, 1_000_000.0],
         )
         tuner.tune(show_progress_bar=False)
         summary = tuner.summary()
@@ -339,3 +793,60 @@ class TestLayoutTuner:
         assert "TUNING" in summary
         assert "population_size" in summary
         assert "crossover_operator" in summary
+
+
+# ===========================================================================
+#  Tests - Benchmark GUI helpers
+# ===========================================================================
+
+class TestBenchmarkGuiHelpers:
+    """Tests de helpers puros usados por la GUI de tuning."""
+
+    def test_parse_manual_ref_point_accepts_comma_separated_floats(self):
+        """El ref_point manual se parsea como coordenadas float ordenadas."""
+        assert _parse_manual_ref_point("10.5, 20", expected_dims=2) == (10.5, 20.0)
+
+    @pytest.mark.parametrize(
+        ("text", "match"),
+        [
+            ("", "manual"),
+            ("1.0", "2 valores"),
+            ("1.0, nope", "float"),
+        ],
+    )
+    def test_parse_manual_ref_point_rejects_invalid_values(self, text, match):
+        """La GUI valida entradas manuales inválidas con mensajes claros."""
+        with pytest.raises(ValueError, match=match):
+            _parse_manual_ref_point(text, expected_dims=2)
+
+    def test_format_ref_point_display_mentions_mode_explicitly(self):
+        """La etiqueta GUI deja claro si el ref_point es manual o calibrado."""
+        assert _format_ref_point_display((9.0, 11.0), "manual") == "manual [9.000, 11.000]"
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            ("calibrated", "calibrated pending (warm-up automatic)"),
+            ("manual", "manual required"),
+        ],
+    )
+    def test_format_ref_point_display_explains_pending_mode_state(self, mode, expected):
+        """La GUI explica claramente si el warm-up es automatico o si falta el valor manual."""
+        assert _format_ref_point_display(None, mode) == expected
+
+    def test_format_ref_point_mode_help_describes_calibrated_vs_manual_modes(self):
+        """La ayuda GUI diferencia el warm-up automatico del ref_point manual obligatorio."""
+        assert _format_ref_point_mode_help("calibrated") == "Modo calibrado: usa warm-up automatico para fijar el ref_point."
+        assert _format_ref_point_mode_help("manual") == "Modo manual: omite el warm-up y exige ref_point manual."
+
+    def test_resolve_ref_point_display_uses_validated_manual_value_before_trials(self):
+        """La GUI muestra el ref_point manual validado antes del primer trial."""
+        assert _resolve_ref_point_display("manual", manual_ref_point=(9.0, 11.0)) == "manual [9.000, 11.000]"
+
+    def test_resolve_ref_point_display_prefers_runtime_session_ref_point(self):
+        """Si el tuner ya emitio un ref_point, la GUI muestra ese valor explicitamente."""
+        assert _resolve_ref_point_display(
+            "calibrated",
+            ref_point=(12.0, 13.5),
+            manual_ref_point=(9.0, 11.0),
+        ) == "calibrated [12.000, 13.500]"

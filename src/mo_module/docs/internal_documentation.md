@@ -57,6 +57,17 @@ Herramientas para evaluar la calidad del frente y seleccionar soluciones.
   - `select_min_objective()`: Mejor en un objetivo concreto.
 - **Visualización**: Scatter 2D/3D del frente, coordenadas paralelas (matplotlib).
 
+### 5. Tuning de hiperparámetros (`tuning.py`)
+Orquesta el ajuste de `OptimizerConfig` con Optuna usando HV como score de sesión.
+
+- **`LayoutTuner`**: ejecuta un estudio Optuna y compara trials con un `session_ref_point` fijo para toda la sesión, no con un `ref_point` recalculado por trial.
+- **Modos de `ref_point`**:
+  - `calibrated`: ejecuta un warm-up previo con configuraciones ancla y fija automáticamente un `session_ref_point` conservador antes de empezar los trials.
+  - `manual`: no ejecuta warm-up; exige `ref_point` explícito al usuario y usa ese valor fijo durante toda la sesión.
+- **Calibración conservadora**: `_build_calibration_configs()` genera anclas deterministas del espacio de búsqueda y `_calibrate_reference_point()` construye el `ref_point` a partir del peor frente observado con un margen del 10 %.
+- **Validación del HV**: `_compute_hypervolume_score()` exige que el `ref_point` sea estrictamente mayor que el máximo del frente de Pareto en cada objetivo. Si deja de cumplirse, lanza `ValueError` y la comparación HV de esa sesión queda invalidada.
+- **Progreso estructurado**: `progress_callback` emite `calibration_started`, `calibration_completed`, `trial_completed` y `tuning_completed`, con fase actual, mejor HV y `ref_point` explícito, para que la GUI muestre el estado en vivo.
+
 ## Patrones de Diseño Aplicados
 
 | Patrón | Dónde | Propósito |
@@ -130,16 +141,36 @@ Flujo ejecutado por `analyze_pareto_front()`:
 3. Identificar soluciones clave (knee point, mejores por objetivo, compromiso).
 4. Opcionalmente visualizar con `plot_pareto_front_2d()` / `plot_parallel_coordinates()`.
 
+### D. Pipeline de Tuning con `ref_point` fijo
+Flujo ejecutado por `LayoutTuner.tune()`:
+
+1. Crear el estudio Optuna y resetear estado interno (`_best_score`, `session_ref_point`).
+2. Resolver el modo de `ref_point`:
+   - **manual**: copiar el `ref_point` validado a `self._session_ref_point`.
+   - **calibrated**: construir configuraciones de warm-up, ejecutar la calibración y fijar un `session_ref_point` conservador para toda la sesión.
+3. Para cada trial, sugerir una `OptimizerConfig` con `_suggest_config()`.
+4. Evaluar la configuración con varias seeds mediante `_evaluate_config()`, calculando el HV de cada frente con el mismo `self._session_ref_point`.
+5. Reportar progreso estructurado tras la calibración y tras cada trial, incluyendo fase, mejor HV y `ref_point` en uso.
+6. Al finalizar, reconstruir `best_config()` desde el mejor trial Optuna y conservar el `session_ref_point` usado en la sesión para inspección y GUI.
+
+Notas operativas:
+
+- El warm-up de `calibrated` no forma parte de los trials Optuna; solo sirve para fijar el `ref_point` de sesión.
+- El `ref_point` calibrado es conservador, pero no se reajusta a mitad de sesión aunque aparezca un frente peor.
+- Si un frente posterior deja de ser estrictamente peor que el `ref_point` fijo, el cálculo de HV falla por diseño, porque las comparaciones entre trials dejarían de ser coherentes.
+
 ## Funciones Llamadas Extensamente
 
 | Función | Archivo | Descripción | Uso |
 |:---|:---|:---|:---|
 | **`optimize_layout`** | `optimizer.py` | Función principal del módulo | Orquesta todo el pipeline de optimización |
+| **`LayoutTuner.tune`** | `tuning.py` | Ejecuta warm-up/calibración opcional y estudio Optuna | Punto de entrada del tuning con `ref_point` fijo de sesión |
 | **`FitnessEvaluator.evaluate`** | `fitness.py` | Evalúa vector de fitness de un layout | Llamada por pymoo en cada evaluación de individuo |
 | **`TranspilationCache.get`** | `fitness.py` | Caché de transpilación | Llamada internamente por FitnessEvaluator para cada layout con obj. de transpilación |
 | **`validate_layout`** | `encoding.py` | Verifica factibilidad de un layout | Usada en operadores genéticos y en tests |
 | **`repair_layout`** | `encoding.py` | Corrige layouts inválidos | Usada después del crossover si genera duplicados |
 | **`compute_pareto_metrics`** | `pareto.py` | Calcula HV, spacing, etc. | Usada en análisis post-optimización |
+| **`_compute_hypervolume_score`** | `tuning.py` | Calcula HV con validación estricta del `ref_point` | Base del score comparado por Optuna |
 | **`select_knee_point`** | `pareto.py` | Selecciona punto de rodilla | Usada para recomendar la solución de mayor trade-off |
 
 ## Integración con Otros Módulos
@@ -159,3 +190,8 @@ Flujo ejecutado por `analyze_pareto_front()`:
 - `OptimizationResult.to_dict()` genera datos tabulares para análisis.
 - `compare_layouts()` permite comparar MO vs baselines (SABRE, trivial).
 - `ParetoMetrics` proporciona indicadores de calidad para reportes.
+
+### Integración con la GUI de benchmark/tuning:
+- `benchmark/benchmark_gui.py` expone los modos `calibrated` y `manual` al usuario.
+- La GUI muestra progreso en vivo, fase actual, mejor HV y el `ref_point` explícito activo durante la sesión.
+- En modo `calibrated`, la GUI informa del warm-up y del `ref_point` fijado automáticamente; en modo `manual`, deja claro que no hay warm-up y muestra el valor introducido por el usuario.

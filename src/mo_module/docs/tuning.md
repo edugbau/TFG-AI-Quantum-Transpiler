@@ -37,11 +37,17 @@ Motivación del cambio a categórico:
 ┌─────────────────────────────────────────────────────┐
 │  LayoutTuner.tune()                                 │
 │                                                     │
+│  Antes de los trials:                               │
+│   - modo calibrated: warm-up/calibración automática │
+│     para fijar un session_ref_point conservador     │
+│   - modo manual: usa el ref_point dado por usuario  │
+│                                                     │
 │  Para cada trial (n_trials = 30 por defecto):       │
 │   1. Optuna (TPE) sugiere una OptimizerConfig       │
 │   2. Se ejecuta optimize_layout() con n_seeds       │
 │      semillas distintas (n_seeds = 3 por defecto)   │
 │   3. Se calcula el hipervolumen medio del frente    │
+│      usando el mismo ref_point fijo de la sesión    │
 │   4. Optuna recibe el score → actualiza modelo TPE  │
 │                                                     │
 │  Al finalizar: best_config() devuelve la config     │
@@ -51,7 +57,24 @@ Motivación del cambio a categórico:
 
 ### Función objetivo: Hipervolumen
 
-El **hipervolumen** (HV) mide el volumen del espacio objetivo dominado por el frente de Pareto respecto a un punto de referencia (nadir + 10% de margen). Un HV mayor indica un frente de mejor calidad (soluciones mejores y más diversas). Optuna **maximiza** esta métrica.
+El **hipervolumen** (HV) mide el volumen del espacio objetivo dominado por el frente de Pareto respecto a un punto de referencia. Un HV mayor indica un frente de mejor calidad (soluciones mejores y más diversas). Optuna **maximiza** esta métrica.
+
+Importante: durante una sesión de tuning ya no se recalcula un `ref_point` por trial. `LayoutTuner` fija un único `session_ref_point` y usa ese mismo valor para comparar **todos** los frentes evaluados en la sesión. Esto mantiene consistente la comparación de HV entre trials.
+
+### Modos de `ref_point`
+
+El tuning soporta dos modos explícitos:
+
+- `calibrated`: antes de lanzar los trials, ejecuta un warm-up automático con varias configuraciones ancla del espacio de búsqueda y construye un `session_ref_point` conservador. Ese valor se muestra de forma explícita en la GUI y queda fijo para todos los trials Optuna de la sesión.
+- `manual`: no ejecuta warm-up. El usuario proporciona manualmente `ref_point` al crear `LayoutTuner`, y ese valor fijo se usa en toda la sesión.
+
+En modo `calibrated`, el `ref_point` se obtiene a partir del peor valor observado en las ejecuciones de calibración, con un margen adicional del 10 %. La idea es que sea deliberadamente conservador para reducir el riesgo de invalidarlo durante los trials reales.
+
+### Fallo por `ref_point` inválido
+
+El `ref_point` fijo debe ser **estrictamente peor** que todo frente de Pareto evaluado en cada objetivo. En este proyecto, como los objetivos (`depth`, `cnot_count`) se minimizan, eso significa que cada coordenada del `ref_point` debe ser estrictamente mayor que el máximo de ese frente en la coordenada correspondiente.
+
+Si durante la sesión aparece un frente cuya coordenada máxima alcanza o supera el `ref_point`, el cálculo de HV deja de ser válido y el tuning falla con un `ValueError` (`ref_point must be strictly greater than the Pareto front maximum in every objective`). Esto puede ocurrir si un `ref_point` manual se elige demasiado ajustado o si incluso el `ref_point` calibrado queda invalidado por un frente posterior peor que los usados en el warm-up.
 
 ### Espacio categórico de mutación
 
@@ -97,7 +120,7 @@ Esto quiere decir que si Optuna sugiere `population_size=80` para un trial, ese 
               └───────────────────────────────────────────┘
 ```
 
-> **Implicación**: la comparación entre trials es relativa (todos usan la misma reducción), por lo que el ranking de Optuna es válido. La `best_config()` final sí usa los valores completos para producción.
+> **Implicación**: la comparación entre trials es relativa porque todos usan la misma reducción de presupuesto y el mismo `session_ref_point` fijo, por lo que el ranking de Optuna es válido. La `best_config()` final sí usa los valores completos para producción.
 
 ---
 
@@ -135,12 +158,28 @@ tuner = LayoutTuner(
     n_trials=30,   # presupuesto de evaluaciones
     n_seeds=3,     # seeds por evaluación (robustez)
     space=space,
+    ref_point_mode="calibrated",  # warm-up automático y ref_point fijo de sesión
 )
 
 tuner.tune()
 best = tuner.best_config()
 print(tuner.summary())
 ```
+
+Modo manual:
+
+```python
+tuner = LayoutTuner(
+    circuit=circuit,
+    backend=backend,
+    n_trials=30,
+    n_seeds=3,
+    ref_point_mode="manual",
+    ref_point=[120.0, 240.0],
+)
+```
+
+Tras `tune()`, `tuner.session_ref_point` devuelve el `ref_point` efectivo usado en toda la sesión: el manual introducido por el usuario o el calibrado automáticamente en el warm-up.
 
 ---
 
@@ -157,6 +196,20 @@ fig.show()
 fig2 = vis.plot_param_importances(tuner.study)
 fig2.show()
 ```
+
+---
+
+## GUI de tuning
+
+La interfaz de `benchmark_gui.py` refleja el comportamiento actual del tuner:
+
+- selector de modo `ref_point` entre `calibrated` y `manual`;
+- progreso en vivo del tuning;
+- fase actual (`preparando`, `warm-up`, `tuning`, `completado`);
+- mejor HV observado hasta el momento;
+- `ref_point` explícito usado en la sesión.
+
+En modo `calibrated`, la GUI muestra cuándo empieza la calibración, cuándo termina el warm-up y cuál fue el `ref_point` fijado automáticamente. En modo `manual`, muestra desde el inicio el `ref_point` introducido por el usuario y deja claro que no hay warm-up.
 
 ---
 
