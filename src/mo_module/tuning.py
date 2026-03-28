@@ -787,11 +787,11 @@ class LayoutTuner:
         """Construye configuraciones conservadoras para calibrar el ref_point.
 
         La calibración usa un warm-up corto y determinista con anclas
-        low / mid / high, cobertura corta de algoritmos configurados y
-        una sola seed fija para todo el warm-up.
+        low / mid / high, cobertura corta de algoritmos configurados.
+        Se itera sobre todas las seeds para producir hasta n_seeds × 3
+        configuraciones únicas (con deduplicación por firma).
         """
         space = self.space
-        calibration_seed = seeds[0] if seeds else 0
         anchor_specs = [
             (space.population_size_range[0], space.n_generations_range[0]),
             (
@@ -846,49 +846,50 @@ class LayoutTuner:
                 ),
             ]
 
-        for (population_size, n_generations), (
-            algorithm,
-            crossover_operator,
-            prob_swap,
-            prob_replace,
-        ) in zip(
-            anchor_specs,
-            anchor_params,
-        ):
-            effective_population_size = min(
-                population_size,
-                self.DEFAULT_EVAL_POPULATION,
-            )
-            effective_n_generations = min(
-                n_generations,
-                self.DEFAULT_EVAL_GENERATIONS,
-            )
-            signature = (
+        for seed in (seeds if seeds else [0]):
+            for (population_size, n_generations), (
                 algorithm,
                 crossover_operator,
                 prob_swap,
                 prob_replace,
-                effective_population_size,
-                effective_n_generations,
-                calibration_seed,
-            )
-            if signature in seen_signatures:
-                continue
-            seen_signatures.add(signature)
-            configs.append(
-                OptimizerConfig(
-                    algorithm=algorithm,
-                    population_size=effective_population_size,
-                    n_generations=effective_n_generations,
-                    objectives=self.objectives,
-                    optimization_level=space.optimization_level,
-                    crossover_operator=crossover_operator,
-                    prob_swap_mutation=prob_swap,
-                    prob_replace_mutation=prob_replace,
-                    seed=calibration_seed,
-                    verbose=False,
+            ) in zip(
+                anchor_specs,
+                anchor_params,
+            ):
+                effective_population_size = min(
+                    population_size,
+                    self.DEFAULT_EVAL_POPULATION,
                 )
-            )
+                effective_n_generations = min(
+                    n_generations,
+                    self.DEFAULT_EVAL_GENERATIONS,
+                )
+                signature = (
+                    algorithm,
+                    crossover_operator,
+                    prob_swap,
+                    prob_replace,
+                    effective_population_size,
+                    effective_n_generations,
+                    seed,
+                )
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
+                configs.append(
+                    OptimizerConfig(
+                        algorithm=algorithm,
+                        population_size=effective_population_size,
+                        n_generations=effective_n_generations,
+                        objectives=self.objectives,
+                        optimization_level=space.optimization_level,
+                        crossover_operator=crossover_operator,
+                        prob_swap_mutation=prob_swap,
+                        prob_replace_mutation=prob_replace,
+                        seed=seed,
+                        verbose=False,
+                    )
+                )
 
         return configs
 
@@ -922,7 +923,7 @@ class LayoutTuner:
                 continue
             pareto_fronts.append(np.asarray(result.pareto_fitness, dtype=float))
             combined_front = np.vstack(pareto_fronts)
-            ref_point_candidate = combined_front.max(axis=0) * 1.1 + 1e-6
+            ref_point_candidate = combined_front.max(axis=0) * 1.3 + 1e-6
             self._emit_progress(
                 "calibration_progress",
                 current_step=current_step,
@@ -945,7 +946,7 @@ class LayoutTuner:
             )
 
         combined_front = np.vstack(pareto_fronts)
-        return combined_front.max(axis=0) * 1.1 + 1e-6
+        return combined_front.max(axis=0) * 1.3 + 1e-6
 
     def _emit_progress(self, event: str, **payload: Any) -> None:
         """Emite eventos estructurados de progreso si hay callback.

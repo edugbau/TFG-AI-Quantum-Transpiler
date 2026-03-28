@@ -401,7 +401,7 @@ class TestLayoutTuner:
 
         tuner.tune(show_progress_bar=False)
 
-        expected_ref_point = warmup_front.max(axis=0) * 1.1 + 1e-6
+        expected_ref_point = warmup_front.max(axis=0) * 1.3 + 1e-6
         assert np.allclose(tuner.session_ref_point, expected_ref_point)
         assert len(captured_ref_points) == 2
         assert all(np.allclose(ref_point, expected_ref_point) for ref_point in captured_ref_points)
@@ -475,7 +475,7 @@ class TestLayoutTuner:
 
         tuner.tune(show_progress_bar=False)
 
-        expected_ref_point = np.array([22.0, 26.4]) + 1e-6
+        expected_ref_point = np.array([26.0, 31.2]) + 1e-6
         assert np.allclose(tuner.session_ref_point, expected_ref_point)
 
     def test_manual_mode_uses_supplied_ref_point_without_warmup(
@@ -699,8 +699,8 @@ class TestLayoutTuner:
         assert all(event["total_steps"] == 3 for event in calibration_progress_events)
         assert all(set(("current_step", "total_steps", "config", "ref_point_candidate")).issubset(event) for event in calibration_progress_events)
         assert calibration_progress_events[0]["ref_point_candidate"] is None
-        assert calibration_progress_events[-1]["ref_point_candidate"] == pytest.approx([8.800001, 9.900001])
-        assert events[4]["ref_point"] == pytest.approx([8.800001, 9.900001])
+        assert calibration_progress_events[-1]["ref_point_candidate"] == pytest.approx([10.400001, 11.700001])
+        assert events[4]["ref_point"] == pytest.approx([10.400001, 11.700001])
         assert events[5]["trial_number"] == 1
         assert events[5]["completed_trials"] == 1
         assert "params" in events[5]
@@ -713,7 +713,7 @@ class TestLayoutTuner:
         small_circuit,
         backend_torino,
     ):
-        """El warm-up calibrado debe limitarse a un conjunto corto y determinista."""
+        """El warm-up calibrado produce hasta n_seeds × 3 configuraciones únicas."""
         tuner = LayoutTuner(
             circuit=small_circuit,
             backend=backend_torino,
@@ -725,29 +725,20 @@ class TestLayoutTuner:
 
         calibration_configs = tuner._build_calibration_configs(list(range(tuner.n_seeds)))
 
-        assert [
-            (
-                config.algorithm,
-                config.population_size,
-                config.n_generations,
-                config.crossover_operator,
-                config.prob_swap_mutation,
-                config.prob_replace_mutation,
-                config.seed,
-            )
-            for config in calibration_configs
-        ] == [
-            ("nsga2", 20, 30, "dpx", 0.1, 0.1, 0),
-            ("nsga2", 30, 50, "ox", 0.5, 0.5, 0),
-            ("nsga2", 30, 50, "ox", 0.7, 0.9, 0),
-        ]
+        # With 5 seeds and 3 anchors, produces up to 5 × 3 = 15 unique configs
+        assert len(calibration_configs) <= tuner.n_seeds * 3
+        assert len(calibration_configs) > 0
+        # First three configs (seed=0) preserve the original anchor structure
+        assert calibration_configs[0].seed == 0
+        assert calibration_configs[0].algorithm == "nsga2"
+        assert calibration_configs[0].crossover_operator == "dpx"
 
     def test_calibrated_warmup_uses_one_fixed_seed_only(
         self,
         small_circuit,
         backend_torino,
     ):
-        """La calibración usa una sola seed fija aunque los trials usen varias."""
+        """La calibración itera sobre todas las seeds proporcionadas."""
         tuner = LayoutTuner(
             circuit=small_circuit,
             backend=backend_torino,
@@ -759,7 +750,9 @@ class TestLayoutTuner:
 
         calibration_configs = tuner._build_calibration_configs(list(range(tuner.n_seeds)))
 
-        assert [config.seed for config in calibration_configs] == [0, 0, 0]
+        config_seeds = [config.seed for config in calibration_configs]
+        # All seeds (0–4) must be present in calibration configs
+        assert set(config_seeds) == {0, 1, 2, 3, 4}
 
     def test_progress_callback_docs_include_calibration_progress_event(self):
         """La API publica documenta calibration_progress junto al resto de eventos."""
@@ -789,7 +782,7 @@ class TestLayoutTuner:
 
         calibration_configs = tuner._build_calibration_configs(list(range(tuner.n_seeds)))
 
-        assert len(calibration_configs) <= 3
+        assert len(calibration_configs) <= tuner.n_seeds * 3
         assert {config.algorithm for config in calibration_configs} == {"nsga2", "moead"}
 
     def test_calibrated_multi_algorithm_warmup_keeps_fixed_session_ref_point_without_expanding(
@@ -842,9 +835,11 @@ class TestLayoutTuner:
 
         tuner.tune(show_progress_bar=False)
 
-        assert len(warmup_configs) == 3
+        # With 5 seeds × 3 anchors = 15 unique calibration configs
+        assert len(warmup_configs) == 15
         assert {config[0] for config in warmup_configs} == {"nsga2", "moead"}
-        assert np.allclose(tuner.session_ref_point, np.array([13.2, 16.5]) + 1e-6)
+        # max front values are [12.0, 15.0] (from moead runs); 1.3× margin
+        assert np.allclose(tuner.session_ref_point, np.array([15.6, 19.5]) + 1e-6)
         assert len(captured_ref_points) == 2
         assert all(np.allclose(ref_point, tuner.session_ref_point) for ref_point in captured_ref_points)
 
@@ -975,6 +970,67 @@ class TestLayoutTuner:
         assert "TUNING" in summary
         assert "population_size" in summary
         assert "crossover_operator" in summary
+
+
+    def test_calibrated_warmup_uses_all_seeds(
+        self, small_circuit, backend_torino
+    ):
+        """El warm-up usa todas las seeds para un ref_point más conservador."""
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=2,
+            n_seeds=3,
+            space=HyperparameterSpace(
+                population_size_range=(20, 80),
+                n_generations_range=(30, 120),
+            ),
+            ref_point_mode="calibrated",
+        )
+        calibration_configs = tuner._build_calibration_configs(list(range(tuner.n_seeds)))
+        config_seeds = [config.seed for config in calibration_configs]
+        # All three seeds must appear (not just seed=0)
+        assert set(config_seeds) == {0, 1, 2}
+
+    def test_calibrated_mode_uses_30_percent_margin(
+        self, small_circuit, backend_torino, monkeypatch
+    ):
+        """El ref_point calibrado usa margen del 30% (no 10%)."""
+        import numpy as np
+        from src.mo_module.optimizer import OptimizationResult
+        from src.mo_module import tuning as tuning_module
+
+        warmup_front = np.array([[4.0, 7.0], [5.0, 6.0]])
+
+        def fake_optimize_layout(circuit, backend, config):
+            return OptimizationResult(
+                pareto_layouts=[[0, 1, 2]],
+                pareto_fitness=warmup_front,
+                objective_names=["depth", "cnot_count"],
+            )
+
+        def fake_evaluate_config(config, circuit, backend, seeds, n_jobs=1, ref_point=None):
+            return 1.0
+
+        monkeypatch.setattr(tuning_module, "optimize_layout", fake_optimize_layout)
+        monkeypatch.setattr(tuning_module, "_evaluate_config", fake_evaluate_config)
+
+        tuner = LayoutTuner(
+            circuit=small_circuit,
+            backend=backend_torino,
+            n_trials=2,
+            n_seeds=1,
+            space=HyperparameterSpace(
+                population_size_range=(20, 80),
+                n_generations_range=(30, 120),
+            ),
+            ref_point_mode="calibrated",
+        )
+        tuner.tune(show_progress_bar=False)
+
+        # With 30% margin: max per obj × 1.3 + 1e-6
+        expected = warmup_front.max(axis=0) * 1.3 + 1e-6
+        assert np.allclose(tuner.session_ref_point, expected)
 
 
 # ===========================================================================
