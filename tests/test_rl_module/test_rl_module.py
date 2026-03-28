@@ -41,7 +41,7 @@ from src.rl_module.rewards import (
 )
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
-from src.rl_module.training import set_global_seeds
+from src.rl_module.training import set_global_seeds, setup_training_pipeline
 
 # ---------------------------------------------------------------------------
 # Imports de dependencias externas
@@ -131,19 +131,28 @@ class TestRoutingStrategy:
     """Tests de la estrategia de enrutamiento (RoutingStrategy)."""
 
     def test_observation_space_keys(self, linear_coupling_3q):
-        """El observation space contiene las claves 'layout' y 'lookahead'."""
+        """El observation space contiene las claves base y las enriquecidas."""
         strategy = RoutingStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
         obs_space = strategy.get_observation_space()
         assert isinstance(obs_space, gym.spaces.Dict)
         assert "layout" in obs_space.spaces
         assert "lookahead" in obs_space.spaces
+        assert "lookahead_physical" in obs_space.spaces
+        assert "lookahead_executable" in obs_space.spaces
+        assert "lookahead_routing_distance" in obs_space.spaces
+        assert "lookahead_valid_mask" in obs_space.spaces
+        assert "step_progress" in obs_space.spaces
 
     def test_observation_space_shapes(self, linear_coupling_3q):
-        """Las dimensiones de layout y lookahead son correctas."""
+        """Las dimensiones de las observaciones base y enriquecidas son correctas."""
         strategy = RoutingStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
         obs_space = strategy.get_observation_space()
         assert obs_space["layout"].shape == (3,)
         assert obs_space["lookahead"].shape == (10,)  # lookahead_window * 2
+        assert obs_space["lookahead_physical"].shape == (10,)
+        assert obs_space["lookahead_executable"].shape == (5,)
+        assert obs_space["lookahead_routing_distance"].shape == (5,)
+        assert obs_space["lookahead_valid_mask"].shape == (5,)
 
     def test_action_space_is_discrete(self, linear_coupling_3q):
         """El action space es Discrete con tamaño = número de aristas únicas."""
@@ -177,6 +186,28 @@ class TestRoutingStrategy:
         assert obs["layout"].dtype == np.int32
         assert obs["lookahead"].shape == (10,)
         assert obs["lookahead"].dtype == np.int32
+        assert obs["lookahead_physical"].shape == (10,)
+        assert obs["lookahead_physical"].dtype == np.int32
+        assert obs["lookahead_executable"].shape == (5,)
+        assert obs["lookahead_executable"].dtype == np.float32
+        assert obs["lookahead_routing_distance"].shape == (5,)
+        assert obs["lookahead_routing_distance"].dtype == np.float32
+        assert obs["lookahead_valid_mask"].shape == (5,)
+        assert obs["lookahead_valid_mask"].dtype == np.float32
+
+    def test_build_observation_enriches_projected_frontier(self, linear_coupling_3q):
+        """build_observation proyecta qubits fisicos y metricas de ejecutabilidad."""
+        strategy = RoutingStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=3)
+        layout = np.array([0, 2, 1], dtype=np.int32)
+        gates = [("cx", 0, 2), ("cx", 0, 1)]
+
+        obs = strategy.build_observation(layout, gates)
+
+        np.testing.assert_array_equal(obs["lookahead"], np.array([0, 2, 0, 1, -1, -1], dtype=np.int32))
+        np.testing.assert_array_equal(obs["lookahead_physical"], np.array([0, 1, 0, 2, -1, -1], dtype=np.int32))
+        np.testing.assert_array_equal(obs["lookahead_executable"], np.array([1.0, 0.0, 0.0], dtype=np.float32))
+        np.testing.assert_array_equal(obs["lookahead_routing_distance"], np.array([0.0, 1.0, 0.0], dtype=np.float32))
+        np.testing.assert_array_equal(obs["lookahead_valid_mask"], np.array([1.0, 1.0, 0.0], dtype=np.float32))
 
     def test_build_observation_padding_with_minus_one(self, linear_coupling_3q):
         """Cuando hay menos puertas que lookahead_window, se rellena con -1."""
@@ -196,6 +227,10 @@ class TestRoutingStrategy:
         layout = np.array([0, 1, 2], dtype=np.int32)
         obs = strategy.build_observation(layout, [])
         assert np.all(obs["lookahead"] == -1)
+        assert np.all(obs["lookahead_physical"] == -1)
+        assert np.all(obs["lookahead_executable"] == 0.0)
+        assert np.all(obs["lookahead_routing_distance"] == 0.0)
+        assert np.all(obs["lookahead_valid_mask"] == 0.0)
 
     def test_build_observation_with_deque(self, linear_coupling_3q):
         """build_observation funciona con deque además de listas."""
@@ -243,6 +278,10 @@ class TestSynthesisStrategy:
         assert isinstance(obs_space, gym.spaces.Dict)
         assert "layout" in obs_space.spaces
         assert "lookahead" in obs_space.spaces
+        assert "lookahead_physical" in obs_space.spaces
+        assert "lookahead_executable" in obs_space.spaces
+        assert "lookahead_routing_distance" in obs_space.spaces
+        assert "lookahead_valid_mask" in obs_space.spaces
 
     def test_action_space_is_multi_discrete(self, linear_coupling_3q):
         """El action space es MultiDiscrete con 3 dimensiones."""
@@ -464,6 +503,25 @@ class TestQuantumTranspilationEnv:
         assert isinstance(env.reward_function, SynthesisReward)
         assert isinstance(env.action_space, gym.spaces.MultiDiscrete)
 
+    def test_init_accepts_dag_frontier_mode(self, simple_circuit_3q, linear_coupling_3q):
+        """El constructor acepta frontier_mode='dag' y reset expone claves enriquecidas."""
+        env = QuantumTranspilationEnv(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+            frontier_mode="dag",
+            lookahead_window=3,
+        )
+
+        obs, _ = env.reset(seed=42)
+
+        assert env.frontier_mode == "dag"
+        assert "lookahead" in obs
+        assert "lookahead_physical" in obs
+        assert "lookahead_executable" in obs
+        assert "lookahead_routing_distance" in obs
+        assert "lookahead_valid_mask" in obs
+
     def test_init_invalid_mode(self, simple_circuit_3q, linear_coupling_3q):
         """Un modo inválido lanza ValueError."""
         with pytest.raises(ValueError, match="no soportado"):
@@ -526,6 +584,10 @@ class TestQuantumTranspilationEnv:
         assert isinstance(obs, dict)
         assert "layout" in obs
         assert "lookahead" in obs
+        assert "lookahead_physical" in obs
+        assert "lookahead_executable" in obs
+        assert "lookahead_routing_distance" in obs
+        assert "lookahead_valid_mask" in obs
         assert isinstance(info, dict)
         assert "initial_layout_loaded" in info
         assert "total_gates" in info
@@ -584,7 +646,58 @@ class TestQuantumTranspilationEnv:
         _, info = env.reset(seed=42)
         # La puerta debería haberse ejecutado automáticamente al final de reset()
         assert len(env.remaining_gates) == 0
-        assert info["total_gates"] == 0  # No quedan puertas
+        assert info["total_gates"] == 1
+
+    def test_reset_is_deterministic_when_circuit_is_already_executable(self):
+        """reset() mantiene el layout trivial cuando el circuito ya esta resuelto."""
+        qc = QuantumCircuit(2, name="trivial")
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        obs1, info1 = env.reset(seed=1)
+        obs2, info2 = env.reset(seed=999)
+
+        np.testing.assert_array_equal(obs1["layout"], np.array([0, 1], dtype=np.int32))
+        np.testing.assert_array_equal(obs2["layout"], np.array([0, 1], dtype=np.int32))
+        assert info1["already_completed_at_reset"] is True
+        assert info2["already_completed_at_reset"] is True
+
+    def test_init_tolerates_sparse_coupling_map_physical_qubit_count(self):
+        """El numero de qubits fisicos nunca baja de num_qubits."""
+        qc = QuantumCircuit(3)
+        qc.cx(0, 2)
+
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1)],
+            mode="routing",
+        )
+
+        assert env.num_physical_qubits == 3
+
+    def test_reset_reports_blocked_frontier_routing_distance(self):
+        """La distancia de routing es shortest-path-length menos uno."""
+        qc = QuantumCircuit(3)
+        qc.cx(0, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            lookahead_window=2,
+        )
+
+        obs, _ = env.reset(seed=42)
+
+        np.testing.assert_array_equal(obs["lookahead"], np.array([0, 2, -1, -1], dtype=np.int32))
+        np.testing.assert_array_equal(obs["lookahead_physical"], np.array([0, 2, -1, -1], dtype=np.int32))
+        np.testing.assert_array_equal(obs["lookahead_executable"], np.array([0.0, 0.0], dtype=np.float32))
+        np.testing.assert_array_equal(obs["lookahead_routing_distance"], np.array([1.0, 0.0], dtype=np.float32))
+        np.testing.assert_array_equal(obs["lookahead_valid_mask"], np.array([1.0, 0.0], dtype=np.float32))
 
     def test_reset_clears_state(self, routing_env):
         """reset() reinicia current_step y total_swaps a 0."""
@@ -762,6 +875,62 @@ class TestQuantumTranspilationEnv:
             assert len(w) == 1
             assert "3 qubits" in str(w[0].message)
         assert len(gates) == 0  # La puerta de 3 qubits se ignora
+
+    def test_reset_dag_mode_tolerates_unsupported_operations_like_sequential(self):
+        """DAG mode ignora ops no soportadas con warning, igual que sequential."""
+        qc = QuantumCircuit(3)
+        qc.h(0)
+        qc.ccx(0, 1, 2)
+        qc.barrier()
+        qc.cx(0, 1)
+
+        dag_env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            frontier_mode="dag",
+            lookahead_window=2,
+        )
+        sequential_env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            frontier_mode="sequential",
+            lookahead_window=2,
+        )
+
+        with warnings.catch_warnings(record=True) as dag_warnings:
+            warnings.simplefilter("always")
+            dag_obs, dag_info = dag_env.reset(seed=42)
+
+        with warnings.catch_warnings(record=True) as sequential_warnings:
+            warnings.simplefilter("always")
+            sequential_obs, sequential_info = sequential_env.reset(seed=42)
+
+        assert len(dag_warnings) == 2
+        assert sorted(str(w.message) for w in dag_warnings) == sorted(
+            str(w.message) for w in sequential_warnings
+        )
+        assert dag_info["total_gates"] == sequential_info["total_gates"] == 2
+        assert list(dag_env.remaining_gates) == list(sequential_env.remaining_gates) == []
+        np.testing.assert_array_equal(dag_obs["lookahead"], sequential_obs["lookahead"])
+
+    def test_reset_reports_unreachable_frontier_routing_distance_with_sentinel(self):
+        """Puertas bloqueadas sin ruta usan un sentinel distinto de ejecutable."""
+        qc = QuantumCircuit(3)
+        qc.cx(0, 2)
+
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1)],
+            mode="routing",
+            lookahead_window=2,
+        )
+
+        obs, _ = env.reset(seed=42)
+
+        np.testing.assert_array_equal(obs["lookahead_executable"], np.array([0.0, 0.0], dtype=np.float32))
+        np.testing.assert_array_equal(obs["lookahead_routing_distance"], np.array([-1.0, 0.0], dtype=np.float32))
 
     def test_is_connected(self, routing_env):
         """_is_connected valida la topología correctamente."""
@@ -1000,6 +1169,40 @@ class TestTrainingUtilities:
         with caplog.at_level(logging.INFO, logger="src.rl_module.training"):
             set_global_seeds(42)
         assert any("42" in record.message for record in caplog.records)
+
+    def test_setup_training_pipeline_accepts_frontier_mode(self, monkeypatch, simple_circuit_3q, linear_coupling_3q):
+        """El pipeline reenvia frontier_mode al crear los entornos."""
+        captured_frontier_modes = []
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                captured_frontier_modes.append(kwargs.get("frontier_mode"))
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log, **hyperparams):
+                self.env = env
+
+            def train(self, total_timesteps, callbacks):
+                return None
+
+            def save(self, path):
+                return None
+
+        monkeypatch.setattr("src.rl_module.training.QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr("src.rl_module.training.Monitor", lambda env: env)
+        monkeypatch.setattr("src.rl_module.training.QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr("src.rl_module.training.CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.EvalCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.os.makedirs", lambda *args, **kwargs: None)
+
+        setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            total_timesteps=1,
+            frontier_mode="dag",
+        )
+
+        assert captured_frontier_modes == ["dag", "dag"]
 
 
 # ===========================================================================

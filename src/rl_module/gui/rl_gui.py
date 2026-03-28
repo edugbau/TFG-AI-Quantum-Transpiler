@@ -220,6 +220,15 @@ class RLBenchmarkGUI(ctk.CTk):
         self._mode_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
         row += 1
 
+        # --- Frontier Mode ---
+        ctk.CTkLabel(sidebar, text="Frontier:", anchor="w").grid(
+            row=row, column=0, padx=20, pady=(10, 0), sticky="w"
+        )
+        row += 1
+        self._frontier_option = ctk.CTkOptionMenu(sidebar, values=["sequential", "dag"])
+        self._frontier_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
+        row += 1
+
         # --- Algoritmo RL ---
         ctk.CTkLabel(sidebar, text="Algoritmo RL:", anchor="w").grid(
             row=row, column=0, padx=20, pady=(10, 0), sticky="w"
@@ -397,6 +406,7 @@ class RLBenchmarkGUI(ctk.CTk):
             "coupling_map": PRESET_COUPLINGS[coupling_name],
             "coupling_name": coupling_name,
             "mode": self._mode_option.get(),
+            "frontier_mode": self._frontier_option.get(),
             "algorithm": self._algo_option.get(),
             "timesteps": int(self._timesteps_slider.get()),
             "max_steps": int(self._maxsteps_slider.get()),
@@ -434,7 +444,7 @@ class RLBenchmarkGUI(ctk.CTk):
 
         self._log(f"Circuito: {cfg['circuit_name']}  |  Qubits: {cfg['circuit'].num_qubits}")
         self._log(f"Coupling: {cfg['coupling_name']}")
-        self._log(f"Modo: {cfg['mode']}  |  Algoritmo: {cfg['algorithm']}")
+        self._log(f"Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}  |  Algoritmo: {cfg['algorithm']}")
         self._log(f"Timesteps: {cfg['timesteps']:,}  |  Max Steps/Ep: {cfg['max_steps']}  |  Lookahead: {cfg['lookahead']}")
         self._log(f"Seed: {cfg['seed']}")
         self._log("=" * 60)
@@ -456,6 +466,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 target_circuit=cfg["circuit"],
                 coupling_map=cfg["coupling_map"],
                 mode=cfg["mode"],
+                frontier_mode=cfg["frontier_mode"],
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
             )
@@ -604,6 +615,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 target_circuit=cfg["circuit"],
                 coupling_map=cfg["coupling_map"],
                 mode=cfg["mode"],
+                frontier_mode=cfg["frontier_mode"],
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
             )
@@ -613,9 +625,14 @@ class RLBenchmarkGUI(ctk.CTk):
             self.after(0, self._eval_log_write, "=" * 70)
             self.after(0, self._eval_log_write, "  EVALUACIÓN DE EPISODIO (Política Estocástica)")
             self.after(0, self._eval_log_write, "=" * 70)
-            self.after(0, self._eval_log_write, f"Circuito: {cfg['circuit_name']}  |  Modo: {cfg['mode']}")
+            self.after(0, self._eval_log_write, f"Circuito: {cfg['circuit_name']}  |  Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}")
             self.after(0, self._eval_log_write, f"Layout inicial: {eval_env.current_layout.tolist()}")
             self.after(0, self._eval_log_write, f"Puertas totales: {info['total_gates']}")
+            self.after(0, self._eval_log_write, f"Lookahead lógico: {obs['lookahead'].tolist()}")
+            self.after(0, self._eval_log_write, f"Lookahead físico: {obs['lookahead_physical'].tolist()}")
+            self.after(0, self._eval_log_write, f"Ejecutable: {obs['lookahead_executable'].tolist()}")
+            self.after(0, self._eval_log_write, f"Distancia routing: {obs['lookahead_routing_distance'].tolist()}")
+            self.after(0, self._eval_log_write, f"Máscara válida: {obs['lookahead_valid_mask'].tolist()}")
             self.after(0, self._eval_log_write, "-" * 70)
             self.after(0, self._eval_log_write,
                        f"{'Step':>5} │ {'Acción':^20} │ {'Reward':>8} │ {'Gates Ej.':>9} │ {'Restantes':>10} │ Layout")

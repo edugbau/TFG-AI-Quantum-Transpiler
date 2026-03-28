@@ -20,17 +20,36 @@ src/rl_module/
 
 El entorno `QuantumTranspilationEnv` no impone directamente los espacios de observación ni de acción. Delega esta responsabilidad a las clases que heredan de `RLEnvStrategy`. Además, implementa en *O(1)* la búsqueda del mapeo cuántico utilizando arrays cruzados (`current_layout` y `_inverse_layout`).
 
+La selección de puertas visibles y su ejecución ya no dependen de una única cola rígida. El entorno delega esa responsabilidad en proveedores de frontera:
+
+- `SequentialFrontier`: usa la secuencia lineal de instrucciones.
+- `DagFrontier`: usa `qiskit.converters.circuit_to_dag(...).front_layer()` para exponer paralelismo real.
+
 ### 1. Modo Enrutamiento (`mode="routing"`)
 - **Action Space:** Discreto (`gym.spaces.Discrete`). El tamaño equivale al número de aristas bidireccionales del Coupling Map (sin duplicados). El agente inserta un SWAP y el layout dinámico se invierte.
 - **Observation Space:** Diccionario con:
   - `layout`: Array del mapeo lógico→físico actual (tamaño `num_qubits`).
-  - `lookahead`: Buffer vectorial de tamaño fijo ($N \times 2$) sobre la *front-layer* del circuito a procesar.
+  - `lookahead`: Buffer vectorial lógico de tamaño fijo ($N \times 2$) sobre la frontera visible.
+  - `lookahead_physical`: Proyección física de las mismas puertas bajo el layout actual.
+  - `lookahead_executable`: Marca binaria de ejecutabilidad inmediata.
+  - `lookahead_routing_distance`: Distancia de routing aproximada (`shortest_path_length - 1`).
+  - `lookahead_valid_mask`: Máscara binaria para distinguir puertas reales de padding.
   - `step_progress`: Escalar normalizado $\in [0, 1]$ que indica `current_step / max_steps`. Proporciona **contexto temporal** al agente para distinguir estados idénticos visitados en momentos distintos del episodio, rompiendo oscilaciones cíclicas A→B→A.
 - **Lógica de Ejecución:** El entorno busca qué puertas quedan desbloqueadas tras aplicar el SWAP y ejecuta repetitivamente (en cascada) sus dependencias.
+
+### `frontier_mode`
+
+El entorno puede operar con dos modos de frontera:
+
+- `frontier_mode="sequential"`: usa la cola secuencial de instrucciones.
+- `frontier_mode="dag"`: usa una `front_layer` real del DAG y hace visibles varias puertas independientes en paralelo.
+
+Esto mejora la observabilidad del efecto del `SWAP`: el agente ya no ve solo el par lógico futuro, sino también su proyección física, su ejecutabilidad actual y su distancia de routing.
 
 ### 2. Modo Síntesis (`mode="synthesis"`)
 - **Action Space:** Multi-Discreto (`gym.spaces.MultiDiscrete`). El agente elige un operador explícito (ej. CX, RX, RZ) junto con sus qubits físicos (targets).
 - **Observation Space:** Comparte la caja `Dict` con *Routing*, pero pensado para expandirse a Tableaus de Clifford u operaciones vectoriales.
+- **Estado actual:** la infraestructura de observación y frontier ya está preparada, pero la lógica específica de síntesis sigue siendo placeholder y no debe considerarse entrenable todavía.
 
 ## Sistema de Recompensas (`rewards.py`)
 
@@ -70,6 +89,8 @@ Durante el entrenamiento, PPO utiliza una **política estocástica**: muestrea a
 
 ### Mitigaciones Implementadas
 - **`step_progress` en observación** (`env_strategies.py`): Escalar $\in [0, 1]$ que da contexto temporal al agente. Ayuda parcialmente pero no resuelve el problema por completo.
+- **Lookahead enriquecido**: `lookahead_physical`, `lookahead_executable`, `lookahead_routing_distance` y `lookahead_valid_mask` hacen explícito el efecto de cada `SWAP` sobre la frontera observable.
+- **`frontier_mode="dag"`**: permite representar correctamente puertas paralelas en circuitos con dependencias no lineales.
 - **Detección visual de ciclos** (`rl_gui.py`): La GUI detecta si un layout se visita 3 veces y corta el episodio mostrando `"CICLO DETECTADO ⚠"`. Esto **no afecta** al entorno de entrenamiento, es solo una protección de la interfaz.
 - **Penalización de SWAPs vacíos** (`environment.py`): Los SWAPs entre dos posiciones físicas sin qubit lógico se marcan como inválidos (-5.0 de penalización).
 

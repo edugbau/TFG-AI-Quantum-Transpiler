@@ -12,6 +12,7 @@ import gymnasium as gym
 import numpy as np
 from typing import Optional, Tuple, Dict, Any, List
 from .env_strategies import RoutingStrategy, SynthesisStrategy
+from .frontier import DagFrontier, FrontierProvider, GateTuple, SequentialFrontier
 from .rewards import RoutingReward, SynthesisReward
 from qiskit import QuantumCircuit
 
@@ -45,6 +46,7 @@ class QuantumTranspilationEnv(gym.Env):
         target_circuit: QuantumCircuit, 
         coupling_map: List[Tuple[int, int]], 
         mode: str = "routing",
+        frontier_mode: str = "sequential",
         lookahead_window: int = 10,
         max_steps: int = 1000,
         render_mode: Optional[str] = None,
@@ -56,18 +58,16 @@ class QuantumTranspilationEnv(gym.Env):
         self.num_qubits = target_circuit.num_qubits
         self.coupling_map_list = coupling_map
         self.mode = mode
+        self.frontier_mode = frontier_mode
         self.lookahead_window = lookahead_window
         self.max_steps = max_steps
         
         # Determinar el número de qubits físicos a partir del coupling map
         if self.coupling_map_list:
-            self.num_physical_qubits = max(max(a, b) for a, b in self.coupling_map_list) + 1
+            inferred_physical_qubits = max(max(a, b) for a, b in self.coupling_map_list) + 1
+            self.num_physical_qubits = max(inferred_physical_qubits, self.num_qubits)
         else:
             self.num_physical_qubits = self.num_qubits
-
-        # Asegurar que el hardware físico pueda albergar el circuito lógico
-        if self.num_physical_qubits < self.num_qubits:
-            raise ValueError(f"Coupling map ({self.num_physical_qubits} qubits) es más pequeño que el circuito ({self.num_qubits} qubits).")
             
         # Precomputar set bidireccional para búsquedas O(1)
         self._coupling_set: set = set(coupling_map) | {(b, a) for a, b in coupling_map}
@@ -90,10 +90,25 @@ class QuantumTranspilationEnv(gym.Env):
         self.current_layout: np.ndarray = np.full(self.num_qubits, -1, dtype=np.int32)
         self._inverse_layout: np.ndarray = np.full(self.num_physical_qubits, -1, dtype=np.int32)
 
-        # Cola de puertas pendientes — deque para popleft() en O(1)
-        self.remaining_gates: deque = deque()
+        if self.frontier_mode not in {"sequential", "dag"}:
+            raise ValueError(
+                f"frontier_mode '{self.frontier_mode}' no soportado. Usa 'sequential' o 'dag'."
+            )
+
+        self._frontier: FrontierProvider = SequentialFrontier()
         self.current_step = 0
         self.total_swaps = 0
+
+    @property
+    def remaining_gates(self) -> deque:
+        remaining = self._frontier.remaining_gates
+        if isinstance(remaining, deque):
+            return remaining
+        return deque(remaining)
+
+    @remaining_gates.setter
+    def remaining_gates(self, gates: Any) -> None:
+        self._frontier = SequentialFrontier(gates)
 
     def _extract_gates_from_circuit(self) -> List[Tuple[str, int, int]]:
         """
@@ -118,6 +133,11 @@ class QuantumTranspilationEnv(gym.Env):
                 )
         return gates
 
+    def _build_frontier(self, extracted_gates: List[GateTuple]) -> FrontierProvider:
+        if self.frontier_mode == "dag":
+            return DagFrontier.from_circuit(self.target_circuit)
+        return SequentialFrontier(extracted_gates)
+
     def reset(
         self,
         *,
@@ -132,7 +152,8 @@ class QuantumTranspilationEnv(gym.Env):
         
         self.current_step = 0
         self.total_swaps = 0
-        self.remaining_gates = deque(self._extract_gates_from_circuit())
+        extracted_gates = self._extract_gates_from_circuit()
+        self._frontier = self._build_frontier(extracted_gates)
         
         # Integración con el Módulo MO: Inyectar layout
         if options and "initial_layout" in options:
@@ -168,36 +189,16 @@ class QuantumTranspilationEnv(gym.Env):
         # Ejecutar puertas ya satisfechas por el layout inicial
         initial_gates_executed = self._try_execute_front_layer()
 
-        # Evitar episodios de 0 steps: si se resolvió todo de golpe al hacer reset 
-        # (por un preset demasiado fácil o suerte aleatoria), "desordenamos" el layout a propósito.
-        # (A menos que nos hayan forzado un `initial_layout` específico por options, que respetamos ciegamente)
-        if len(self.remaining_gates) == 0 and not (options and "initial_layout" in options):
-            max_retries = 10
-            while len(self.remaining_gates) == 0 and max_retries > 0:
-                # Restauramos las puertas
-                self.remaining_gates = deque(self._extract_gates_from_circuit())
-                
-                # Shuffle aleatorio usando los qubits físicos disponibles
-                available_physical = np.random.choice(self.num_physical_qubits, size=self.num_qubits, replace=False)
-                self.current_layout = available_physical.astype(np.int32)
-                
-                self._inverse_layout.fill(-1)
-                for lq in range(self.num_qubits):
-                    self._inverse_layout[self.current_layout[lq]] = lq
-                # Re-intentamos
-                initial_gates_executed = self._try_execute_front_layer()
-                max_retries -= 1
-
         # Guardar en info si ya estaba completado al iniciar
-        self.was_completed_at_reset = len(self.remaining_gates) == 0
+        self.was_completed_at_reset = self._frontier.remaining_gate_count == 0
 
         obs = self.strategy.build_observation(
-            self.current_layout, self.remaining_gates,
+            self.current_layout, self._frontier,
             step_progress=self.current_step / self.max_steps,
         )
         info = {
             "initial_layout_loaded": (options is not None and "initial_layout" in options),
-            "total_gates": len(self.remaining_gates) + initial_gates_executed,
+            "total_gates": len(extracted_gates),
             "already_completed_at_reset": self.was_completed_at_reset
         }
         
@@ -225,23 +226,11 @@ class QuantumTranspilationEnv(gym.Env):
         Evalúa en cascada: si la primera puerta se ejecuta, revisa la siguiente,
         y así sucesivamente hasta encontrar una puerta bloqueada.
         """
-        executed_count = 0
-        progress = True
-        while progress and self.remaining_gates:
-            progress = False
-            gate = self.remaining_gates[0]
-            gate_name, lq1, lq2 = gate
-            pq1 = self._get_physical_qubit(lq1)
-            pq2 = self._get_physical_qubit(lq2)
-            
-            # Puertas de 1 qubit siempre se pueden ejecutar. Puertas de 2 requieren conectividad.
-            if lq1 == lq2 or self._is_connected(pq1, pq2):
-                self.remaining_gates.popleft()  # O(1) con deque
-                executed_count += 1
-                progress = True
-            # Si la primera puerta está bloqueada, detenemos
-            
-        return executed_count
+        return self._frontier.execute_ready_cascade(
+            current_layout=self.current_layout,
+            is_connected=self._is_connected,
+            cascade_successors=True,
+        )
 
     def step(self, action: Any) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         self.current_step += 1
@@ -249,7 +238,7 @@ class QuantumTranspilationEnv(gym.Env):
         # 1. Decodificar Acción usando la estrategia
         action_info = self.strategy.decode_action(action)
         prev_obs = self.strategy.build_observation(
-            self.current_layout, self.remaining_gates,
+            self.current_layout, self._frontier,
             step_progress=(self.current_step - 1) / self.max_steps,
         )
         
@@ -313,7 +302,7 @@ class QuantumTranspilationEnv(gym.Env):
              info["is_valid_action"] = False
              
         # Evaluar estado final
-        terminated = len(self.remaining_gates) == 0
+        terminated = self._frontier.remaining_gate_count == 0
         truncated = self.current_step >= self.max_steps
 
         # Solo dar is_completed si acaba de terminar AHORA (y no lo estaba en el reset)
@@ -329,7 +318,7 @@ class QuantumTranspilationEnv(gym.Env):
             
         # 4. Calcular Recompensa
         obs = self.strategy.build_observation(
-            self.current_layout, self.remaining_gates,
+            self.current_layout, self._frontier,
             step_progress=self.current_step / self.max_steps,
         )
         reward = self.reward_function.compute_reward(prev_obs, action, obs, info)

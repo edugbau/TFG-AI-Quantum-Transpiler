@@ -41,6 +41,7 @@ def setup_training_pipeline(
     target_circuit: QuantumCircuit,
     coupling_map: List[Tuple[int, int]],
     mode: str = "routing",
+    frontier_mode: str = "sequential",
     algorithm: str = "PPO",
     total_timesteps: int = 100_000,
     seed: int = 42,
@@ -57,6 +58,7 @@ def setup_training_pipeline(
         target_circuit: Circuito cuántico a transpilar.
         coupling_map: Mapa de acoplamiento físico (lista de aristas).
         mode: "routing" o "synthesis".
+        frontier_mode: Estrategia publica de frontera expuesta al pipeline.
         algorithm: "PPO" o "DQN".
         total_timesteps: Pasos de entrenamiento.
         seed: Semilla de reproducibilidad.
@@ -79,6 +81,7 @@ def setup_training_pipeline(
         target_circuit=target_circuit,
         coupling_map=coupling_map,
         mode=mode,
+        frontier_mode=frontier_mode,
         lookahead_window=lookahead_window,
         max_steps=max_steps,
     )
@@ -89,6 +92,7 @@ def setup_training_pipeline(
         target_circuit=target_circuit,
         coupling_map=coupling_map,
         mode=mode,
+        frontier_mode=frontier_mode,
         lookahead_window=lookahead_window,
         max_steps=max_steps,
     )
