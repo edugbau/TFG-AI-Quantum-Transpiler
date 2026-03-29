@@ -550,8 +550,9 @@ def transpile_with_custom_layout(
     de la transpilación configurada. No implementa la integración MO -> RL;
     la coordinación entre módulos se delega a ``src/integration/``.
 
-    Decisión: se usa ``layout_method="trivial"`` cuando se proporciona
-    un layout inicial para evitar que Qiskit lo sobreescriba con SABRE.
+    Decisión: el ``initial_layout`` suministrado por el llamador se pasa
+    como entrada al pipeline normal de transpilación y routing de Qiskit,
+    sin forzar ``layout_method="trivial"``.
     El contrato lógico -> físico de ``initial_layout`` se preserva como
     entrada de la transpilación para evaluar el layout externo recibido.
 
