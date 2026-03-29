@@ -18,6 +18,7 @@ layout[i] = physical_qubit_for_logical_qubit_i
 - `qiskit_interface` may evaluate this layout through transpilation helpers.
 - `rl_module` may ingest it through `env.reset(options={"initial_layout": layout})`.
 - `integration` owns the process that connects producer and consumer.
+- `src/integration/` owns MO->RL orchestration.
 
 ## Current Status
 

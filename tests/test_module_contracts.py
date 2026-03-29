@@ -15,9 +15,12 @@ def test_docs_agents_exists_and_describes_four_modules():
         "src/integration/",
     ):
         assert token in text
+    assert "`src/integration/` owns MO->RL orchestration" in text
 
 
 def test_readme_architecture_reference_points_to_real_doc():
     readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+    github_agents_text = (ROOT / ".github" / "AGENTS.md").read_text(encoding="utf-8")
     assert "[agents.md](docs/agents.md)" in readme_text
+    assert "../docs/agents.md" in github_agents_text
     assert (ROOT / "docs" / "agents.md").exists()
