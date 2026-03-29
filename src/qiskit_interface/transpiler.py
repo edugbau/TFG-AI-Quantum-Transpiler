@@ -254,7 +254,7 @@ def transpile_circuit(
     ``qiskit.transpile()`` añadiendo:
       - Extracción automática de métricas pre y post transpilación.
       - Medición del tiempo de transpilación.
-      - Soporte para layout inicial personalizado (del módulo MO).
+      - Soporte para layout inicial personalizado (suministrado por el llamador).
       - Empaquetado del resultado en ``TranspilationResult``.
 
     Args:

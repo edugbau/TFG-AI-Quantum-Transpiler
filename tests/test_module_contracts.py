@@ -22,6 +22,7 @@ def test_docs_agents_exists_and_describes_four_modules():
     )
     assert "evaluación local de layouts suministrados por el llamador" in transpiler_text
     assert "layout inicial personalizado (para recibir layouts\n    suministrados por el llamador)" in transpiler_text
+    assert "layout inicial personalizado (del módulo MO)" not in transpiler_text
     assert "No implementa la integración MO -> RL" in transpiler_text
     assert "layouts del módulo MO" not in transpiler_text
     assert "puente principal" not in transpiler_text
