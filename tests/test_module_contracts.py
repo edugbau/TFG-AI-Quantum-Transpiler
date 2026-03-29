@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,10 +38,19 @@ def test_docs_agents_exists_and_describes_four_modules():
     assert "MO -> RL pertenecerá a `src/integration/`" in rl_lookahead_text
 
     for mo_python_file in (ROOT / "src" / "mo_module").rglob("*.py"):
-        mo_python_text = mo_python_file.read_text(encoding="utf-8")
-        assert "from src.rl_module" not in mo_python_text
-        assert "import src.rl_module" not in mo_python_text
-        assert "from ..rl_module" not in mo_python_text
+        mo_python_tree = ast.parse(mo_python_file.read_text(encoding="utf-8"))
+        for node in ast.walk(mo_python_tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "src.rl_module"
+                    assert not alias.name.startswith("src.rl_module.")
+            elif isinstance(node, ast.ImportFrom):
+                assert not (
+                    node.level > 0 and node.module == "rl_module"
+                )
+                if node.module is not None:
+                    assert node.module != "src.rl_module"
+                    assert not node.module.startswith("src.rl_module.")
 
 
 def test_readme_architecture_reference_points_to_real_doc():
