@@ -98,6 +98,9 @@ def test_mo_module_has_no_direct_rl_imports():
                         assert not node.module.startswith("rl_module.")
                     assert node.module != "src.rl_module"
                     assert not node.module.startswith("src.rl_module.")
+                    if node.module == "src":
+                        for alias in node.names:
+                            assert alias.name != "rl_module"
                 elif node.level > 0:
                     for alias in node.names:
                         assert alias.name != "rl_module"
