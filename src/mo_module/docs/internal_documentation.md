@@ -182,11 +182,9 @@ Notas operativas:
 - `get_error_for_layout()`: estadísticas de error hardware; usada en `compare_layouts()` para diagnóstico, no en las funciones de fitness.
 - `get_backend()`: instanciar Fake Backends.
 
-### Salida hacia el módulo `rl_module` (Módulo 2):
-- Los layouts del frente de Pareto (`OptimizationResult.pareto_layouts`) se pasan como layouts iniciales al agente de RL.
-- `get_compromise_layout()` o `get_best_layout()` proporcionan un layout único como semilla para el RL.
-
 ### Salida hacia el módulo `integration` (Módulo 4):
+- Los layouts del frente de Pareto (`OptimizationResult.pareto_layouts`) son salidas de datos consumibles por el módulo `integration`.
+- `get_compromise_layout()` y `get_best_layout()` proporcionan un layout único reutilizable tanto para el flujo MO_Only como para futuros flujos MO+RL.
 - `OptimizationResult.to_dict()` genera datos tabulares para análisis.
 - `compare_layouts()` permite comparar MO vs baselines (SABRE, trivial).
 - `ParetoMetrics` proporciona indicadores de calidad para reportes.

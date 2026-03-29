@@ -146,7 +146,7 @@ class QuantumTranspilationEnv(gym.Env):
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         """
         Reinicia el entorno.
-        Permite inyectar el 'initial_layout' desde el Módulo MO (Multi-Objective) a través de 'options'.
+        Permite inyectar un layout inicial externo y genérico a través de 'options'.
         """
         super().reset(seed=seed)
         
@@ -155,7 +155,7 @@ class QuantumTranspilationEnv(gym.Env):
         extracted_gates = self._extract_gates_from_circuit()
         self._frontier = self._build_frontier(extracted_gates)
         
-        # Integración con el Módulo MO: Inyectar layout
+        # Consumir un layout inicial externo sin acoplar el entorno a otro módulo.
         if options and "initial_layout" in options:
             # Layout es [q_logical] -> q_physical
             layout = np.array(options["initial_layout"], dtype=np.int32)
