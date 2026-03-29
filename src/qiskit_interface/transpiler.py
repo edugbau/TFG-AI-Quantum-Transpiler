@@ -552,8 +552,8 @@ def transpile_with_custom_layout(
 
     Decisión: se usa ``layout_method="trivial"`` cuando se proporciona
     un layout inicial para evitar que Qiskit lo sobreescriba con SABRE.
-    El contrato lógico -> físico de ``initial_layout`` se preserva para
-    evaluar exactamente el layout externo recibido.
+    El contrato lógico -> físico de ``initial_layout`` se preserva como
+    entrada de la transpilación para evaluar el layout externo recibido.
 
     Args:
         circuit: Circuito a transpilar.
