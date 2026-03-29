@@ -84,10 +84,14 @@ def test_mo_module_has_no_direct_rl_imports():
         for node in ast.walk(mo_python_tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
+                    assert alias.name != "rl_module"
+                    assert not alias.name.startswith("rl_module.")
                     assert alias.name != "src.rl_module"
                     assert not alias.name.startswith("src.rl_module.")
             elif isinstance(node, ast.ImportFrom):
                 if node.module is not None:
+                    assert node.module != "rl_module"
+                    assert not node.module.startswith("rl_module.")
                     if node.level > 0:
                         assert node.module != "rl_module"
                         assert not node.module.startswith("rl_module.")
