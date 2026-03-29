@@ -1,7 +1,10 @@
-"""Stub de integración.
+"""Módulo 4: Integración y experimentación.
 
-Este módulo será el único dueño del handoff MO -> RL y de la orquestación de
-Baseline, MO_Only, RL_Only y MO+RL.
+Este paquete será el único dueño del handoff MO -> RL y de la
+orquestación de escenarios `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
 
-La implementación concreta queda fuera del alcance de este cambio.
+Estado actual: stub. La implementación del pipeline todavía no forma
+parte de este cambio.
 """
+
+__all__: list[str] = []

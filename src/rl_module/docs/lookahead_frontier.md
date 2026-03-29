@@ -85,8 +85,7 @@ El entorno soporta dos modos de frontera:
 ## Comportamiento de `reset()`
 
 - Si se inyecta `initial_layout`, el entorno lo respeta exactamente.
-- El productor del `initial_layout` es externo al módulo y puede variar según la orquestación.
-- El handoff MO -> RL pertenecerá a `src/integration/`, no al contrato interno de `rl_module`.
+- El productor del `initial_layout` es externo al módulo; el handoff MO -> RL pertenecerá a `src/integration/`.
 - Si no se inyecta, el layout por defecto es determinista: `[0, 1, 2, ...]`.
 - Ya no se remezcla aleatoriamente el layout durante `reset()`.
 

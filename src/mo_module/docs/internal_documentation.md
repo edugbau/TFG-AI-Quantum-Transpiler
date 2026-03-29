@@ -183,8 +183,8 @@ Notas operativas:
 - `get_backend()`: instanciar Fake Backends.
 
 ### Salida hacia el módulo `integration` (Módulo 4):
-- Los layouts del frente de Pareto (`OptimizationResult.pareto_layouts`) son salidas de datos consumibles por el módulo `integration`.
-- `get_compromise_layout()` y `get_best_layout()` proporcionan un layout único reutilizable tanto para el flujo MO_Only como para futuros flujos MO+RL.
+- Los layouts del frente de Pareto (`OptimizationResult.pareto_layouts`) son datos de salida consumibles por el módulo `integration`.
+- `get_compromise_layout()` y `get_best_layout()` proporcionan un layout único para escenarios `MO_Only` y futuros flujos `MO+RL`.
 - `OptimizationResult.to_dict()` genera datos tabulares para análisis.
 - `compare_layouts()` permite comparar MO vs baselines (SABRE, trivial).
 - `ParetoMetrics` proporciona indicadores de calidad para reportes.

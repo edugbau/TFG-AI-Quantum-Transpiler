@@ -25,18 +25,60 @@ def test_docs_agents_exists_and_describes_four_modules():
     assert "puente principal" not in transpiler_text
     assert "híbrido MO+RL" not in transpiler_text
 
+
+def test_readme_architecture_reference_points_to_real_doc():
+    readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "[agents.md](docs/agents.md)" in readme_text
+    assert (ROOT / "docs" / "agents.md").exists()
+
+    qiskit_readme_text = (ROOT / "src" / "qiskit_interface" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "helper de evaluación local" in qiskit_readme_text
+    assert "Función puente para el Módulo MO" not in qiskit_readme_text
+
+
+def test_mo_docs_route_future_rl_consumption_through_integration():
     mo_doc_text = (ROOT / "src" / "mo_module" / "docs" / "internal_documentation.md").read_text(
         encoding="utf-8"
     )
     assert "Salida hacia el módulo `rl_module`" not in mo_doc_text
     assert "consumibles por el módulo `integration`" in mo_doc_text
+    assert (
+        "`get_compromise_layout()` y `get_best_layout()` proporcionan un layout único para escenarios `MO_Only` y futuros flujos `MO+RL`."
+        in mo_doc_text
+    )
 
+
+def test_rl_environment_reset_docstring_is_source_agnostic():
+    rl_environment_text = (ROOT / "src" / "rl_module" / "environment.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Permite inyectar un `initial_layout` externo a través de `options`." in rl_environment_text
+    assert "# Ingesta genérica de layout inicial desde el llamador" in rl_environment_text
+    assert "desde el Módulo MO" not in rl_environment_text
+
+
+def test_rl_frontier_docs_keep_initial_layout_generic():
     rl_lookahead_text = (
         ROOT / "src" / "rl_module" / "docs" / "lookahead_frontier.md"
     ).read_text(encoding="utf-8")
-    assert "productor del `initial_layout` es externo al módulo" in rl_lookahead_text
-    assert "MO -> RL pertenecerá a `src/integration/`" in rl_lookahead_text
+    assert (
+        "- El productor del `initial_layout` es externo al módulo; el handoff MO -> RL pertenecerá a `src/integration/`."
+        in rl_lookahead_text
+    )
 
+
+def test_integration_stub_declares_handoff_ownership():
+    integration_text = (ROOT / "src" / "integration" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"""Módulo 4: Integración y experimentación.' in integration_text
+    assert "Estado actual: stub." in integration_text
+    assert "__all__: list[str] = []" in integration_text
+
+
+def test_mo_module_has_no_direct_rl_imports():
     for mo_python_file in (ROOT / "src" / "mo_module").rglob("*.py"):
         mo_python_tree = ast.parse(mo_python_file.read_text(encoding="utf-8"))
         for node in ast.walk(mo_python_tree):
@@ -54,27 +96,3 @@ def test_docs_agents_exists_and_describes_four_modules():
                 elif node.level > 0:
                     for alias in node.names:
                         assert alias.name != "rl_module"
-
-
-def test_readme_architecture_reference_points_to_real_doc():
-    readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "[agents.md](docs/agents.md)" in readme_text
-    assert (ROOT / "docs" / "agents.md").exists()
-
-    qiskit_readme_text = (ROOT / "src" / "qiskit_interface" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    assert "helper de evaluación local" in qiskit_readme_text
-    assert "Función puente para el Módulo MO" not in qiskit_readme_text
-
-    rl_environment_text = (ROOT / "src" / "rl_module" / "environment.py").read_text(
-        encoding="utf-8"
-    )
-    assert "layout inicial externo" in rl_environment_text
-    assert "desde el Módulo MO" not in rl_environment_text
-
-    integration_text = (ROOT / "src" / "integration" / "__init__.py").read_text(
-        encoding="utf-8"
-    )
-    assert "único dueño del handoff MO -> RL" in integration_text
-    assert "stub" in integration_text.lower()
