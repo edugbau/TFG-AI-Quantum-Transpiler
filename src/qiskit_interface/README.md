@@ -77,7 +77,7 @@ Transpila un circuito individual con control total de parámetros.
     - `circuit`: Circuito cuántico.
     - `backend` / `backend_name`: Objetivo de hardware.
     - `optimization_level`: 0 (nada) a 3 (máximo).
-    - `initial_layout`: Lista opcional de qubits físicos (para inyectar layouts del módulo MO).
+    - `initial_layout`: Lista opcional de qubits físicos para evaluar layouts externos con un contrato común lógico -> físico.
     - `seed`: Semilla para reproducibilidad.
 - **Salida**: `TranspilationResult` con métricas pre/post transpilación, tiempos y reducción de profundidad.
 
@@ -86,7 +86,7 @@ Ejecuta transpilaciones masivas en varios backends y niveles de optimización.
 - **Uso**: Generar datos tabulados para comparar con el enfoque híbrido.
 
 #### `transpile_with_custom_layout(circuit, layout, ...)`
-Función puente para el Módulo MO. Fuerza al transpilador a usar un layout específico optimizado evolutivamente.
+helper de evaluación local para layouts suministrados externamente. Reutiliza el mismo contrato de `initial_layout` y el mismo pipeline de transpilación bajo las restricciones del backend.
 
 ---
 

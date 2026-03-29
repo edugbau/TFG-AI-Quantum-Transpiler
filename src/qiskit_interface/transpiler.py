@@ -5,8 +5,10 @@ transpiler.py — Transpilación estándar de Qiskit (baseline)
 Módulo 1 del TFG: Interfaz con Qiskit.
 
 Este fichero implementa la transpilación estándar de Qiskit como
-**línea base (baseline)** contra la que se comparará el enfoque
-híbrido MO+RL del TFG.
+**línea base (baseline)** y como helper de evaluación local de layouts suministrados por el llamador
+bajo las mismas restricciones de backend y transpilación.
+No implementa la integración MO -> RL, que se delega al módulo de
+orquestación en ``src/integration/``.
 
 Funcionalidades principales:
   - Transpilación estándar a los 4 niveles de optimización de Qiskit (0–3).
@@ -37,9 +39,9 @@ Decisiones de diseño:
      comparación directa.
 
   4. **Soporte de layout inicial** — Se permite pasar un ``initial_layout``
-     (lista de qubits físicos) para inyectar los layouts del módulo MO.
-     Esto es el puente entre la optimización multiobjetivo y la
-     transpilación.
+     (lista de qubits físicos) para evaluar layouts externos con el mismo
+     pipeline de transpilación. La orquestación entre módulos se delega a
+     ``src/integration/``.
 
   5. **Seed de transpilación** — Se propaga siempre una seed para
      garantizar la reproducibilidad de los resultados (esencial para
@@ -543,19 +545,20 @@ def transpile_with_custom_layout(
 ) -> TranspilationResult:
     """Transpila un circuito con un layout inicial específico.
 
-    Esta función es el **puente principal** entre el módulo MO y la
-    transpilación: el optimizador multiobjetivo genera layouts candidatos
-    y esta función los evalúa transpilando el circuito con cada layout
-    propuesto.
+    Esta función es un helper para la evaluación local de layouts
+    suministrados por el llamador bajo las restricciones del backend y
+    de la transpilación configurada. No implementa la integración MO -> RL;
+    la coordinación entre módulos se delega a ``src/integration/``.
 
     Decisión: se usa ``layout_method="trivial"`` cuando se proporciona
     un layout inicial para evitar que Qiskit lo sobreescriba con SABRE.
-    El layout ya fue optimizado por el módulo MO, así que queremos
-    preservarlo exactamente.
+    El contrato lógico -> físico de ``initial_layout`` se preserva para
+    evaluar exactamente el layout externo recibido.
 
     Args:
         circuit: Circuito a transpilar.
-        layout: Lista de qubits físicos.
+        layout: Lista de qubits físicos donde ``layout[i]`` indica el qubit
+            físico asignado al qubit lógico ``i``.
         backend: Backend a usar.
         backend_name: Nombre del backend.
         optimization_level: Nivel de optimización.
