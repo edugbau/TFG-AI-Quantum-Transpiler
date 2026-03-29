@@ -74,6 +74,7 @@ def test_integration_stub_declares_handoff_ownership():
         encoding="utf-8"
     )
     assert '"""Módulo 4: Integración y experimentación.' in integration_text
+    assert "único dueño del handoff MO -> RL" in integration_text
     assert "Estado actual: stub." in integration_text
     assert "__all__: list[str] = []" in integration_text
 
