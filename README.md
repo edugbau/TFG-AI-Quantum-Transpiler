@@ -37,10 +37,10 @@ src/
 ├── qiskit_interface/   # Módulo 1: Interfaz con Qiskit
 ├── rl_module/          # Módulo 2: Aprendizaje por Refuerzo
 ├── mo_module/          # Módulo 3: Optimización Multiobjetivo
-└── integration/        # Módulo 4: Pipeline híbrido y experimentación
+└── integration/        # Módulo 4: Orquestación MO->RL y experimentación (stub actual)
 ```
 
-Para más detalles sobre la arquitectura, ver [agents.md](docs/agents.md).
+Para más detalles sobre la arquitectura y los contratos entre módulos, ver [agents.md](docs/agents.md).
 
 ## Entorno Tecnológico
 
