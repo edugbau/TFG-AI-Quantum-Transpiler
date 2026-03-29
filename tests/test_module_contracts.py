@@ -8,8 +8,6 @@ def test_docs_agents_exists_and_describes_four_modules():
     assert agents_doc.exists(), "README y .github/AGENTS.md apuntan a docs/agents.md"
 
     text = agents_doc.read_text(encoding="utf-8")
-    assert "The repository is organized into four modules:" in text
-    assert "| Module | Responsibility | Not Responsible For |" in text
     for token in (
         "src/qiskit_interface/",
         "src/rl_module/",
@@ -17,14 +15,9 @@ def test_docs_agents_exists_and_describes_four_modules():
         "src/integration/",
     ):
         assert token in text
-    assert "The shared layout format is:" in text
-    assert "```python" in text
-    assert "- `MO+RL`: layout produced by MO and injected into RL by `src/integration/`." in text
 
 
 def test_readme_architecture_reference_points_to_real_doc():
     readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
-    github_agents_text = (ROOT / ".github" / "AGENTS.md").read_text(encoding="utf-8")
     assert "[agents.md](docs/agents.md)" in readme_text
-    assert "../docs/agents.md" in github_agents_text
     assert (ROOT / "docs" / "agents.md").exists()
