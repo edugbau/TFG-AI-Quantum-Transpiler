@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from queue import Empty, Queue
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent.par
 
 from src.mo_module.benchmark import DEFAULT_BENCHMARK_CIRCUITS, analyze_results
 from src.mo_module.benchmark.runner import BenchmarkRun, BenchmarkResultSet
+from src.mo_module.benchmark.tuning_gui_helpers import (
+    _format_ref_point_display,
+    _format_ref_point_mode_help,
+    _parse_manual_ref_point,
+    _resolve_ref_point_display,
+)
 from src.mo_module.optimizer import OptimizerConfig, optimize_layout
 from src.mo_module.tuning import LayoutTuner, HyperparameterSpace
 from src.qiskit_interface.backend_info import get_backend
@@ -57,13 +64,28 @@ def _run_baseline_one(bc_name, circuit, seed, backend, optimization_level):
         return bc_name, seed, {'depth': float(tm.depth), 'cnot_count': float(tm.cnot_equivalent)}
     except Exception:
         return bc_name, seed, {'depth': float('inf'), 'cnot_count': float('inf')}
-
 class BenchmarkGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # Benchmark State
+        self.is_running = False
+        self._last_results = None
+        self._last_report = None
+        self._last_baseline = None
+
+        # Tuning State
+        self.is_tuning = False
+        self._tuner = None
+        self._tuning_run_succeeded = False
+        self._active_manual_ref_point = None
+        self._tuning_event_queue = Queue()
+        self._tuning_poll_after_id = None
+        self._tuning_poll_shutdown = False
+
         self.title("Benchmark Multi-Objective Layout Optimizer")
         self.geometry("1400x900")
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         
         # Grid Layout (1 row, 1 column)
         self.grid_columnconfigure(0, weight=1)
@@ -83,16 +105,6 @@ class BenchmarkGUI(ctk.CTk):
 
         self._create_benchmark_ui()
         self._create_tuning_ui()
-        
-        # Benchmark State
-        self.is_running = False
-        self._last_results = None
-        self._last_report = None
-        self._last_baseline = None
-
-        # Tuning State
-        self.is_tuning = False
-        self._tuner = None
 
     def _create_benchmark_ui(self):
         self._create_sidebar(self.tab_benchmark)
@@ -237,40 +249,58 @@ class BenchmarkGUI(ctk.CTk):
         # Frame lateral (Configuración)
         self.t_sidebar = ctk.CTkFrame(self.tab_tuning, width=350, corner_radius=0)
         self.t_sidebar.grid(row=0, column=0, sticky="nsew")
-        self.t_sidebar.grid_rowconfigure(20, weight=1)
+        self.t_sidebar.grid_rowconfigure(0, weight=1)
+        self.t_sidebar.grid_columnconfigure(0, weight=1)
 
-        logo_label = ctk.CTkLabel(self.t_sidebar, text="Configuración Tuning", font=ctk.CTkFont(size=18, weight="bold"))
+        self.t_controls_frame = ctk.CTkScrollableFrame(
+            self.t_sidebar,
+            corner_radius=0,
+            fg_color="transparent",
+        )
+        self.t_controls_frame.grid(row=0, column=0, sticky="nsew")
+        self.t_controls_frame.grid_columnconfigure(0, weight=1)
+        self.t_controls_frame.grid_columnconfigure(1, weight=1)
+
+        self.t_actions_frame = ctk.CTkFrame(self.t_sidebar, fg_color="transparent")
+        self.t_actions_frame.grid(row=1, column=0, padx=12, pady=(8, 20), sticky="ew")
+        self.t_actions_frame.grid_columnconfigure(0, weight=1)
+
+        controls_parent = self.t_controls_frame
+
+        self.t_ref_point_mode = ctk.StringVar(value="calibrated")
+
+        logo_label = ctk.CTkLabel(controls_parent, text="Configuración Tuning", font=ctk.CTkFont(size=18, weight="bold"))
         logo_label.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 10))
 
         # Circuito (solo 1 para tuning)
-        ctk.CTkLabel(self.t_sidebar, text="Circuito:").grid(row=1, column=0, padx=10, sticky="w")
+        ctk.CTkLabel(controls_parent, text="Circuito:").grid(row=1, column=0, padx=10, sticky="w")
         circuit_names = [bc.name for bc in DEFAULT_BENCHMARK_CIRCUITS]
-        self.t_circuit = ctk.CTkOptionMenu(self.t_sidebar, values=circuit_names)
+        self.t_circuit = ctk.CTkOptionMenu(controls_parent, values=circuit_names)
         self.t_circuit.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
 
         # Backend
-        ctk.CTkLabel(self.t_sidebar, text="Backend:").grid(row=2, column=0, padx=10, sticky="w")
-        self.t_backend = ctk.CTkOptionMenu(self.t_sidebar, values=['fake_torino', 'fake_sherbrooke', 'fake_brisbane'])
+        ctk.CTkLabel(controls_parent, text="Backend:").grid(row=2, column=0, padx=10, sticky="w")
+        self.t_backend = ctk.CTkOptionMenu(controls_parent, values=['fake_torino', 'fake_sherbrooke', 'fake_brisbane'])
         self.t_backend.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
 
         # Trials
-        self.t_trials_label = ctk.CTkLabel(self.t_sidebar, text="Trials: 10")
+        self.t_trials_label = ctk.CTkLabel(controls_parent, text="Trials: 10")
         self.t_trials_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
-        self.t_trials_slider = ctk.CTkSlider(self.t_sidebar, from_=5, to=60, number_of_steps=55, command=lambda v: self.t_trials_label.configure(text=f"Trials: {int(v)}"))
+        self.t_trials_slider = ctk.CTkSlider(controls_parent, from_=5, to=60, number_of_steps=55, command=lambda v: self.t_trials_label.configure(text=f"Trials: {int(v)}"))
         self.t_trials_slider.set(10)
         self.t_trials_slider.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
 
         # Seeds/Trial
-        self.t_seeds_label = ctk.CTkLabel(self.t_sidebar, text="Seeds/Trial: 3")
+        self.t_seeds_label = ctk.CTkLabel(controls_parent, text="Seeds/Trial: 3")
         self.t_seeds_label.grid(row=5, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
-        self.t_seeds_slider = ctk.CTkSlider(self.t_sidebar, from_=1, to=10, number_of_steps=9, command=lambda v: self.t_seeds_label.configure(text=f"Seeds/Trial: {int(v)}"))
+        self.t_seeds_slider = ctk.CTkSlider(controls_parent, from_=1, to=10, number_of_steps=9, command=lambda v: self.t_seeds_label.configure(text=f"Seeds/Trial: {int(v)}"))
         self.t_seeds_slider.set(3)
         self.t_seeds_slider.grid(row=6, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
 
         # Rangos Pop & Gen
-        ctk.CTkLabel(self.t_sidebar, text="Rango Población:", font=ctk.CTkFont(weight="bold")).grid(row=7, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        ctk.CTkLabel(controls_parent, text="Rango Población:", font=ctk.CTkFont(weight="bold")).grid(row=7, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
         
-        frame_pop = ctk.CTkFrame(self.t_sidebar, fg_color="transparent")
+        frame_pop = ctk.CTkFrame(controls_parent, fg_color="transparent")
         frame_pop.grid(row=8, column=0, columnspan=2, sticky="ew", padx=10)
         ctk.CTkLabel(frame_pop, text="Min:").pack(side="left")
         self.t_pop_min = ctk.CTkEntry(frame_pop, width=50)
@@ -281,9 +311,9 @@ class BenchmarkGUI(ctk.CTk):
         self.t_pop_max.insert(0, "80")
         self.t_pop_max.pack(side="left", padx=(5, 0))
 
-        ctk.CTkLabel(self.t_sidebar, text="Rango Generaciones:", font=ctk.CTkFont(weight="bold")).grid(row=9, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        ctk.CTkLabel(controls_parent, text="Rango Generaciones:", font=ctk.CTkFont(weight="bold")).grid(row=9, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
         
-        frame_gen = ctk.CTkFrame(self.t_sidebar, fg_color="transparent")
+        frame_gen = ctk.CTkFrame(controls_parent, fg_color="transparent")
         frame_gen.grid(row=10, column=0, columnspan=2, sticky="ew", padx=10)
         ctk.CTkLabel(frame_gen, text="Min:").pack(side="left")
         self.t_gen_min = ctk.CTkEntry(frame_gen, width=50)
@@ -294,63 +324,111 @@ class BenchmarkGUI(ctk.CTk):
         self.t_gen_max.insert(0, "120")
         self.t_gen_max.pack(side="left", padx=(5, 0))
 
-        ctk.CTkLabel(self.t_sidebar, text="Categorías Mutación Swap:", font=ctk.CTkFont(weight="bold")).grid(row=11, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
-        self.t_swap_choices = ctk.CTkEntry(self.t_sidebar)
+        ctk.CTkLabel(controls_parent, text="Categorías Mutación Swap:", font=ctk.CTkFont(weight="bold")).grid(row=11, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        self.t_swap_choices = ctk.CTkEntry(controls_parent)
         self.t_swap_choices.insert(0, "0.1,0.3,0.5,0.7")
         self.t_swap_choices.grid(row=12, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
 
-        ctk.CTkLabel(self.t_sidebar, text="Categorías Mutación Replace:", font=ctk.CTkFont(weight="bold")).grid(row=13, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
-        self.t_replace_choices = ctk.CTkEntry(self.t_sidebar)
+        ctk.CTkLabel(controls_parent, text="Categorías Mutación Replace:", font=ctk.CTkFont(weight="bold")).grid(row=13, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        self.t_replace_choices = ctk.CTkEntry(controls_parent)
         self.t_replace_choices.insert(0, "0.1,0.3,0.5,0.7,0.9")
         self.t_replace_choices.grid(row=14, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
 
         # Checkboxes Objetivos
-        ctk.CTkLabel(self.t_sidebar, text="Objetivos:", font=ctk.CTkFont(weight="bold")).grid(row=15, column=0, columnspan=2, padx=10, pady=(15,0), sticky="w")
-        self.t_obj_depth = ctk.CTkCheckBox(self.t_sidebar, text="depth")
+        ctk.CTkLabel(controls_parent, text="Objetivos:", font=ctk.CTkFont(weight="bold")).grid(row=15, column=0, columnspan=2, padx=10, pady=(15,0), sticky="w")
+        self.t_obj_depth = ctk.CTkCheckBox(controls_parent, text="depth")
         self.t_obj_depth.grid(row=16, column=0, padx=20, sticky="w"); self.t_obj_depth.select()
-        self.t_obj_cnot = ctk.CTkCheckBox(self.t_sidebar, text="cnot_count")
+        self.t_obj_cnot = ctk.CTkCheckBox(controls_parent, text="cnot_count")
         self.t_obj_cnot.grid(row=17, column=0, padx=20, sticky="w"); self.t_obj_cnot.select()
 
         # Checkboxes Algoritmos
-        ctk.CTkLabel(self.t_sidebar, text="Algoritmos Space:", font=ctk.CTkFont(weight="bold")).grid(row=18, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
-        self.t_alg_nsga2 = ctk.CTkCheckBox(self.t_sidebar, text="nsga2")
+        ctk.CTkLabel(controls_parent, text="Algoritmos Space:", font=ctk.CTkFont(weight="bold")).grid(row=18, column=0, columnspan=2, padx=10, pady=(10,0), sticky="w")
+        self.t_alg_nsga2 = ctk.CTkCheckBox(controls_parent, text="nsga2")
         self.t_alg_nsga2.grid(row=19, column=0, padx=20, sticky="w"); self.t_alg_nsga2.select()
-        self.t_alg_moead = ctk.CTkCheckBox(self.t_sidebar, text="moead")
+        self.t_alg_moead = ctk.CTkCheckBox(controls_parent, text="moead")
         self.t_alg_moead.grid(row=20, column=0, padx=20, sticky="w")
 
         # Workers (Tuning)
         n_cpus = os.cpu_count() or 1
         default_workers = max(1, n_cpus // 2)
         max_workers = max(default_workers * 2, 8)
-        self.t_workers_label = ctk.CTkLabel(self.t_sidebar, text=f"Workers: {default_workers} (Max {max_workers})", anchor="w")
+        self.t_workers_label = ctk.CTkLabel(controls_parent, text=f"Workers: {default_workers} (Max {max_workers})", anchor="w")
         self.t_workers_label.grid(row=21, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
-        self.t_workers_slider = ctk.CTkSlider(self.t_sidebar, from_=1, to=max_workers, number_of_steps=max_workers-1, command=lambda v: self.t_workers_label.configure(text=f"Workers: {int(v)} (Max {int(max_workers)})"))
+        self.t_workers_slider = ctk.CTkSlider(controls_parent, from_=1, to=max_workers, number_of_steps=max_workers-1, command=lambda v: self.t_workers_label.configure(text=f"Workers: {int(v)} (Max {int(max_workers)})"))
         self.t_workers_slider.set(default_workers)
         self.t_workers_slider.grid(row=22, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
 
+        ctk.CTkLabel(controls_parent, text="Modo ref_point:", font=ctk.CTkFont(weight="bold")).grid(row=23, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
+        self.t_ref_point_mode_menu = ctk.CTkOptionMenu(
+            controls_parent,
+            values=["calibrated", "manual"],
+            variable=self.t_ref_point_mode,
+            command=self._on_ref_point_mode_change,
+        )
+        self.t_ref_point_mode_menu.grid(row=24, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+        self.t_warmup_help = ctk.CTkLabel(
+            controls_parent,
+            text=_format_ref_point_mode_help("calibrated"),
+            justify="left",
+            wraplength=300,
+            anchor="w",
+        )
+        self.t_warmup_help.grid(row=25, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+
+        ctk.CTkLabel(controls_parent, text="ref_point manual:", font=ctk.CTkFont(weight="bold")).grid(row=26, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="w")
+        self.t_manual_ref_point = ctk.CTkEntry(controls_parent, placeholder_text="Ej: 120.0, 240.0")
+        self.t_manual_ref_point.grid(row=27, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+        self.t_manual_ref_help = ctk.CTkLabel(
+            controls_parent,
+            text="Solo en modo manual: introduce 2 valores separados por comas para depth y cnot_count.",
+            justify="left",
+            wraplength=300,
+            anchor="w",
+        )
+        self.t_manual_ref_help.grid(row=28, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+
         # Config Output (ReadOnly)
-        self.t_best_config_btn = ctk.CTkButton(self.t_sidebar, text="Copiar a Benchmark", state="disabled", fg_color="green", command=self._copy_best_to_benchmark)
-        self.t_best_config_btn.grid(row=23, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+        self.t_best_config_btn = ctk.CTkButton(self.t_actions_frame, text="Copiar a Benchmark", state="disabled", fg_color="green", command=self._copy_best_to_benchmark)
+        self.t_best_config_btn.grid(row=0, column=0, padx=8, pady=(0, 8), sticky="ew")
 
         # Run Button
-        self.t_run_button = ctk.CTkButton(self.t_sidebar, text="▶ Iniciar Tuning Optuna", command=self.start_tuning)
-        self.t_run_button.grid(row=24, column=0, columnspan=2, padx=20, pady=20, sticky="ew")
+        self.t_run_button = ctk.CTkButton(self.t_actions_frame, text="▶ Iniciar Tuning Optuna", command=self.start_tuning)
+        self.t_run_button.grid(row=1, column=0, padx=8, pady=(0, 0), sticky="ew")
 
         # Main Frame Tuning
         self.t_main_frame = ctk.CTkFrame(self.tab_tuning)
         self.t_main_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
-        self.t_main_frame.grid_rowconfigure(2, weight=1)
+        self.t_main_frame.grid_rowconfigure(4, weight=1)
         self.t_main_frame.grid_columnconfigure(0, weight=1)
 
         self.t_progress_label = ctk.CTkLabel(self.t_main_frame, text="Esperando inicio...", font=ctk.CTkFont(weight="bold"))
         self.t_progress_label.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+
+        self.t_progress_bar = ctk.CTkProgressBar(self.t_main_frame)
+        self.t_progress_bar.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
+        self.t_progress_bar.set(0)
+
+        self.t_status_frame = ctk.CTkFrame(self.t_main_frame)
+        self.t_status_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
+        self.t_status_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        self.t_phase_value = ctk.CTkLabel(self.t_status_frame, text="Fase: idle", anchor="w")
+        self.t_phase_value.grid(row=0, column=0, padx=10, pady=8, sticky="w")
+        self.t_trial_value = ctk.CTkLabel(self.t_status_frame, text="Trial: 0/0", anchor="w")
+        self.t_trial_value.grid(row=0, column=1, padx=10, pady=8, sticky="w")
+        self.t_best_value = ctk.CTkLabel(self.t_status_frame, text="Best HV: -", anchor="w")
+        self.t_best_value.grid(row=0, column=2, padx=10, pady=8, sticky="w")
+        self.t_ref_value = ctk.CTkLabel(self.t_status_frame, text="Ref. point: calibrated pending", anchor="w")
+        self.t_ref_value.grid(row=0, column=3, padx=10, pady=8, sticky="w")
         
         self.t_terminal_text = ctk.CTkTextbox(self.t_main_frame, height=300, font=ctk.CTkFont(family="Consolas", size=12))
-        self.t_terminal_text.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.t_terminal_text.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
         self.t_terminal_text.configure(state="disabled")
 
         self.t_plot_frame = ctk.CTkFrame(self.t_main_frame)
-        self.t_plot_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+        self.t_plot_frame.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
+
+        self._sync_ref_point_controls(mode=self.t_ref_point_mode.get())
 
     def log(self, text):
         self.terminal_text.configure(state="normal")
@@ -363,10 +441,6 @@ class BenchmarkGUI(ctk.CTk):
         self.t_terminal_text.insert("end", text + "\n")
         self.t_terminal_text.see("end")
         self.t_terminal_text.configure(state="disabled")
-        self.terminal_text.configure(state="normal")
-        self.terminal_text.insert("end", text + "\n")
-        self.terminal_text.see("end")
-        self.terminal_text.configure(state="disabled")
 
     def _update_seeds_label(self, value):
         self.seeds_label.configure(text=f"Semillas: {int(value)}")
@@ -386,6 +460,250 @@ class BenchmarkGUI(ctk.CTk):
     def _update_workers_label(self, value):
         max_workers = self.workers_slider.cget("to")
         self.workers_label.configure(text=f"Workers: {int(value)} (Max {int(max_workers)})")
+
+    def _on_ref_point_mode_change(self, mode):
+        self._sync_ref_point_controls(mode=mode)
+
+    def _sync_ref_point_controls(self, mode=None):
+        mode = mode or self.t_ref_point_mode.get()
+        is_manual = mode == "manual"
+
+        if is_manual:
+            self.t_manual_ref_point.configure(state="normal")
+        else:
+            self.t_manual_ref_point.configure(state="disabled")
+
+        self.t_warmup_help.configure(text=_format_ref_point_mode_help(mode))
+        if not self.is_tuning:
+            self.t_ref_value.configure(text=f"Ref. point: {_format_ref_point_display(None, mode)}")
+
+    def _set_tuning_input_state(self, enabled):
+        state = "normal" if enabled else "disabled"
+        mode = self.t_ref_point_mode.get()
+
+        self.t_ref_point_mode_menu.configure(state=state)
+        self.t_manual_ref_point.configure(state=state if enabled and mode == "manual" else "disabled")
+
+    def _reset_tuning_status(self, ref_point_mode):
+        self.t_progress_bar.set(0)
+        self.t_progress_label.configure(text=f"Preparando tuning ({ref_point_mode})...")
+        self.t_phase_value.configure(text="Fase: preparando")
+        self.t_trial_value.configure(text="Trial: 0/0")
+        self.t_best_value.configure(text="Best HV: -")
+        self.t_ref_value.configure(
+            text=f"Ref. point: {_resolve_ref_point_display(ref_point_mode, manual_ref_point=self._active_manual_ref_point)}"
+        )
+
+    def _handle_tuner_progress_event(self, event):
+        BenchmarkGUI._enqueue_tuning_event(self, {"type": "progress", "payload": event})
+
+    def _enqueue_tuning_event(self, event):
+        self._tuning_event_queue.put(event)
+
+    def _start_tuning_event_polling(self):
+        if self._tuning_poll_shutdown:
+            return
+        if hasattr(self, "winfo_exists") and not self.winfo_exists():
+            self._tuning_poll_shutdown = True
+            return
+        if self._tuning_poll_after_id is None:
+            self._tuning_poll_after_id = self.after(50, self._poll_tuning_events)
+
+    def _stop_tuning_event_polling(self):
+        self._tuning_poll_shutdown = True
+        if self._tuning_poll_after_id is not None:
+            self.after_cancel(self._tuning_poll_after_id)
+            self._tuning_poll_after_id = None
+
+    def _poll_tuning_events(self):
+        self._tuning_poll_after_id = None
+
+        if self._tuning_poll_shutdown:
+            return
+        if hasattr(self, "winfo_exists") and not self.winfo_exists():
+            self._tuning_poll_shutdown = True
+            return
+
+        while True:
+            try:
+                event = self._tuning_event_queue.get_nowait()
+            except Empty:
+                break
+            BenchmarkGUI._process_tuning_event(self, event)
+
+        if self.is_tuning or not self._tuning_event_queue.empty():
+            BenchmarkGUI._start_tuning_event_polling(self)
+
+    def _process_tuning_event(self, event):
+        event_type = event.get("type")
+
+        if event_type == "progress":
+            BenchmarkGUI._apply_tuner_progress_event(self, event["payload"])
+            return
+
+        if event_type == "completed":
+            BenchmarkGUI._finalize_tuning_success(self, event)
+            return
+
+        if event_type == "error":
+            BenchmarkGUI._finalize_tuning_error(self, event)
+            return
+
+        self.t_log(f"Evento de tuning desconocido: {event_type}")
+
+    def _restore_tuning_ui(self, *, enable_copy_button):
+        self._set_tuning_input_state(enabled=True)
+        self.t_run_button.configure(state="normal")
+        self.t_best_config_btn.configure(state="normal" if enable_copy_button else "disabled")
+        self.is_tuning = False
+
+    def _finalize_tuning_success(self, event):
+        ref_point_mode = event["ref_point_mode"]
+        ref_point_display = _resolve_ref_point_display(
+            ref_point_mode,
+            ref_point=event.get("ref_point"),
+            manual_ref_point=self._active_manual_ref_point,
+        )
+        best_score = event.get("best_score")
+        total_trials = event.get("total_trials", 0)
+
+        self._tuning_run_succeeded = True
+        self.t_progress_bar.set(1)
+        self.t_progress_label.configure(text=f"Tuning completado ({ref_point_mode}).")
+        self.t_phase_value.configure(text="Fase: completado")
+        self.t_trial_value.configure(text=f"Trial: {total_trials}/{total_trials}")
+        if best_score is not None:
+            self.t_best_value.configure(text=f"Best HV: {best_score:.6f}")
+        self.t_ref_value.configure(text=f"Ref. point: {ref_point_display}")
+        self.t_log(f"\nTuning completado en {event['elapsed_s']:.1f} s\n")
+        self.t_log(event["summary"])
+        self.t_log(f"\nMejor configuracion:\n{event['best_config']}")
+        self.t_log(f"Ref. point final usado: {ref_point_display}")
+        BenchmarkGUI._restore_tuning_ui(
+            self,
+            enable_copy_button=event.get("can_copy_best_config", False),
+        )
+
+        if self._tuner is not None:
+            self._render_tuning_plots()
+
+    def _finalize_tuning_error(self, event):
+        ref_point_mode = event["ref_point_mode"]
+        self._tuning_run_succeeded = False
+        self.t_log(f"\nError durante el tuning: {event['message']}")
+        self.t_progress_bar.set(0)
+        self.t_progress_label.configure(text="Tuning interrumpido por error.")
+        self.t_phase_value.configure(text="Fase: error")
+        self.t_trial_value.configure(text="Trial: 0/0")
+        self.t_best_value.configure(text="Best HV: -")
+        self.t_ref_value.configure(
+            text=(
+                f"Ref. point: {_resolve_ref_point_display(ref_point_mode, manual_ref_point=self._active_manual_ref_point)}"
+            )
+        )
+        BenchmarkGUI._restore_tuning_ui(self, enable_copy_button=False)
+
+    def _on_close(self):
+        """Cierre limpio: cancela callbacks pendientes y sale del mainloop.
+
+        Al llamar quit() en lugar de destroy() directamente, el mainloop de Tk
+        termina de forma ordenada antes de que se destruya el intérprete. Esto
+        evita los errores "invalid command name" que ocurren cuando callbacks
+        de after() ya encolados (check_dpi_scaling, AppearanceModeTracker.update)
+        intentan ejecutarse sobre widgets ya destruidos.
+        destroy() se llama desde fuera del mainloop, en el punto de entrada __main__.
+        """
+        self._stop_tuning_event_polling()
+        self.quit()
+
+    def destroy(self):
+        # Llamado desde fuera del mainloop (tras quit()) o directamente en tests.
+        BenchmarkGUI._stop_tuning_event_polling(self)
+        super().destroy()
+
+    def _apply_tuner_progress_event(self, event):
+        event_name = event.get("event")
+        ref_point_mode = event.get("ref_point_mode", self.t_ref_point_mode.get())
+        ref_point_display = _resolve_ref_point_display(
+            ref_point_mode,
+            ref_point=event.get("ref_point") or event.get("ref_point_candidate"),
+            manual_ref_point=self._active_manual_ref_point,
+        )
+
+        if event_name == "calibration_started":
+            count = event.get("calibration_config_count", 0)
+            self.t_progress_label.configure(text="Modo calibrado: ejecutando warm-up para fijar el ref_point...")
+            self.t_phase_value.configure(text="Fase: warm-up")
+            self.t_ref_value.configure(text=f"Ref. point: {ref_point_display}")
+            self.t_progress_bar.set(0.05)
+            self.t_log(f"[Warm-up] Modo calibrado activo: iniciando calibracion automatica ({count} configuraciones de referencia).")
+            return
+
+        if event_name == "calibration_progress":
+            current = event.get("current_step", event.get("current", 0))
+            total = max(event.get("total_steps", event.get("total", 1)), 1)
+            config = event.get("config", {})
+            progress = current / total
+            self.t_progress_label.configure(text=f"Warm-up {current}/{total} completado ({ref_point_mode}).")
+            self.t_phase_value.configure(text="Fase: warm-up")
+            self.t_trial_value.configure(text=f"Warm-up: {current}/{total}")
+            self.t_ref_value.configure(text=f"Ref. point: {ref_point_display}")
+            self.t_progress_bar.set(0.1 * progress if ref_point_mode == "calibrated" else progress)
+            self.t_log(
+                f"[Warm-up {current}/{total}] algo={config.get('algorithm', '?')} "
+                f"pop={config.get('population_size', '?')} gen={config.get('n_generations', '?')} "
+                f"| ref={ref_point_display}"
+            )
+            return
+
+        if event_name == "calibration_completed":
+            self.t_progress_label.configure(text="Warm-up completado. Ref_point calibrado; lanzando trials...")
+            self.t_phase_value.configure(text="Fase: tuning")
+            self.t_ref_value.configure(text=f"Ref. point: {ref_point_display}")
+            self.t_progress_bar.set(0.1)
+            self.t_log(f"[Warm-up] Ref. point calibrado fijado automaticamente: {ref_point_display}")
+            return
+
+        if event_name == "trial_completed":
+            completed = event.get("completed_trials", 0)
+            total = max(event.get("total_trials", 1), 1)
+            score = event.get("score")
+            best_score = event.get("best_score")
+            params = event.get("params", {})
+
+            progress = completed / total
+            if ref_point_mode == "calibrated":
+                progress = 0.1 + 0.9 * progress
+            self.t_progress_bar.set(progress)
+
+            self.t_progress_label.configure(text=f"Trial {completed}/{total} completado ({ref_point_mode}).")
+            self.t_phase_value.configure(text="Fase: tuning")
+            self.t_trial_value.configure(text=f"Trial: {completed}/{total}")
+            if best_score is not None:
+                self.t_best_value.configure(text=f"Best HV: {best_score:.6f}")
+            self.t_ref_value.configure(text=f"Ref. point: {ref_point_display}")
+
+            algorithm = params.get("algorithm", "?")
+            pop_size = params.get("population_size", "?")
+            generations = params.get("n_generations", "?")
+            self.t_log(
+                f"[Trial {completed}/{total}] HV={score:.6f} | best={best_score:.6f} | "
+                f"algo={algorithm} pop={pop_size} gen={generations} | ref={ref_point_display}"
+            )
+            return
+
+        if event_name == "tuning_completed":
+            total = int(event.get("total_trials", self.t_trials_slider.get()))
+            best_score = event.get("best_score")
+            self._tuning_run_succeeded = True
+            self.t_progress_bar.set(1)
+            self.t_progress_label.configure(text=f"Tuning completado ({ref_point_mode}).")
+            self.t_phase_value.configure(text="Fase: completado")
+            self.t_trial_value.configure(text=f"Trial: {total}/{total}")
+            if best_score is not None:
+                self.t_best_value.configure(text=f"Best HV: {best_score:.6f}")
+            self.t_ref_value.configure(text=f"Ref. point: {ref_point_display}")
+            self.t_log(f"[Completado] Mejor HV={best_score:.6f} | ref={ref_point_display}")
 
     def start_benchmark(self):
         if self.is_running:
@@ -601,12 +919,33 @@ class BenchmarkGUI(ctk.CTk):
             self.t_log("⚠ Selecciona al menos un objetivo y un algoritmo.")
             return
 
+        ref_point_mode = self.t_ref_point_mode.get()
+        manual_ref_point = None
+        if ref_point_mode == "manual":
+            try:
+                manual_ref_point = _parse_manual_ref_point(
+                    self.t_manual_ref_point.get(),
+                    expected_dims=len(objs),
+                )
+            except ValueError as exc:
+                self.t_log(f"⚠ Error: {exc}")
+                return
+
+        self._tuner = None
+        self._tuning_run_succeeded = False
+        self._active_manual_ref_point = manual_ref_point
         self.is_tuning = True
         self.t_run_button.configure(state="disabled")
         self.t_best_config_btn.configure(state="disabled")
+        self._set_tuning_input_state(enabled=False)
         self.t_terminal_text.configure(state="normal")
         self.t_terminal_text.delete("1.0", "end")
         self.t_terminal_text.configure(state="disabled")
+        self._reset_tuning_status(ref_point_mode=ref_point_mode)
+        self._tuning_event_queue = Queue()
+        self._tuning_poll_after_id = None
+        self._tuning_poll_shutdown = False
+        BenchmarkGUI._start_tuning_event_polling(self)
 
         for widget in self.t_plot_frame.winfo_children():
             widget.destroy()
@@ -617,6 +956,12 @@ class BenchmarkGUI(ctk.CTk):
         self.t_log(f'Pop Rango: [{pmin}, {pmax}] | Gen Rango: [{gmin}, {gmax}]')
         self.t_log(f'Categorías swap: {list(swap_choices)} | Categorías replace: {list(replace_choices)}')
         self.t_log(f'Objetivos: {objs} | Algoritmos: {algs}')
+        if ref_point_mode == "manual":
+            self.t_log(f"Ref. point manual: {_format_ref_point_display(manual_ref_point, ref_point_mode)}")
+            self.t_log("Warm-up: omitido (modo manual)")
+        else:
+            self.t_log("Modo calibrado: el warm-up se ejecuta automaticamente para fijar el ref_point")
+            self.t_log("Ref. point calibrado: pendiente de warm-up automatico")
         self.t_log('=' * 60)
 
         threading.Thread(
@@ -635,6 +980,8 @@ class BenchmarkGUI(ctk.CTk):
                 replace_choices,
                 objs,
                 algs,
+                ref_point_mode,
+                manual_ref_point,
             ),
             daemon=True,
         ).start()
@@ -654,8 +1001,9 @@ class BenchmarkGUI(ctk.CTk):
         replace_choices,
         objs,
         algs,
+        ref_point_mode,
+        manual_ref_point,
     ):
-        self.after(0, lambda: self.t_progress_label.configure(text="Ejecutando Optuna (ver salida en consola del script original)..."))
         t0 = time.perf_counter()
 
         try:
@@ -679,72 +1027,67 @@ class BenchmarkGUI(ctk.CTk):
                 n_jobs=w,
                 space=space,
                 objectives=objs,
-                study_name=f'tuning_{c_name}_{b_name}',
+                study_name=f"tuning_{c_name}_{b_name}",
+                ref_point_mode=ref_point_mode,
+                ref_point=manual_ref_point,
+                progress_callback=self._handle_tuner_progress_event,
             )
 
-            # Para capturar logs, redirigimos stdout temporalmente
-            import io, sys
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-
-            self._tuner.tune(show_progress_bar=False) # Progreso en GUI es complejo con optuna bar
-            
-            output = sys.stdout.getvalue()
-            sys.stdout = old_stdout
-            
-            # Print logs if available
-            if output:
-                 self.after(0, self.t_log, output)
+            self._tuner.tune(show_progress_bar=False)
 
             t_t = time.perf_counter() - t0
-            self.after(0, self.t_log, f'\\n✓ Tuning completado en {t_t:.1f} s\\n')
-            
-            summary = self._tuner.summary()
-            self.after(0, self.t_log, summary)
-            
-            best = self._tuner.best_config()
-            self.after(0, self.t_log, f'\\nMejor configuración:\\n{best}')
-
-            # Plots
-            self.after(0, self._render_tuning_plots)
+            BenchmarkGUI._enqueue_tuning_event(
+                self,
+                {
+                    "type": "completed",
+                    "elapsed_s": t_t,
+                    "summary": self._tuner.summary(),
+                    "best_config": self._tuner.best_config(),
+                    "best_score": getattr(getattr(self._tuner, "study", None), "best_value", None),
+                    "total_trials": t,
+                    "ref_point_mode": self._tuner.ref_point_mode,
+                    "ref_point": self._tuner.session_ref_point,
+                    "can_copy_best_config": bool(getattr(self._tuner, "_best_config", None)),
+                },
+            )
 
         except Exception as e:
-            self.after(0, self.t_log, f'\\n⚠ Error durante el tuning: {str(e)}')
-
-        finally:
-            self.after(0, lambda: self.t_progress_label.configure(text="Completado."))
-            self.after(0, lambda: self.t_run_button.configure(state="normal"))
-            if self._tuner and getattr(self._tuner, "_best_config", None):
-                self.after(0, lambda: self.t_best_config_btn.configure(state="normal"))
-            self.is_tuning = False
+            BenchmarkGUI._enqueue_tuning_event(
+                self,
+                {
+                    "type": "error",
+                    "message": str(e),
+                    "ref_point_mode": ref_point_mode,
+                },
+            )
 
     def _render_tuning_plots(self):
         try:
-            import optuna.visualization as vis
-            study = self._tuner.study
-            
-            # optuna plots output a plotly Figure. We need to save it to an image, then put in matplotlib
-            import plotly.io as pio
-            
-            # This requires kaleido or orca. Let's do a simple workaround without saving images if possible,
-            # Or use matplotlib directly for study visualization
             from optuna.visualization.matplotlib import plot_optimization_history
             import matplotlib.pyplot as plt
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-            fig, ax = plt.subplots(figsize=(6, 4))
-            plot_optimization_history(study, ax=ax)
+            study = self._tuner.study
+            # plot_optimization_history crea su propio subplot y devuelve el Axes
+            ax = plot_optimization_history(study)
+            fig = ax.get_figure()
             fig.tight_layout()
 
             canvas = FigureCanvasTkAgg(fig, master=self.t_plot_frame)
             canvas.draw()
             canvas.get_tk_widget().pack(fill="both", expand=True)
+            plt.close(fig)  # liberar la figura de pyplot; el canvas ya la tiene renderizada
 
         except Exception as e:
-            self.t_log(f"No se pudieron generar las gráficas: {str(e)}\n(Puede que falte plotly/kaleido para exports, o sea versión de matplotlib antigua)")
+            self.t_log(
+                f"No se pudieron generar las gráficas: {e}\n"
+                f"(Requiere optuna con backend matplotlib: pip install optuna matplotlib)"
+            )
 
     def _copy_best_to_benchmark(self):
         try:
+            if not self._tuning_run_succeeded or self._tuner is None:
+                raise RuntimeError("No hay un resultado de tuning valido en la sesion actual.")
             best = self._tuner.best_config()
             self.pop_slider.set(best.population_size)
             self.gens_slider.set(best.n_generations)
@@ -809,6 +1152,7 @@ class BenchmarkGUI(ctk.CTk):
         canvas = FigureCanvasTkAgg(fig, master=parent_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="x", expand=False, pady=(0, 20))
+        plt.close(fig)
 
     def _render_boxplots(self, parent_frame):
         circuit_names = self._last_results.circuit_names
@@ -871,7 +1215,12 @@ class BenchmarkGUI(ctk.CTk):
         canvas = FigureCanvasTkAgg(fig, master=parent_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+        plt.close(fig)
 
 if __name__ == "__main__":
     app = BenchmarkGUI()
-    app.mainloop()
+    app.mainloop()   # returns when _on_close() calls quit()
+    try:
+        app.destroy()
+    except Exception:
+        pass

@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -71,6 +71,9 @@ from .optimizer import (
 from ..qiskit_interface.backend_info import get_backend
 
 logger = logging.getLogger(__name__)
+
+_SUPPORTED_CROSSOVER_OPERATORS = {"dpx", "ox"}
+_SUPPORTED_ALGORITHMS = {"nsga2", "moead"}
 
 
 # ===========================================================================
@@ -123,18 +126,43 @@ class HyperparameterSpace:
     optimization_level: int = 1
 
     def __post_init__(self):
-        """Valida que las categorías de mutación estén definidas."""
+        """Valida el espacio de búsqueda."""
+        if len(self.population_size_range) != 2:
+            raise ValueError("population_size_range debe tener exactamente dos valores.")
+        if self.population_size_range[0] > self.population_size_range[1]:
+            raise ValueError("population_size_range debe estar ordenado como (min, max).")
+        if self.population_size_range[0] < 4:
+            raise ValueError("population_size_range debe empezar en un valor >= 4.")
+
+        if len(self.n_generations_range) != 2:
+            raise ValueError("n_generations_range debe tener exactamente dos valores.")
+        if self.n_generations_range[0] > self.n_generations_range[1]:
+            raise ValueError("n_generations_range debe estar ordenado como (min, max).")
+        if self.n_generations_range[0] < 1:
+            raise ValueError("n_generations_range debe empezar en un valor >= 1.")
+
         if not self.prob_swap_mutation_choices:
             raise ValueError("prob_swap_mutation_choices no puede estar vacío.")
         if not self.prob_replace_mutation_choices:
             raise ValueError("prob_replace_mutation_choices no puede estar vacío.")
+        if not self.crossover_operators:
+            raise ValueError("crossover_operators no puede estar vacío.")
+        if not set(self.crossover_operators).issubset(_SUPPORTED_CROSSOVER_OPERATORS):
+            raise ValueError("crossover_operators contiene valores no soportados.")
+        if not self.algorithms:
+            raise ValueError("algorithms no puede estar vacío.")
+        if not set(self.algorithms).issubset(_SUPPORTED_ALGORITHMS):
+            raise ValueError("algorithms contiene valores no soportados.")
 
 
 # ===========================================================================
 #  Función de evaluación: calidad del frente de Pareto
 # ===========================================================================
 
-def _compute_hypervolume_score(opt_result: OptimizationResult) -> float:
+def _compute_hypervolume_score(
+    opt_result: OptimizationResult,
+    ref_point: Optional[Sequence[float]] = None,
+) -> float:
     """Calcula el hipervolumen del frente de Pareto como métrica de calidad.
 
     El **hipervolumen** (HV) mide el volumen del espacio objetivo dominado
@@ -151,8 +179,8 @@ def _compute_hypervolume_score(opt_result: OptimizationResult) -> float:
         opt_result: Resultado de una ejecución de ``optimize_layout()``.
 
     Returns:
-        Hipervolumen calculado. Devuelve 0.0 si no hay soluciones o si el
-        cálculo falla.
+        Hipervolumen calculado. Devuelve 0.0 si no hay soluciones, si el
+        ref_point es violado por el frente de Pareto, o si el cálculo falla.
     """
     if opt_result.pareto_fitness is None or len(opt_result.pareto_fitness) == 0:
         return 0.0
@@ -160,16 +188,35 @@ def _compute_hypervolume_score(opt_result: OptimizationResult) -> float:
     try:
         from pymoo.indicators.hv import HV
 
-        F = opt_result.pareto_fitness  # shape: (n_solutions, n_objectives)
+        F = np.asarray(opt_result.pareto_fitness, dtype=float)  # shape: (n_solutions, n_objectives)
 
-        # Punto de referencia: nadir del frente con un margen del 10 %
-        # (mayor que el peor valor en cada objetivo → el HV es siempre > 0)
-        ref_point = F.max(axis=0) * 1.1 + 1e-6
+        if ref_point is None:
+            # Punto de referencia: nadir del frente con un margen del 10 %
+            # (mayor que el peor valor en cada objetivo → el HV es siempre > 0)
+            hv_ref_point = F.max(axis=0) * 1.1 + 1e-6
+        else:
+            hv_ref_point = np.asarray(ref_point, dtype=float)
+            if hv_ref_point.shape != (F.shape[1],):
+                raise ValueError("ref_point debe tener una coordenada por objetivo.")
+            if not np.all(np.isfinite(hv_ref_point)):
+                raise ValueError("ref_point debe contener valores finitos.")
+            if not np.all(hv_ref_point > F.max(axis=0)):
+                # El frente de este trial excede el ref_point calibrado.
+                # Devolvemos 0.0 (peor HV posible) en lugar de crashear el estudio.
+                # Optuna aprenderá a evitar estas regiones del espacio de búsqueda.
+                logger.warning(
+                    "ref_point violado: front_max=%s ref_point=%s — trial penalizado con HV=0.0",
+                    F.max(axis=0).tolist(),
+                    hv_ref_point.tolist(),
+                )
+                return 0.0
 
-        ind = HV(ref_point=ref_point)
+        ind = HV(ref_point=hv_ref_point)
         hv = float(ind(F))
         return hv
 
+    except ValueError:
+        raise
     except Exception as exc:
         logger.warning("Error calculando hipervolumen: %s", exc)
         return 0.0
@@ -179,7 +226,8 @@ def _evaluate_single_seed(
     config: OptimizerConfig,
     circuit: QuantumCircuit,
     backend,
-    seed: int
+    seed: int,
+    ref_point: Optional[Sequence[float]] = None,
 ) -> tuple[int, float]:
     """Evalúa una configuración para una semilla específica."""
     try:
@@ -196,8 +244,10 @@ def _evaluate_single_seed(
             verbose=False,
         )
         result = optimize_layout(circuit, backend=backend, config=trial_config)
-        hv = _compute_hypervolume_score(result)
+        hv = _compute_hypervolume_score(result, ref_point=ref_point)
         return seed, hv
+    except ValueError:
+        raise
     except Exception as exc:
         logger.warning("Evaluación fallida para seed=%d: %s", seed, exc)
         return seed, 0.0
@@ -207,7 +257,8 @@ def _evaluate_config(
     circuit: QuantumCircuit,
     backend,
     seeds: Sequence[int],
-    n_jobs: int = 1
+    n_jobs: int = 1,
+    ref_point: Optional[Sequence[float]] = None,
 ) -> float:
     """Evalúa una configuración ejecutando optimize_layout con múltiples seeds.
 
@@ -230,13 +281,23 @@ def _evaluate_config(
 
     if n_jobs == 1:
         for seed in seeds:
-            _, hv = _evaluate_single_seed(config, circuit, backend, seed)
+            _, hv = _evaluate_single_seed(config, circuit, backend, seed, ref_point=ref_point)
             scores.append(hv)
             logger.debug("seed=%d → HV=%.6f", seed, hv)
     else:
         from concurrent.futures import ProcessPoolExecutor, as_completed
         with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            futs = [executor.submit(_evaluate_single_seed, config, circuit, backend, seed) for seed in seeds]
+            futs = [
+                executor.submit(
+                    _evaluate_single_seed,
+                    config,
+                    circuit,
+                    backend,
+                    seed,
+                    ref_point,
+                )
+                for seed in seeds
+            ]
             for fut in as_completed(futs):
                 seed, hv = fut.result()
                 scores.append(hv)
@@ -327,6 +388,9 @@ class LayoutTuner:
         space: Optional[HyperparameterSpace] = None,
         objectives: Optional[list[str]] = None,
         study_name: str = "layout_hyperparameter_tuning",
+        ref_point_mode: str = "calibrated",
+        ref_point: Optional[Sequence[float]] = None,
+        progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         """
         Args:
@@ -351,21 +415,67 @@ class LayoutTuner:
                 ``["depth", "cnot_count"]``.
             study_name:
                 Nombre del estudio Optuna. Útil para almacenamiento.
+            ref_point_mode:
+                Estrategia del punto de referencia del hipervolumen para toda
+                la sesión. ``"manual"`` exige ``ref_point`` explícito y omite
+                la calibración. ``"calibrated"`` construye un único
+                ``session_ref_point`` conservador antes de lanzar los trials.
+            ref_point:
+                Punto de referencia fijo del hipervolumen cuando
+                ``ref_point_mode="manual"``. Debe tener una coordenada por
+                objetivo. En modo calibrado se rechaza para evitar ambigüedad.
+            progress_callback:
+                Callback opcional que recibe eventos estructurados ``dict``.
+                Eventos actuales: ``calibration_started``,
+                ``calibration_progress``, ``calibration_completed``,
+                ``trial_completed`` y ``tuning_completed``. Incluyen
+                metadatos pensados para GUI, como modo/punto de referencia,
+                recuentos de progreso y métricas. En particular,
+                ``calibration_progress`` emite ``current_step`` y ``total_steps``
+                junto con la ``config`` evaluada y el
+                ``ref_point_candidate`` acumulado hasta ese paso.
         """
         if backend is None:
             backend = get_backend(backend_name)
 
         self.circuit = circuit
         self.backend = backend
+        if n_trials < 1:
+            raise ValueError("n_trials debe ser >= 1.")
+        if n_seeds < 1:
+            raise ValueError("n_seeds debe ser >= 1.")
+        if n_jobs < 1:
+            raise ValueError("n_jobs debe ser >= 1.")
+
+        if ref_point_mode not in ("calibrated", "manual"):
+            raise ValueError("ref_point_mode debe ser 'calibrated' o 'manual'.")
+
         self.n_trials = n_trials
         self.n_seeds = n_seeds
         self.n_jobs = n_jobs
         self.space = space or HyperparameterSpace()
         self.objectives = objectives or ["depth", "cnot_count"]
         self.study_name = study_name
+        self.ref_point_mode = ref_point_mode
+        self.progress_callback = progress_callback
 
         self._study = None          # Estudio Optuna (None hasta tune())
         self._best_config: Optional[OptimizerConfig] = None
+        self._best_score: Optional[float] = None
+        self._manual_ref_point = self._validate_manual_ref_point(ref_point)
+        self._session_ref_point: Optional[np.ndarray] = None
+
+    @property
+    def session_ref_point(self) -> Optional[np.ndarray]:
+        """Devuelve el punto de referencia fijo de la sesión, si existe.
+
+        Este valor queda congelado antes de evaluar los trials Optuna. En modo
+        manual coincide con ``ref_point``; en modo calibrado se deriva a partir
+        de varias configuraciones conservadoras del espacio de búsqueda.
+        """
+        if self._session_ref_point is None:
+            return None
+        return self._session_ref_point.copy()
 
     # -----------------------------------------------------------------------
     #  API pública
@@ -405,6 +515,11 @@ class LayoutTuner:
             getattr(self.backend, "name", "unknown"),
         )
 
+        self._study = None
+        self._best_config = None
+        self._best_score = None
+        self._session_ref_point = None
+
         self._study = optuna.create_study(
             direction="maximize",   # maximizar hipervolumen
             study_name=self.study_name,
@@ -413,9 +528,35 @@ class LayoutTuner:
 
         seeds = list(range(self.n_seeds))
 
+        if self.ref_point_mode == "manual":
+            self._session_ref_point = self._manual_ref_point.copy()
+        else:
+            calibration_configs = self._build_calibration_configs(seeds)
+            self._emit_progress(
+                "calibration_started",
+                ref_point_mode=self.ref_point_mode,
+                n_seeds=self.n_seeds,
+                calibration_config_count=len(calibration_configs),
+            )
+            self._session_ref_point = self._calibrate_reference_point(calibration_configs)
+            self._emit_progress(
+                "calibration_completed",
+                ref_point_mode=self.ref_point_mode,
+                ref_point=self._session_ref_point,
+                calibration_config_count=len(calibration_configs),
+            )
+
         def objective(trial: "optuna.Trial") -> float:
             config = self._suggest_config(trial)
-            score = _evaluate_config(config, self.circuit, self.backend, seeds, self.n_jobs)
+            score = _evaluate_config(
+                config,
+                self.circuit,
+                self.backend,
+                seeds,
+                self.n_jobs,
+                ref_point=self._session_ref_point,
+            )
+            self._best_score = score if self._best_score is None else max(self._best_score, score)
             logger.info(
                 "Trial %d/%d: pop=%d, gen=%d, cx=%s, swap=%s, rep=%s -> HV=%.6f",
                 trial.number + 1, self.n_trials,
@@ -423,6 +564,24 @@ class LayoutTuner:
                 config.crossover_operator,
                 config.prob_swap_mutation, config.prob_replace_mutation,
                 score,
+            )
+            self._emit_progress(
+                "trial_completed",
+                trial_number=trial.number + 1,
+                completed_trials=trial.number + 1,
+                total_trials=self.n_trials,
+                score=score,
+                best_score=self._best_score,
+                ref_point=self._session_ref_point,
+                ref_point_mode=self.ref_point_mode,
+                params={
+                    "algorithm": config.algorithm,
+                    "population_size": config.population_size,
+                    "n_generations": config.n_generations,
+                    "crossover_operator": config.crossover_operator,
+                    "prob_swap_mutation": config.prob_swap_mutation,
+                    "prob_replace_mutation": config.prob_replace_mutation,
+                },
             )
             return score
 
@@ -439,6 +598,14 @@ class LayoutTuner:
             "Tuning completado. Mejor HV=%.6f con config: %s",
             self._study.best_value,
             self._best_config,
+        )
+
+        self._emit_progress(
+            "tuning_completed",
+            total_trials=self.n_trials,
+            best_score=self._study.best_value,
+            ref_point=self._session_ref_point,
+            ref_point_mode=self.ref_point_mode,
         )
 
         return self
@@ -479,6 +646,8 @@ class LayoutTuner:
             f"  Backend:       {getattr(self.backend, 'name', 'unknown')}",
             f"  Trials:        {len(self._study.trials)} / {self.n_trials}",
             f"  Seeds/trial:   {self.n_seeds}",
+            f"  Ref. mode:     {self.ref_point_mode}",
+            f"  Ref. point:    {self._format_ref_point(self._session_ref_point)}",
             f"  Mejor HV:      {self._study.best_value:.6f}",
             "",
             "  --- Mejores hiperparámetros ---",
@@ -588,3 +757,233 @@ class LayoutTuner:
             prob_replace_mutation=p["prob_replace_mutation"],
             verbose=True,
         )
+
+    def _validate_manual_ref_point(
+        self,
+        ref_point: Optional[Sequence[float]],
+    ) -> Optional[np.ndarray]:
+        """Valida el punto de referencia manual si el modo lo requiere."""
+        if self.ref_point_mode == "manual":
+            if ref_point is None:
+                raise ValueError("ref_point es obligatorio cuando ref_point_mode='manual'.")
+            validated = np.asarray(ref_point, dtype=float)
+            if validated.shape != (len(self.objectives),):
+                raise ValueError("ref_point debe tener una coordenada por objetivo.")
+            if not np.all(np.isfinite(validated)):
+                raise ValueError("ref_point debe contener valores finitos.")
+            return validated
+
+        if ref_point is not None:
+            raise ValueError(
+                "ref_point no se puede proporcionar cuando ref_point_mode='calibrated'."
+            )
+
+        return None
+
+    def _build_calibration_configs(
+        self,
+        seeds: Sequence[int],
+    ) -> list[OptimizerConfig]:
+        """Construye configuraciones conservadoras para calibrar el ref_point.
+
+        La calibración usa un warm-up corto y determinista con anclas
+        low / mid / high, cobertura corta de algoritmos configurados.
+        Se itera sobre todas las seeds para producir hasta n_seeds × 3
+        configuraciones únicas (con deduplicación por firma).
+        """
+        space = self.space
+        anchor_specs = [
+            (space.population_size_range[0], space.n_generations_range[0]),
+            (
+                (space.population_size_range[0] + space.population_size_range[1]) // 2,
+                (space.n_generations_range[0] + space.n_generations_range[1]) // 2,
+            ),
+            (space.population_size_range[1], space.n_generations_range[1]),
+        ]
+
+        configs: list[OptimizerConfig] = []
+        seen_signatures: set[tuple[Any, ...]] = set()
+        if len(space.algorithms) == 1:
+            anchor_params: list[tuple[str, str, float, float]] = [
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[0],
+                    space.prob_swap_mutation_choices[0],
+                    space.prob_replace_mutation_choices[0],
+                ),
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[-1],
+                    space.prob_swap_mutation_choices[len(space.prob_swap_mutation_choices) // 2],
+                    space.prob_replace_mutation_choices[len(space.prob_replace_mutation_choices) // 2],
+                ),
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[-1],
+                    space.prob_swap_mutation_choices[-1],
+                    space.prob_replace_mutation_choices[-1],
+                ),
+            ]
+        else:
+            anchor_params = [
+                (
+                    space.algorithms[0],
+                    space.crossover_operators[0],
+                    space.prob_swap_mutation_choices[0],
+                    space.prob_replace_mutation_choices[0],
+                ),
+                (
+                    space.algorithms[-1],
+                    space.crossover_operators[0],
+                    space.prob_swap_mutation_choices[0],
+                    space.prob_replace_mutation_choices[0],
+                ),
+                (
+                    space.algorithms[-1],
+                    space.crossover_operators[-1],
+                    space.prob_swap_mutation_choices[-1],
+                    space.prob_replace_mutation_choices[-1],
+                ),
+            ]
+
+        for seed in (seeds if seeds else [0]):
+            for (population_size, n_generations), (
+                algorithm,
+                crossover_operator,
+                prob_swap,
+                prob_replace,
+            ) in zip(
+                anchor_specs,
+                anchor_params,
+            ):
+                effective_population_size = min(
+                    population_size,
+                    self.DEFAULT_EVAL_POPULATION,
+                )
+                effective_n_generations = min(
+                    n_generations,
+                    self.DEFAULT_EVAL_GENERATIONS,
+                )
+                signature = (
+                    algorithm,
+                    crossover_operator,
+                    prob_swap,
+                    prob_replace,
+                    effective_population_size,
+                    effective_n_generations,
+                    seed,
+                )
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
+                configs.append(
+                    OptimizerConfig(
+                        algorithm=algorithm,
+                        population_size=effective_population_size,
+                        n_generations=effective_n_generations,
+                        objectives=self.objectives,
+                        optimization_level=space.optimization_level,
+                        crossover_operator=crossover_operator,
+                        prob_swap_mutation=prob_swap,
+                        prob_replace_mutation=prob_replace,
+                        seed=seed,
+                        verbose=False,
+                    )
+                )
+
+        return configs
+
+    def _calibrate_reference_point(
+        self,
+        calibration_configs: Sequence[OptimizerConfig],
+    ) -> np.ndarray:
+        """Ejecuta una calibración conservadora y fija el ref_point de sesión.
+
+        El margen aplicado es del 30 % (multiplicador 1.3×) para absorber la
+        variabilidad estocástica entre seeds y entre configuraciones de mayor
+        tamaño que las anclas del warm-up. Con ``n_seeds`` seeds y 3 anclas por
+        seed, el warm-up ejecuta hasta ``n_seeds × 3`` optimizaciones.
+        """
+        pareto_fronts: list[np.ndarray] = []
+        total_steps = len(calibration_configs)
+
+        for current_step, calibration_config in enumerate(calibration_configs, start=1):
+            result = optimize_layout(self.circuit, backend=self.backend, config=calibration_config)
+            ref_point_candidate = None
+            if result.pareto_fitness is None or len(result.pareto_fitness) == 0:
+                self._emit_progress(
+                    "calibration_progress",
+                    current_step=current_step,
+                    total_steps=total_steps,
+                    config={
+                        "algorithm": calibration_config.algorithm,
+                        "population_size": calibration_config.population_size,
+                        "n_generations": calibration_config.n_generations,
+                        "crossover_operator": calibration_config.crossover_operator,
+                        "prob_swap_mutation": calibration_config.prob_swap_mutation,
+                        "prob_replace_mutation": calibration_config.prob_replace_mutation,
+                        "seed": calibration_config.seed,
+                    },
+                    ref_point_candidate=None,
+                )
+                continue
+            pareto_fronts.append(np.asarray(result.pareto_fitness, dtype=float))
+            combined_front = np.vstack(pareto_fronts)
+            ref_point_candidate = combined_front.max(axis=0) * 1.3 + 1e-6
+            self._emit_progress(
+                "calibration_progress",
+                current_step=current_step,
+                total_steps=total_steps,
+                config={
+                    "algorithm": calibration_config.algorithm,
+                    "population_size": calibration_config.population_size,
+                    "n_generations": calibration_config.n_generations,
+                    "crossover_operator": calibration_config.crossover_operator,
+                    "prob_swap_mutation": calibration_config.prob_swap_mutation,
+                    "prob_replace_mutation": calibration_config.prob_replace_mutation,
+                    "seed": calibration_config.seed,
+                },
+                ref_point_candidate=ref_point_candidate,
+            )
+
+        if not pareto_fronts:
+            raise ValueError(
+                "No se pudo calibrar un ref_point: calibration anchors sin frente de Pareto válido."
+            )
+
+        combined_front = np.vstack(pareto_fronts)
+        return combined_front.max(axis=0) * 1.3 + 1e-6
+
+    def _emit_progress(self, event: str, **payload: Any) -> None:
+        """Emite eventos estructurados de progreso si hay callback.
+
+        Contrato actual de eventos:
+        - ``calibration_started``: incluye ``ref_point_mode``, ``n_seeds`` y
+          ``calibration_config_count``.
+        - ``calibration_progress``: incluye ``current_step``, ``total_steps``, la
+          ``config`` evaluada y ``ref_point_candidate`` (o ``None`` si aun no
+          existe).
+        - ``calibration_completed``: incluye ``ref_point`` fijado y
+          ``calibration_config_count``.
+        - ``trial_completed``: incluye índices de progreso, score actual,
+          ``best_score``, ``ref_point`` fijo y ``params`` del trial evaluado.
+        - ``tuning_completed``: incluye ``best_score`` final y el ``ref_point``
+          fijo usado en toda la sesión.
+        """
+        if self.progress_callback is None:
+            return
+
+        event_payload = {"event": event}
+        for key, value in payload.items():
+            if isinstance(value, np.ndarray):
+                event_payload[key] = value.tolist()
+            else:
+                event_payload[key] = value
+        self.progress_callback(event_payload)
+
+    @staticmethod
+    def _format_ref_point(ref_point: Optional[np.ndarray]) -> str:
+        """Formatea el punto de referencia para resúmenes legibles."""
+        if ref_point is None:
+            return "not set"
+        return str([float(value) for value in ref_point])

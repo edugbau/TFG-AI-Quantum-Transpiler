@@ -1,4 +1,5 @@
 /.venv
+/.worktrees
 /notebooks/descargados
 src/qiskit_interface/docs/
 /src/mo_module/__pycache__
