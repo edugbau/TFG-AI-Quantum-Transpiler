@@ -12,8 +12,8 @@ orquestación en ``src/integration/``.
 
 Funcionalidades principales:
   - Transpilación estándar a los 4 niveles de optimización de Qiskit (0–3).
-  - Transpilación con layout inicial personalizado (para recibir los
-    layouts del módulo MO).
+  - Transpilación con layout inicial personalizado (para recibir layouts
+    suministrados por el llamador).
   - Comparación pre/post transpilación con métricas detalladas.
   - Transpilación batch de múltiples circuitos.
   - Generación de resultados de benchmark tabulados.

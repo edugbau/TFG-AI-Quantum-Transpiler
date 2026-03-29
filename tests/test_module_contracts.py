@@ -21,7 +21,9 @@ def test_docs_agents_exists_and_describes_four_modules():
         encoding="utf-8"
     )
     assert "evaluación local de layouts suministrados por el llamador" in transpiler_text
+    assert "layout inicial personalizado (para recibir layouts\n    suministrados por el llamador)" in transpiler_text
     assert "No implementa la integración MO -> RL" in transpiler_text
+    assert "layouts del módulo MO" not in transpiler_text
     assert "puente principal" not in transpiler_text
     assert "híbrido MO+RL" not in transpiler_text
 
@@ -122,3 +124,30 @@ def test_mo_module_has_no_direct_rl_imports():
                 elif node.level > 0:
                     for alias in node.names:
                         assert alias.name != "rl_module"
+
+
+def test_rl_module_has_no_direct_mo_imports():
+    for rl_python_file in (ROOT / "src" / "rl_module").rglob("*.py"):
+        rl_python_tree = ast.parse(rl_python_file.read_text(encoding="utf-8"))
+        for node in ast.walk(rl_python_tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "mo_module"
+                    assert not alias.name.startswith("mo_module.")
+                    assert alias.name != "src.mo_module"
+                    assert not alias.name.startswith("src.mo_module.")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module is not None:
+                    assert node.module != "mo_module"
+                    assert not node.module.startswith("mo_module.")
+                    if node.level > 0:
+                        assert node.module != "mo_module"
+                        assert not node.module.startswith("mo_module.")
+                    assert node.module != "src.mo_module"
+                    assert not node.module.startswith("src.mo_module.")
+                    if node.module == "src":
+                        for alias in node.names:
+                            assert alias.name != "mo_module"
+                elif node.level > 0:
+                    for alias in node.names:
+                        assert alias.name != "mo_module"
