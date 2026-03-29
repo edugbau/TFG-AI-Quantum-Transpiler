@@ -1,7 +1,7 @@
 # Documentación Interna: Módulo de Aprendizaje por Refuerzo (RL)
 
 ## Visión General
-El `rl_module` se encarga de la segunda fase del pipeline híbrido: el **Enrutamiento (Routing) y Síntesis** de circuitos cuánticos. Tras recibir un mapeo estático inicial (Layout) generado típicamente por el módulo de Optimización Multiobjetivo (MO), el agente de RL se encarga de insertar puertas SWAP de manera dinámica para resolver los bloqueos de conectividad o transicionar a nuevas puertas.
+El `rl_module` se encarga de la fase de **Enrutamiento (Routing) y Síntesis** de circuitos cuánticos. Tras recibir un mapeo estático inicial (`initial_layout`) como input externo, el agente de RL se encarga de insertar puertas SWAP de manera dinámica para resolver los bloqueos de conectividad o transicionar a nuevas puertas. El handoff MO -> RL, cuando aplique, pertenece a `src/integration/`.
 
 Para ofrecer una escalabilidad completa, la arquitectura del entorno ha sido diseñada aplicando el **Patrón Strategy**, separando la definición del problema en estrategias. Esto permite modificar si el agente actúa en modo "solo enrutamiento" (*Routing*) o si debe generar secuencias de puertas completas (*Synthesis*).
 
@@ -116,8 +116,8 @@ En esta recta final del desarrollo de `rl_module`, se enumeran las dudas y consi
 3. **Algoritmos SB3 y Experimentos:**
    Nuestro Wrapper soporta tanto `PPO` como `DQN` en políticas de `MultiInput`. ¿Recomiendan enfocar toda la computación empírica y tunning en *Proximal Policy Optimization* (PPO) -que es el estándar general actual-, o prefieren ver un test de comparación gruesos o con DQN en el informe?
 
-5. **Entrenamiento y Acople del Módulo MO:**
-   El sistema actualmente expone que se inyecte un *Layout Estático Inicial* traído desde el Algoritmo Genético Multiobjetivo. A la hora de entrenar al Agente de forma general (durante los miles de timesteps), ¿deberíamos exponerle todos los layouts óptimos generados por el MO sobre diferentes circuitos, o dejarlo entrenar primero con *layouts 1:1* ruidosos/adversariales para forzar su robustez al routing independientemente de la fase previa?
+5. **Entrenamiento y Fuentes de `initial_layout`:**
+   El sistema actualmente expone la inyección de un *Layout Estático Inicial* como input externo. A la hora de entrenar al agente de forma general (durante los miles de timesteps), ¿deberíamos exponerle distribuciones variadas de layouts iniciales sobre diferentes circuitos, o dejarlo entrenar primero con *layouts 1:1* ruidosos/adversariales para forzar su robustez al routing independientemente del productor aguas arriba? La orquestación de un futuro handoff MO -> RL pertenece a `src/integration/`.
 
 6. **Oscilación en Evaluación (ver sección "Problema Conocido"):**
    El agente aprende correctamente durante el entrenamiento (reward crece, longitud de episodio baja) pero entra en bucle al evaluarlo. ¿Qué enfoque recomiendan: redes recurrentes (`RecurrentPPO`), penalización explícita por repetición de layouts, o considerarlo una limitación inherente del MLP sin memoria y documentarlo como tal?

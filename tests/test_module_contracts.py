@@ -90,6 +90,16 @@ def test_rl_frontier_docs_keep_initial_layout_generic():
     )
 
 
+def test_rl_internal_docs_keep_initial_layout_generic():
+    rl_internal_text = (
+        ROOT / "src" / "rl_module" / "docs" / "internal_documentation.md"
+    ).read_text(encoding="utf-8")
+    assert "input externo" in rl_internal_text
+    assert "handoff MO -> RL" in rl_internal_text
+    assert "generado típicamente por el módulo de Optimización Multiobjetivo (MO)" not in rl_internal_text
+    assert "traído desde el Algoritmo Genético Multiobjetivo" not in rl_internal_text
+
+
 def test_integration_stub_declares_handoff_ownership():
     integration_text = (ROOT / "src" / "integration" / "__init__.py").read_text(
         encoding="utf-8"
