@@ -152,3 +152,37 @@ def test_rl_module_has_no_direct_mo_imports():
                 elif node.level > 0:
                     for alias in node.names:
                         assert alias.name != "mo_module"
+
+
+def test_qiskit_interface_has_no_direct_mo_or_rl_imports():
+    for qiskit_python_file in (ROOT / "src" / "qiskit_interface").rglob("*.py"):
+        qiskit_python_tree = ast.parse(qiskit_python_file.read_text(encoding="utf-8"))
+        for node in ast.walk(qiskit_python_tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "mo_module"
+                    assert not alias.name.startswith("mo_module.")
+                    assert alias.name != "src.mo_module"
+                    assert not alias.name.startswith("src.mo_module.")
+                    assert alias.name != "rl_module"
+                    assert not alias.name.startswith("rl_module.")
+                    assert alias.name != "src.rl_module"
+                    assert not alias.name.startswith("src.rl_module.")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module is not None:
+                    assert node.module != "mo_module"
+                    assert not node.module.startswith("mo_module.")
+                    assert node.module != "src.mo_module"
+                    assert not node.module.startswith("src.mo_module.")
+                    assert node.module != "rl_module"
+                    assert not node.module.startswith("rl_module.")
+                    assert node.module != "src.rl_module"
+                    assert not node.module.startswith("src.rl_module.")
+                    if node.module == "src":
+                        for alias in node.names:
+                            assert alias.name != "mo_module"
+                            assert alias.name != "rl_module"
+                elif node.level > 0:
+                    for alias in node.names:
+                        assert alias.name != "mo_module"
+                        assert alias.name != "rl_module"
