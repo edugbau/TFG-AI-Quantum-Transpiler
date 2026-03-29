@@ -16,7 +16,7 @@ The project has 4 interconnected modules:
 1. **`src/qiskit_interface/`** — Qiskit backend abstraction, circuit metrics, and transpilation baseline.
 2. **`src/mo_module/`** — Multi-objective evolutionary algorithms (NSGA-II) for quantum layout optimization. Use the `mo-optimization` skill when modifying fitness, operators, or Pareto analysis.
 3. **`src/rl_module/`** — Gymnasium-based RL environment and Stable-Baselines3 agent for circuit synthesis. Use the `rl-quantum-synthesis` skill for environment and reward design.
-4. **`src/integration/`** — Pipeline orchestration: MO layouts feed RL agent. Use the `mo-rl-pipeline` skill for handoff logic and benchmark scenarios (Baseline, MO_Only, RL_Only, MO+RL).
+4. **`src/integration/`** — Orchestration of handoff and benchmark scenarios across modules. Use the `mo-rl-pipeline` skill for handoff logic and benchmark scenarios (Baseline, MO_Only, RL_Only, MO+RL).
 
 See [docs/agents.md](../docs/agents.md) for detailed module descriptions.
 
@@ -51,6 +51,6 @@ Before modifying code, load the appropriate skill(s) based on the module or task
 2. ✅ Global random seeds are set before experiment runs (numpy, torch, Optuna, pymoo, Gymnasium).
 3. ✅ Experiment results are exported as `.csv` or `.parquet` with consistent column schema (Circuit, Method, Depth, CNOTs, Fidelity/Error, Execution_Time, Seed).
 4. ✅ Benchmark comparisons include all four scenarios: Baseline, MO_Only, RL_Only, MO+RL.
-5. ✅ Module boundaries are respected: Qiskit interface → MO optimization → RL synthesis → integration orchestration.
+5. ✅ Module boundaries are respected: integration owns orchestration and handoff scenarios across the other modules.
 
 For in-depth guidance, see the project skills in [`./skills/`](./skills/).

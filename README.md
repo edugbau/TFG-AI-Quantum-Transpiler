@@ -8,12 +8,13 @@
 
 ## Descripción
 
-Pipeline híbrido de transpilación de circuitos cuánticos que combina:
+Proyecto de transpilación cuántica organizado en cuatro módulos: `qiskit_interface`, `mo_module`, `rl_module` e `integration`.
 
-1. **Optimización Multiobjetivo (MO)** — Algoritmos evolutivos (NSGA-II) para generar layouts iniciales óptimos considerando múltiples métricas de calidad simultáneamente
-2. **Aprendizaje por Refuerzo (RL)** — Agente de síntesis de circuitos Clifford (PPO/DQN) que recibe los layouts optimizados como entrada
+- **Optimización Multiobjetivo (MO)** — Algoritmos evolutivos (NSGA-II) para explorar layouts iniciales según múltiples métricas de calidad.
+- **Aprendizaje por Refuerzo (RL)** — Entorno y agentes para routing/síntesis, con soporte para consumir un `initial_layout` genérico sin acoplarse a un productor concreto.
+- **Integración** — `integration` posee el futuro handoff y la orquestación de escenarios entre módulos; su implementación actual sigue siendo un stub en `src/integration/`.
 
-El objetivo es superar las limitaciones de heurísticas como SABRE, que utilizan inicializaciones aleatorias y mono-objetivo.
+El objetivo es superar las limitaciones de heurísticas como SABRE. MO y RL evolucionan como módulos separados hasta que la integración coordine los flujos `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
 
 ## Instalación
 

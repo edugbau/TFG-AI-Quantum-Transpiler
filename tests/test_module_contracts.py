@@ -25,11 +25,29 @@ def test_docs_agents_exists_and_describes_four_modules():
     assert "puente principal" not in transpiler_text
     assert "híbrido MO+RL" not in transpiler_text
 
+    workspace_agents_text = (ROOT / ".github" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "The project has 4 interconnected modules:" in workspace_agents_text
+    assert "Orchestration of handoff and benchmark scenarios across modules" in workspace_agents_text
+    assert "Pipeline orchestration: MO layouts feed RL agent" not in workspace_agents_text
+    assert (
+        "Module boundaries are respected: integration owns orchestration and handoff scenarios across the other modules."
+        in workspace_agents_text
+    )
+    assert (
+        "Qiskit interface → MO optimization → RL synthesis → integration orchestration"
+        not in workspace_agents_text
+    )
+
 
 def test_readme_architecture_reference_points_to_real_doc():
     readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "[agents.md](docs/agents.md)" in readme_text
     assert (ROOT / "docs" / "agents.md").exists()
+    assert "Proyecto de transpilación cuántica organizado en cuatro módulos" in readme_text
+    assert "MO y RL evolucionan como módulos separados" in readme_text
+    assert "integration` posee el futuro handoff y la orquestación" in readme_text
+    assert "Pipeline híbrido de transpilación de circuitos cuánticos que combina" not in readme_text
+    assert "recibe los layouts optimizados como entrada" not in readme_text
 
     qiskit_readme_text = (ROOT / "src" / "qiskit_interface" / "README.md").read_text(
         encoding="utf-8"
