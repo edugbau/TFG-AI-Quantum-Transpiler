@@ -45,12 +45,15 @@ def test_docs_agents_exists_and_describes_four_modules():
                     assert alias.name != "src.rl_module"
                     assert not alias.name.startswith("src.rl_module.")
             elif isinstance(node, ast.ImportFrom):
-                assert not (
-                    node.level > 0 and node.module == "rl_module"
-                )
                 if node.module is not None:
+                    if node.level > 0:
+                        assert node.module != "rl_module"
+                        assert not node.module.startswith("rl_module.")
                     assert node.module != "src.rl_module"
                     assert not node.module.startswith("src.rl_module.")
+                elif node.level > 0:
+                    for alias in node.names:
+                        assert alias.name != "rl_module"
 
 
 def test_readme_architecture_reference_points_to_real_doc():
