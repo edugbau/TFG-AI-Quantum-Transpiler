@@ -22,6 +22,13 @@ Fecha: 2026-02-18
 
 import pytest
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+
+from matplotlib.figure import Figure
+from pymoo.algorithms.moo.moead import MOEAD
+from pymoo.algorithms.moo.nsga2 import NSGA2
 
 # ---------------------------------------------------------------------------
 # Imports del módulo bajo test
@@ -60,6 +67,7 @@ from src.mo_module.optimizer import (
     optimize_layout,
     optimize_layout_quick,
     compare_layouts,
+    print_layout_comparison,
 )
 from src.mo_module.pareto import (
     ParetoMetrics,
@@ -68,6 +76,9 @@ from src.mo_module.pareto import (
     select_weighted,
     select_min_objective,
     analyze_pareto_front,
+    plot_pareto_front_2d,
+    plot_pareto_front_3d,
+    plot_parallel_coordinates,
 )
 
 # ---------------------------------------------------------------------------
@@ -125,6 +136,66 @@ def search_space_3q(backend_info_torino) -> LayoutSearchSpace:
 def search_space_5q(backend_info_torino) -> LayoutSearchSpace:
     """Espacio de búsqueda para 5 qubits lógicos en FakeTorino."""
     return LayoutSearchSpace.from_backend_info(backend_info_torino, 5)
+
+
+@pytest.fixture
+def pareto_result_2d() -> OptimizationResult:
+    """Resultado pequeño con dos objetivos para tests de reporting."""
+    return OptimizationResult(
+        pareto_layouts=[[0, 1], [2, 3], [4, 5]],
+        pareto_fitness=np.array([
+            [1.0, 10.0],
+            [5.0, 5.0],
+            [10.0, 1.0],
+        ]),
+        objective_names=["depth", "error"],
+        algorithm_name="nsga2",
+        backend_name="fake_torino",
+        circuit_name="test_circuit",
+    )
+
+
+@pytest.fixture
+def pareto_result_3d() -> OptimizationResult:
+    """Resultado pequeño con tres objetivos para tests 3D."""
+    return OptimizationResult(
+        pareto_layouts=[[0, 1, 2], [3, 4, 5], [6, 7, 8]],
+        pareto_fitness=np.array([
+            [1.0, 8.0, 5.0],
+            [4.0, 4.0, 4.0],
+            [8.0, 1.0, 2.0],
+        ]),
+        objective_names=["depth", "error", "duration"],
+        algorithm_name="moead",
+        backend_name="fake_torino",
+        circuit_name="test_circuit",
+    )
+
+
+@pytest.fixture
+def empty_pareto_result_2d() -> OptimizationResult:
+    """Resultado con frente vacío en forma de ndarray 2D."""
+    return OptimizationResult(
+        pareto_layouts=[],
+        pareto_fitness=np.empty((0, 2)),
+        objective_names=["depth", "error"],
+        algorithm_name="nsga2",
+        backend_name="fake_torino",
+        circuit_name="test_circuit",
+    )
+
+
+@pytest.fixture
+def empty_pareto_result_3d() -> OptimizationResult:
+    """Resultado con frente vacío en forma de ndarray 3D."""
+    return OptimizationResult(
+        pareto_layouts=[],
+        pareto_fitness=np.empty((0, 3)),
+        objective_names=["depth", "error", "duration"],
+        algorithm_name="moead",
+        backend_name="fake_torino",
+        circuit_name="test_circuit",
+    )
 
 
 # ===========================================================================
@@ -596,6 +667,11 @@ class TestOptimizerConfig:
         assert config.prob_swap_mutation == 0.3
         assert config.prob_replace_mutation == 0.7
 
+    def test_prob_crossover_is_not_part_of_public_contract(self):
+        """El contrato público ya no acepta prob_crossover."""
+        with pytest.raises(TypeError):
+            OptimizerConfig(prob_crossover=0.9)
+
     def test_dpx_is_default_crossover_operator(self):
         """OptimizerConfig usa DPX como operador de cruce por defecto."""
         config = OptimizerConfig()
@@ -658,16 +734,53 @@ class TestAlgorithmFactory:
     """Tests de la factory de algoritmos."""
 
     def test_create_nsga2(self, search_space_5q):
-        """Se crea correctamente una instancia de NSGA-II."""
-        config = OptimizerConfig(algorithm="nsga2", population_size=20)
+        """NSGA-II expone el tipo y los operadores configurados."""
+        # Arrange
+        config = OptimizerConfig(
+            algorithm="nsga2",
+            population_size=20,
+            crossover_operator="ox",
+            prob_swap_mutation=0.5,
+            prob_replace_mutation=0.9,
+        )
+
+        # Act
         algo = create_algorithm(config, search_space_5q, n_objectives=2)
-        assert algo is not None
+
+        # Assert
+        assert isinstance(algo, NSGA2)
+        assert algo.pop_size == 20
+        assert isinstance(algo.initialization.sampling, LayoutSampling)
+        assert isinstance(algo.mating.crossover, LayoutCrossover)
+        assert isinstance(algo.mating.mutation, LayoutMutation)
+        assert algo.mating.mutation.prob_swap == 0.5
+        assert algo.mating.mutation.prob_replace == 0.9
 
     def test_create_moead(self, search_space_5q):
-        """Se crea correctamente una instancia de MOEA/D."""
-        config = OptimizerConfig(algorithm="moead", population_size=20)
+        """MOEA/D expone el tipo y el wiring esencial del algoritmo."""
+        # Arrange
+        config = OptimizerConfig(
+            algorithm="moead",
+            population_size=20,
+            crossover_operator="dpx",
+            prob_swap_mutation=0.3,
+            prob_replace_mutation=0.7,
+        )
+
+        # Act
         algo = create_algorithm(config, search_space_5q, n_objectives=2)
-        assert algo is not None
+
+        # Assert
+        assert isinstance(algo, MOEAD)
+        assert algo.pop_size == 20
+        assert isinstance(algo.initialization.sampling, LayoutSampling)
+        assert isinstance(algo.mating.crossover, DPXCrossover)
+        assert isinstance(algo.mating.mutation, LayoutMutation)
+        assert algo.mating.mutation.prob_swap == 0.3
+        assert algo.mating.mutation.prob_replace == 0.7
+        assert algo.ref_dirs.shape[1] == 2
+        assert len(algo.ref_dirs) > 0
+        assert algo.n_neighbors == 15
 
 
 class TestOptimizationProblem:
@@ -860,6 +973,175 @@ class TestCompareLayouts:
             assert "depth" in row
             assert "two_qubit_gates" in row
             assert "avg_error_2q" in row
+
+
+class TestReportingUtilities:
+    """Tests de utilidades públicas de reporting."""
+
+    def test_print_layout_comparison_prints_table(self, capsys):
+        """print_layout_comparison imprime encabezados y filas legibles."""
+        # Arrange
+        rows = [
+            {
+                "layout_name": "layout_a",
+                "depth": 12,
+                "two_qubit_gates": 4,
+                "total_gates": 20,
+                "avg_error_2q": 0.012345,
+                "num_edges": 3,
+            },
+            {
+                "layout_name": "layout_b",
+                "depth": 9,
+                "two_qubit_gates": 3,
+                "total_gates": 18,
+                "avg_error_2q": 0.006789,
+                "num_edges": 4,
+            },
+        ]
+
+        # Act
+        print_layout_comparison(rows)
+        captured = capsys.readouterr()
+
+        # Assert
+        assert "COMPARACIÓN DE LAYOUTS" in captured.out
+        assert "layout_a" in captured.out
+        assert "layout_b" in captured.out
+        assert "2Q Gates" in captured.out
+        assert "Err 2Q" in captured.out
+
+
+class TestParetoPlots:
+    """Tests smoke/contract de visualización pública."""
+
+    def test_plot_pareto_front_2d_returns_figure_and_saves_file(
+        self, pareto_result_2d, tmp_path
+    ):
+        """El plot 2D devuelve Figure y guarda archivo cuando se pide."""
+        # Arrange
+        output_file = tmp_path / "plots" / "pareto_front_2d.png"
+
+        # Act
+        fig = plot_pareto_front_2d(
+            pareto_result_2d,
+            filename=str(output_file),
+        )
+
+        # Assert
+        assert isinstance(fig, Figure)
+        assert output_file.is_file()
+        fig.clf()
+
+    def test_plot_pareto_front_2d_returns_none_without_pareto_data(self):
+        """Sin datos de Pareto, el plot 2D devuelve None."""
+        # Arrange
+        empty_result = OptimizationResult()
+
+        # Act
+        fig = plot_pareto_front_2d(empty_result)
+
+        # Assert
+        assert fig is None
+
+    def test_plot_pareto_front_2d_returns_none_with_empty_front_array(
+        self, empty_pareto_result_2d
+    ):
+        """Un frente vacío en ndarray se trata como ausencia de datos en 2D."""
+        # Arrange
+        result = empty_pareto_result_2d
+
+        # Act
+        fig = plot_pareto_front_2d(result)
+
+        # Assert
+        assert fig is None
+
+    def test_plot_pareto_front_3d_returns_figure_and_saves_file(
+        self, pareto_result_3d, tmp_path
+    ):
+        """El plot 3D devuelve Figure y guarda archivo cuando hay 3 objetivos."""
+        # Arrange
+        output_file = tmp_path / "plots" / "pareto_front_3d.png"
+
+        # Act
+        fig = plot_pareto_front_3d(
+            pareto_result_3d,
+            filename=str(output_file),
+        )
+
+        # Assert
+        assert isinstance(fig, Figure)
+        assert output_file.is_file()
+        fig.clf()
+
+    def test_plot_pareto_front_3d_returns_none_with_fewer_than_three_objectives(
+        self, pareto_result_2d
+    ):
+        """El plot 3D devuelve None cuando no hay suficientes objetivos."""
+        # Arrange
+        result = pareto_result_2d
+
+        # Act
+        fig = plot_pareto_front_3d(result)
+
+        # Assert
+        assert fig is None
+
+    def test_plot_pareto_front_3d_returns_none_with_empty_front_array(
+        self, empty_pareto_result_3d
+    ):
+        """Un frente vacío en ndarray se trata como ausencia de datos en 3D."""
+        # Arrange
+        result = empty_pareto_result_3d
+
+        # Act
+        fig = plot_pareto_front_3d(result)
+
+        # Assert
+        assert fig is None
+
+    def test_plot_parallel_coordinates_returns_figure_and_saves_file(
+        self, pareto_result_3d, tmp_path
+    ):
+        """Las coordenadas paralelas devuelven Figure y guardan archivo."""
+        # Arrange
+        output_file = tmp_path / "plots" / "parallel_coordinates.png"
+
+        # Act
+        fig = plot_parallel_coordinates(
+            pareto_result_3d,
+            filename=str(output_file),
+        )
+
+        # Assert
+        assert isinstance(fig, Figure)
+        assert output_file.is_file()
+        fig.clf()
+
+    def test_plot_parallel_coordinates_returns_none_without_pareto_data(self):
+        """Sin datos de Pareto, las coordenadas paralelas devuelven None."""
+        # Arrange
+        empty_result = OptimizationResult()
+
+        # Act
+        fig = plot_parallel_coordinates(empty_result)
+
+        # Assert
+        assert fig is None
+
+    def test_plot_parallel_coordinates_returns_none_with_empty_front_array(
+        self, empty_pareto_result_2d
+    ):
+        """Un frente vacío en ndarray se trata como ausencia de datos en paralelo."""
+        # Arrange
+        result = empty_pareto_result_2d
+
+        # Act
+        fig = plot_parallel_coordinates(result)
+
+        # Assert
+        assert fig is None
 
 
 # ===========================================================================

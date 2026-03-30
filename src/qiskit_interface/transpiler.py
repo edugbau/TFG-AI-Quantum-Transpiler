@@ -568,6 +568,21 @@ def transpile_with_custom_layout(
     Returns:
         TranspilationResult con las métricas resultantes.
     """
+    if backend is None:
+        backend = get_backend(backend_name)
+
+    if len(layout) != circuit.num_qubits:
+        raise ValueError(
+            "Custom layout must have the same length as the circuit qubit count"
+        )
+
+    if len(set(layout)) != len(layout):
+        raise ValueError("Custom layout contains duplicate physical qubits")
+
+    num_backend_qubits = getattr(backend, "num_qubits", None)
+    if num_backend_qubits is not None and any(q < 0 or q >= num_backend_qubits for q in layout):
+        raise ValueError("Custom layout contains physical qubits outside the backend range")
+
     return transpile_circuit(
         circuit=circuit,
         backend=backend,

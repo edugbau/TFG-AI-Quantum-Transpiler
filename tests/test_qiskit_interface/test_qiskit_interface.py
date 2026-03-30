@@ -18,6 +18,7 @@ Fecha: 2026-02-08
 """
 
 import pytest
+from importlib.util import find_spec
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -32,7 +33,10 @@ from src.qiskit_interface.circuit_utils import (
     extract_metrics,
     count_two_qubit_gates,
     export_circuit_to_qasm2,
+    export_circuit_to_qasm3,
     load_circuit_from_qasm2,
+    load_circuit_from_qasm3,
+    save_circuit_to_qasm2,
     circuit_to_dag_convert,
     dag_to_circuit_convert,
     circuit_to_text,
@@ -59,10 +63,13 @@ from src.qiskit_interface.transpiler import (
     transpile_batch,
     compare_transpilation_results,
     transpile_with_custom_layout,
+    print_transpilation_comparison,
     run_baseline,
 )
+import src.qiskit_interface as qiskit_interface
 
 from qiskit import QuantumCircuit
+from qiskit.exceptions import MissingOptionalLibraryError
 
 
 # ===========================================================================
@@ -223,6 +230,38 @@ class TestCircuitIO:
         """Cargar un fichero QASM inexistente lanza FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             load_circuit_from_qasm2(Path("no_existe.qasm"))
+
+    def test_export_qasm3_roundtrip_from_string(self, simple_circuit):
+        """Exportar a QASM3 produce una cadena que puede recargarse."""
+        # Arrange
+        qasm3_str = export_circuit_to_qasm3(simple_circuit)
+
+        # Act / Assert
+        if find_spec("qiskit_qasm3_import") is None:
+            with pytest.raises(MissingOptionalLibraryError):
+                load_circuit_from_qasm3(qasm3_str)
+            return
+
+        loaded = load_circuit_from_qasm3(qasm3_str)
+
+        assert "OPENQASM 3" in qasm3_str
+        assert loaded.num_qubits == simple_circuit.num_qubits
+        assert loaded.depth() == simple_circuit.depth()
+
+    def test_save_qasm2_creates_file_that_can_be_loaded(self, simple_circuit, tmp_path):
+        """Guardar a QASM2 crea un fichero reutilizable."""
+        # Arrange
+        output_path = tmp_path / "nested" / "simple.qasm"
+
+        # Act
+        saved_path = save_circuit_to_qasm2(simple_circuit, output_path)
+        loaded = load_circuit_from_qasm2(saved_path)
+
+        # Assert
+        assert saved_path == output_path
+        assert saved_path.is_file()
+        assert loaded.num_qubits == simple_circuit.num_qubits
+        assert loaded.depth() == simple_circuit.depth()
 
 
 class TestCircuitConversion:
@@ -440,6 +479,48 @@ class TestTranspilationWithLayout:
         assert result.transpiled_circuit is not None
         assert result.initial_layout == layout
 
+    def test_transpile_with_custom_layout_rejects_wrong_length(self, simple_circuit, backend_torino):
+        """Un layout con longitud incorrecta se rechaza explícitamente."""
+        # Arrange
+        layout = [10, 11]
+
+        # Act / Assert
+        with pytest.raises(ValueError, match="same length"):
+            transpile_with_custom_layout(
+                simple_circuit,
+                layout=layout,
+                backend=backend_torino,
+                optimization_level=1,
+            )
+
+    def test_transpile_with_custom_layout_rejects_duplicate_qubits(self, simple_circuit, backend_torino):
+        """Un layout no puede reutilizar el mismo qubit físico."""
+        # Arrange
+        layout = [10, 10, 12]
+
+        # Act / Assert
+        with pytest.raises(ValueError, match="duplicate"):
+            transpile_with_custom_layout(
+                simple_circuit,
+                layout=layout,
+                backend=backend_torino,
+                optimization_level=1,
+            )
+
+    def test_transpile_with_custom_layout_rejects_out_of_range_qubits(self, simple_circuit, backend_torino):
+        """Los qubits físicos deben existir en el backend."""
+        # Arrange
+        layout = [10, 11, backend_torino.num_qubits]
+
+        # Act / Assert
+        with pytest.raises(ValueError, match="range"):
+            transpile_with_custom_layout(
+                simple_circuit,
+                layout=layout,
+                backend=backend_torino,
+                optimization_level=1,
+            )
+
 
 class TestTranspilationBatch:
     """Tests de transpilación batch y baseline."""
@@ -459,6 +540,29 @@ class TestTranspilationBatch:
         assert "ghz3" in results
         assert "ghz4" in results
 
+    def test_run_baseline_returns_one_row_per_backend_level_combo(self, simple_circuit):
+        """run_baseline devuelve una fila por combinación evaluada."""
+        # Arrange
+        backend_names = ["fake_torino"]
+        optimization_levels = [0, 1]
+
+        # Act
+        rows = run_baseline(
+            simple_circuit,
+            backend_names=backend_names,
+            optimization_levels=optimization_levels,
+            seed=42,
+        )
+
+        # Assert
+        assert len(rows) == 2
+        assert {row["optimization_level"] for row in rows} == {0, 1}
+        assert {row["backend_name"] for row in rows} == {"fake_torino"}
+        assert {row["circuit_name"] for row in rows} == {simple_circuit.name}
+        for row in rows:
+            assert "trans_depth" in row
+            assert "trans_two_qubit_gates" in row
+
     def test_compare_results(self, simple_circuit, backend_torino):
         """Comparación de resultados genera filas para DataFrame."""
         results = transpile_all_levels(simple_circuit, backend=backend_torino)
@@ -467,6 +571,72 @@ class TestTranspilationBatch:
         for row in rows:
             assert "trans_depth" in row
             assert "trans_two_qubit_gates" in row
+
+    def test_print_transpilation_comparison_prints_table(self, simple_circuit, backend_torino, capsys):
+        """La utilidad imprime una tabla legible con las métricas clave."""
+        # Arrange
+        results = transpile_all_levels(simple_circuit, backend=backend_torino, seed=42)
+
+        # Act
+        print_transpilation_comparison(results)
+        captured = capsys.readouterr()
+
+        # Assert
+        assert "COMPARACIÓN DE TRANSPILACIONES" in captured.out
+        assert "Depth" in captured.out
+        assert "2Q Gates" in captured.out
+        assert "0" in captured.out
+
+
+class TestPackageApi:
+    """Cobertura mínima de la API pública reexportada en el paquete raíz."""
+
+    def test_package_root_reexports_new_public_apis(self, simple_circuit, tmp_path):
+        """El paquete raíz expone las nuevas APIs públicas esperadas."""
+        # Arrange
+        output_path = tmp_path / "package_root_export.qasm"
+
+        # Act
+        qasm2_str = qiskit_interface.export_circuit_to_qasm2(simple_circuit)
+        qasm3_str = qiskit_interface.export_circuit_to_qasm3(simple_circuit)
+        saved_path = qiskit_interface.save_circuit_to_qasm2(simple_circuit, output_path)
+        reloaded_qasm2 = qiskit_interface.load_circuit_from_qasm2(qasm2_str)
+
+        # Assert
+        assert callable(qiskit_interface.run_baseline)
+        assert callable(qiskit_interface.print_transpilation_comparison)
+        assert "OPENQASM 2.0" in qasm2_str
+        assert "OPENQASM 3" in qasm3_str
+        assert saved_path == output_path
+        assert reloaded_qasm2.depth() == simple_circuit.depth()
+
+    def test_package_root_qasm3_loader_matches_environment_contract(self, simple_circuit):
+        """La carga QASM3 reexportada es estable con o sin importador opcional."""
+        # Arrange
+        qasm3_str = qiskit_interface.export_circuit_to_qasm3(simple_circuit)
+
+        # Act / Assert
+        if find_spec("qiskit_qasm3_import") is None:
+            with pytest.raises(MissingOptionalLibraryError):
+                qiskit_interface.load_circuit_from_qasm3(qasm3_str)
+            return
+
+        loaded = qiskit_interface.load_circuit_from_qasm3(qasm3_str)
+
+        assert loaded.num_qubits == simple_circuit.num_qubits
+
+    def test_package_root_print_transpilation_comparison_smoke(self, simple_circuit, backend_torino, capsys):
+        """La utilidad reexportada imprime una comparación observable."""
+        # Arrange
+        results = {"baseline": transpile_circuit(simple_circuit, backend=backend_torino, seed=42)}
+
+        # Act
+        qiskit_interface.print_transpilation_comparison(results)
+        captured = capsys.readouterr()
+
+        # Assert
+        assert "baseline" in captured.out
+        assert "COMPARACIÓN DE TRANSPILACIONES" in captured.out
 
 
 class TestTranspilationResult:

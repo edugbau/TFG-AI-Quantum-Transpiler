@@ -1,198 +1,320 @@
 import ast
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_docs_agents_exists_and_describes_four_modules():
-    agents_doc = ROOT / "docs" / "agents.md"
-    assert agents_doc.exists(), "README y .github/AGENTS.md apuntan a docs/agents.md"
+def read_text(relative_path: str) -> str:
+    return (ROOT / relative_path).read_text(encoding="utf-8")
 
-    text = agents_doc.read_text(encoding="utf-8")
-    for token in (
-        "src/qiskit_interface/",
-        "src/rl_module/",
-        "src/mo_module/",
-        "src/integration/",
-    ):
+
+def assert_contains_all(text: str, expected_tokens: tuple[str, ...]) -> None:
+    for token in expected_tokens:
         assert token in text
 
-    transpiler_text = (ROOT / "src" / "qiskit_interface" / "transpiler.py").read_text(
-        encoding="utf-8"
-    )
-    assert "evaluación local de layouts suministrados por el llamador" in transpiler_text
-    assert "layout inicial personalizado (para recibir layouts\n    suministrados por el llamador)" in transpiler_text
-    assert "layout inicial personalizado (del módulo MO)" not in transpiler_text
-    assert "No implementa la integración MO -> RL" in transpiler_text
-    assert "layouts del módulo MO" not in transpiler_text
-    assert "puente principal" not in transpiler_text
-    assert "híbrido MO+RL" not in transpiler_text
 
-    workspace_agents_text = (ROOT / ".github" / "AGENTS.md").read_text(encoding="utf-8")
-    assert "The project has 4 interconnected modules:" in workspace_agents_text
-    assert "Orchestration of handoff and benchmark scenarios across modules" in workspace_agents_text
-    assert "Pipeline orchestration: MO layouts feed RL agent" not in workspace_agents_text
-    assert (
-        "Module boundaries are respected: integration owns orchestration and handoff scenarios across the other modules."
-        in workspace_agents_text
-    )
-    assert (
-        "Qiskit interface → MO optimization → RL synthesis → integration orchestration"
-        not in workspace_agents_text
+def assert_excludes_all(text: str, forbidden_tokens: tuple[str, ...]) -> None:
+    for token in forbidden_tokens:
+        assert token not in text
+
+
+def assert_any_contains(text: str, alternatives: tuple[str, ...]) -> None:
+    assert any(option in text for option in alternatives)
+
+
+def assert_mentions_initial_layout_from_caller(text: str) -> None:
+    assert "initial_layout" in text
+    assert_any_contains(
+        text,
+        (
+            "suministrados por el llamador",
+            "suministrado por el llamador",
+            "desde el llamador",
+        ),
     )
 
 
-def test_readme_architecture_reference_points_to_real_doc():
-    readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "[agents.md](docs/agents.md)" in readme_text
-    assert (ROOT / "docs" / "agents.md").exists()
-    assert "Proyecto de transpilación cuántica organizado en cuatro módulos" in readme_text
-    assert "MO y RL evolucionan como módulos separados" in readme_text
-    assert "integration` posee el futuro handoff y la orquestación" in readme_text
-    assert "Pipeline híbrido de transpilación de circuitos cuánticos que combina" not in readme_text
-    assert "recibe los layouts optimizados como entrada" not in readme_text
+def assert_mentions_fixed_session_ref_point(text: str) -> None:
+    lowered = text.lower()
 
-    qiskit_readme_text = (ROOT / "src" / "qiskit_interface" / "README.md").read_text(
-        encoding="utf-8"
+    assert_contains_all(text, ("session_ref_point", "calibrated", "manual", "HV=0.0"))
+    assert "trial" in lowered
+    assert "seed" in lowered
+    assert "recalcul" in lowered
+    assert "warning" in lowered or "aviso" in lowered
+    assert "promedi" in lowered or "media" in lowered
+    assert "1.3x" in text or "30 %" in text or "30%" in text
+    assert "ValueError" not in text
+    assert "fijo" in lowered or "fija" in lowered
+    assert "resultado/frente" in lowered
+
+
+def assert_mentions_event_specific_payloads(text: str) -> None:
+    lowered = text.lower()
+
+    assert_contains_all(
+        text,
+        (
+            "calibration_started",
+            "calibration_progress",
+            "calibration_completed",
+            "trial_completed",
+            "tuning_completed",
+        ),
     )
+    assert "payload" in lowered or "evento" in lowered
+    assert "campos relevantes" in lowered or "espec" in lowered
+    assert "mismo payload" in lowered or "payloads son específicos" in lowered
+    assert "no todos" in lowered or "cada evento" in lowered
+
+
+def assert_mentions_calibration_progress_fields(text: str) -> None:
+    assert "calibration_progress" in text
+    assert_contains_all(text, ("current_step", "total_steps", "config", "ref_point_candidate"))
+
+
+def assert_mentions_trial_completed_fields(text: str) -> None:
+    assert "trial_completed" in text
+    assert_contains_all(text, ("score", "best_score", "params", "ref_point"))
+
+
+def assert_mentions_supported_crossover_options(text: str) -> None:
+    lowered = text.lower()
+
+    assert_contains_all(text, ("crossover_operator", "DPXCrossover", "LayoutCrossover"))
+    assert "`dpx`" in lowered
+    assert "`ox`" in lowered
+    assert "por defecto" in lowered
+    assert_any_contains(lowered, ("alternativa", "opcional"))
+    assert "prob_crossover" not in text
+
+
+def iter_python_files(relative_dir: str):
+    return (ROOT / relative_dir).rglob("*.py")
+
+
+def assert_module_tree_has_no_imports(relative_dir: str, forbidden_modules: tuple[str, ...]) -> None:
+    forbidden_prefixes = forbidden_modules + tuple(
+        f"src.{module}" for module in forbidden_modules
+    )
+
+    for python_file in iter_python_files(relative_dir):
+        tree = ast.parse(python_file.read_text(encoding="utf-8"), filename=str(python_file))
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert not any(
+                        alias.name == module or alias.name.startswith(f"{module}.")
+                        for module in forbidden_prefixes
+                    ), f"{python_file} imports forbidden module {alias.name!r}"
+
+            elif isinstance(node, ast.ImportFrom):
+                module_name = node.module
+                if module_name is not None:
+                    assert not any(
+                        module_name == module or module_name.startswith(f"{module}.")
+                        for module in forbidden_prefixes
+                    ), f"{python_file} imports forbidden module {module_name!r}"
+
+                    if module_name == "src":
+                        for alias in node.names:
+                            assert alias.name not in forbidden_modules, (
+                                f"{python_file} imports forbidden module src.{alias.name}"
+                            )
+                elif node.level > 0:
+                    for alias in node.names:
+                        assert alias.name not in forbidden_modules, (
+                            f"{python_file} imports forbidden relative module {alias.name}"
+                        )
+
+
+def test_docs_and_workspace_metadata_define_four_module_ownership() -> None:
+    agents_doc = ROOT / "docs" / "agents.md"
+
+    assert agents_doc.exists(), "README y .github/AGENTS.md apuntan a docs/agents.md"
+
+    agents_text = agents_doc.read_text(encoding="utf-8")
+    workspace_agents_text = read_text(".github/AGENTS.md")
+    readme_text = read_text("README.md")
+
+    assert_contains_all(
+        agents_text,
+        (
+            "src/qiskit_interface/",
+            "src/rl_module/",
+            "src/mo_module/",
+            "src/integration/",
+            "layout[i] = physical_qubit_for_logical_qubit_i",
+            "MO+RL",
+        ),
+    )
+    assert "integration" in agents_text
+    assert_any_contains(
+        agents_text,
+        (
+            "owns the process that connects producer and consumer",
+            "owns the process",
+        ),
+    )
+    assert_contains_all(
+        workspace_agents_text,
+        (
+            "The project has 4 interconnected modules:",
+            "src/integration/",
+            "benchmark scenarios",
+        ),
+    )
+    assert_contains_all(workspace_agents_text, ("Module boundaries are respected", "integration owns"))
+    assert_contains_all(workspace_agents_text, ("orchestration", "handoff scenarios"))
+    assert_contains_all(
+        readme_text,
+        (
+            "[agents.md](docs/agents.md)",
+            "Proyecto de transpilación cuántica organizado en cuatro módulos",
+            "MO y RL evolucionan como módulos separados",
+            "MO+RL",
+        ),
+    )
+    assert_contains_all(readme_text, ("integration`", "handoff", "orquestación"))
+    assert_excludes_all(
+        workspace_agents_text,
+        (
+            "Pipeline orchestration: MO layouts feed RL agent",
+            "Qiskit interface → MO optimization → RL synthesis → integration orchestration",
+        ),
+    )
+    assert_excludes_all(
+        readme_text,
+        (
+            "Pipeline híbrido de transpilación de circuitos cuánticos que combina",
+            "recibe los layouts optimizados como entrada",
+        ),
+    )
+
+
+def test_qiskit_interface_docs_keep_initial_layout_generic() -> None:
+    transpiler_text = read_text("src/qiskit_interface/transpiler.py")
+    qiskit_readme_text = read_text("src/qiskit_interface/README.md")
+
+    assert_mentions_initial_layout_from_caller(transpiler_text)
+    assert "initial_layout" in qiskit_readme_text
     assert "helper de evaluación local" in qiskit_readme_text
-    assert "Función puente para el Módulo MO" not in qiskit_readme_text
+    assert "src/integration/" in transpiler_text
+    assert "No implementa la integración MO -> RL" in transpiler_text
 
-
-def test_mo_docs_route_future_rl_consumption_through_integration():
-    mo_doc_text = (ROOT / "src" / "mo_module" / "docs" / "internal_documentation.md").read_text(
-        encoding="utf-8"
+    assert_excludes_all(
+        transpiler_text,
+        (
+            "layout inicial personalizado (del módulo MO)",
+            "layouts del módulo MO",
+            "puente principal",
+            "híbrido MO+RL",
+        ),
     )
-    assert "Salida hacia el módulo `rl_module`" not in mo_doc_text
+    assert_excludes_all(
+        qiskit_readme_text,
+        ("Función puente para el Módulo MO",),
+    )
+
+
+def test_mo_docs_route_layout_consumption_through_integration() -> None:
+    mo_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
+
     assert "consumibles por el módulo `integration`" in mo_doc_text
-    assert (
-        "`get_compromise_layout()` y `get_best_layout()` proporcionan un layout único para escenarios `MO_Only` y futuros flujos `MO+RL`."
-        in mo_doc_text
+    assert "escenarios `MO_Only` y futuros flujos `MO+RL`" in mo_doc_text
+    assert "Salida hacia el módulo `rl_module`" not in mo_doc_text
+
+
+def test_mo_tuning_docs_keep_fixed_session_ref_point_contract() -> None:
+    tuning_doc_text = read_text("src/mo_module/docs/tuning.md")
+    internal_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
+
+    for text in (tuning_doc_text, internal_doc_text):
+        assert_mentions_fixed_session_ref_point(text)
+
+
+def test_mo_docs_describe_event_specific_progress_payloads() -> None:
+    tuning_doc_text = read_text("src/mo_module/docs/tuning.md")
+    mo_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
+
+    assert_mentions_event_specific_payloads(mo_doc_text)
+    assert_mentions_calibration_progress_fields(tuning_doc_text)
+    assert_mentions_trial_completed_fields(tuning_doc_text)
+
+
+def test_mo_generation_docs_match_supported_crossover_contract() -> None:
+    generation_doc_text = read_text("src/mo_module/docs/generacion_soluciones.md")
+
+    assert_mentions_supported_crossover_options(generation_doc_text)
+
+
+def test_rl_docs_and_reset_contract_keep_initial_layout_generic() -> None:
+    rl_environment_text = read_text("src/rl_module/environment.py")
+    rl_lookahead_text = read_text("src/rl_module/docs/lookahead_frontier.md")
+    rl_internal_text = read_text("src/rl_module/docs/internal_documentation.md")
+
+    assert_contains_all(
+        rl_environment_text,
+        (
+            "Permite inyectar un `initial_layout` externo a través de `options`.",
+            "# Ingesta genérica de layout inicial desde el llamador",
+        ),
+    )
+    assert_contains_all(
+        rl_lookahead_text,
+        (
+            "Si se inyecta `initial_layout`, el entorno lo respeta exactamente.",
+            "El productor del `initial_layout` es externo al módulo; el handoff MO -> RL pertenecerá a `src/integration/`.",
+        ),
+    )
+    assert_contains_all(
+        rl_internal_text,
+        (
+            "input externo",
+            "handoff MO -> RL",
+            "src/integration/",
+        ),
+    )
+    assert_excludes_all(
+        rl_environment_text,
+        ("desde el Módulo MO",),
+    )
+    assert_excludes_all(
+        rl_internal_text,
+        (
+            "generado típicamente por el módulo de Optimización Multiobjetivo (MO)",
+            "traído desde el Algoritmo Genético Multiobjetivo",
+        ),
     )
 
 
-def test_rl_environment_reset_docstring_is_source_agnostic():
-    rl_environment_text = (ROOT / "src" / "rl_module" / "environment.py").read_text(
-        encoding="utf-8"
+def test_integration_stub_declares_handoff_ownership() -> None:
+    integration_text = read_text("src/integration/__init__.py")
+
+    assert_contains_all(
+        integration_text,
+        (
+            '"""Módulo 4: Integración y experimentación.',
+            "único dueño del handoff MO -> RL",
+            "Baseline",
+            "MO_Only",
+            "RL_Only",
+            "MO+RL",
+            "Estado actual: stub.",
+            "__all__: list[str] = []",
+        ),
     )
-    assert "Permite inyectar un `initial_layout` externo a través de `options`." in rl_environment_text
-    assert "# Ingesta genérica de layout inicial desde el llamador" in rl_environment_text
-    assert "desde el Módulo MO" not in rl_environment_text
 
 
-def test_rl_frontier_docs_keep_initial_layout_generic():
-    rl_lookahead_text = (
-        ROOT / "src" / "rl_module" / "docs" / "lookahead_frontier.md"
-    ).read_text(encoding="utf-8")
-    assert (
-        "- El productor del `initial_layout` es externo al módulo; el handoff MO -> RL pertenecerá a `src/integration/`."
-        in rl_lookahead_text
-    )
+def test_mo_module_has_no_direct_rl_imports() -> None:
+    assert_module_tree_has_no_imports("src/mo_module", ("rl_module",))
 
 
-def test_rl_internal_docs_keep_initial_layout_generic():
-    rl_internal_text = (
-        ROOT / "src" / "rl_module" / "docs" / "internal_documentation.md"
-    ).read_text(encoding="utf-8")
-    assert "input externo" in rl_internal_text
-    assert "handoff MO -> RL" in rl_internal_text
-    assert "generado típicamente por el módulo de Optimización Multiobjetivo (MO)" not in rl_internal_text
-    assert "traído desde el Algoritmo Genético Multiobjetivo" not in rl_internal_text
+def test_rl_module_has_no_direct_mo_imports() -> None:
+    assert_module_tree_has_no_imports("src/rl_module", ("mo_module",))
 
 
-def test_integration_stub_declares_handoff_ownership():
-    integration_text = (ROOT / "src" / "integration" / "__init__.py").read_text(
-        encoding="utf-8"
-    )
-    assert '"""Módulo 4: Integración y experimentación.' in integration_text
-    assert "único dueño del handoff MO -> RL" in integration_text
-    assert "Estado actual: stub." in integration_text
-    assert "__all__: list[str] = []" in integration_text
-
-
-def test_mo_module_has_no_direct_rl_imports():
-    for mo_python_file in (ROOT / "src" / "mo_module").rglob("*.py"):
-        mo_python_tree = ast.parse(mo_python_file.read_text(encoding="utf-8"))
-        for node in ast.walk(mo_python_tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name != "rl_module"
-                    assert not alias.name.startswith("rl_module.")
-                    assert alias.name != "src.rl_module"
-                    assert not alias.name.startswith("src.rl_module.")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module is not None:
-                    assert node.module != "rl_module"
-                    assert not node.module.startswith("rl_module.")
-                    if node.level > 0:
-                        assert node.module != "rl_module"
-                        assert not node.module.startswith("rl_module.")
-                    assert node.module != "src.rl_module"
-                    assert not node.module.startswith("src.rl_module.")
-                    if node.module == "src":
-                        for alias in node.names:
-                            assert alias.name != "rl_module"
-                elif node.level > 0:
-                    for alias in node.names:
-                        assert alias.name != "rl_module"
-
-
-def test_rl_module_has_no_direct_mo_imports():
-    for rl_python_file in (ROOT / "src" / "rl_module").rglob("*.py"):
-        rl_python_tree = ast.parse(rl_python_file.read_text(encoding="utf-8"))
-        for node in ast.walk(rl_python_tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name != "mo_module"
-                    assert not alias.name.startswith("mo_module.")
-                    assert alias.name != "src.mo_module"
-                    assert not alias.name.startswith("src.mo_module.")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module is not None:
-                    assert node.module != "mo_module"
-                    assert not node.module.startswith("mo_module.")
-                    if node.level > 0:
-                        assert node.module != "mo_module"
-                        assert not node.module.startswith("mo_module.")
-                    assert node.module != "src.mo_module"
-                    assert not node.module.startswith("src.mo_module.")
-                    if node.module == "src":
-                        for alias in node.names:
-                            assert alias.name != "mo_module"
-                elif node.level > 0:
-                    for alias in node.names:
-                        assert alias.name != "mo_module"
-
-
-def test_qiskit_interface_has_no_direct_mo_or_rl_imports():
-    for qiskit_python_file in (ROOT / "src" / "qiskit_interface").rglob("*.py"):
-        qiskit_python_tree = ast.parse(qiskit_python_file.read_text(encoding="utf-8"))
-        for node in ast.walk(qiskit_python_tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name != "mo_module"
-                    assert not alias.name.startswith("mo_module.")
-                    assert alias.name != "src.mo_module"
-                    assert not alias.name.startswith("src.mo_module.")
-                    assert alias.name != "rl_module"
-                    assert not alias.name.startswith("rl_module.")
-                    assert alias.name != "src.rl_module"
-                    assert not alias.name.startswith("src.rl_module.")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module is not None:
-                    assert node.module != "mo_module"
-                    assert not node.module.startswith("mo_module.")
-                    assert node.module != "src.mo_module"
-                    assert not node.module.startswith("src.mo_module.")
-                    assert node.module != "rl_module"
-                    assert not node.module.startswith("rl_module.")
-                    assert node.module != "src.rl_module"
-                    assert not node.module.startswith("src.rl_module.")
-                    if node.module == "src":
-                        for alias in node.names:
-                            assert alias.name != "mo_module"
-                            assert alias.name != "rl_module"
-                elif node.level > 0:
-                    for alias in node.names:
-                        assert alias.name != "mo_module"
-                        assert alias.name != "rl_module"
+def test_qiskit_interface_has_no_direct_mo_or_rl_imports() -> None:
+    assert_module_tree_has_no_imports("src/qiskit_interface", ("mo_module", "rl_module"))

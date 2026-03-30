@@ -968,6 +968,68 @@ class TestQuantumTranspilationEnv:
         assert "is_truncated" in info
         assert info["action_type"] == "swap"
 
+    def test_step_marks_swap_between_empty_physical_nodes_as_invalid(self):
+        """Un SWAP entre dos nodos fisicos vacios es invalido pero alcanzable desde la estrategia."""
+        # Arrange
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+        env.reset(seed=42, options={"initial_layout": [0, 1]})
+        layout_before = env.current_layout.copy()
+        inverse_before = env._inverse_layout.copy()
+        swap_action = env.strategy.edges.index((2, 3))
+
+        # Act
+        _, _, terminated, truncated, info = env.step(swap_action)
+
+        # Assert
+        assert info["action_type"] == "swap"
+        assert info["is_valid_action"] is False
+        assert info["gates_executed"] == 0
+        assert terminated is False
+        assert truncated is False
+        assert env.total_swaps == 1
+        np.testing.assert_array_equal(env.current_layout, layout_before)
+        np.testing.assert_array_equal(env._inverse_layout, inverse_before)
+
+    def test_render_human_prints_step_summary_and_layout(self, routing_env, capsys):
+        """render() en modo human imprime el resumen del estado y el layout actual."""
+        # Arrange
+        routing_env.render_mode = "human"
+        routing_env.reset(seed=42)
+
+        # Act
+        result = routing_env.render()
+        captured = capsys.readouterr()
+
+        # Assert
+        assert result is None
+        assert captured.out == (
+            "Step: 0 | Swaps: 0 | Remaining Gates: 0\n"
+            "Current Layout (Logical->Physical): [0 1 2]\n"
+        )
+        assert captured.err == ""
+
+    def test_render_non_human_mode_is_no_op(self, routing_env, capsys):
+        """render() fuera de modo human no imprime nada y retorna None."""
+        # Arrange
+        routing_env.render_mode = "ansi"
+        routing_env.reset(seed=42)
+
+        # Act
+        result = routing_env.render()
+        captured = capsys.readouterr()
+
+        # Assert
+        assert result is None
+        assert captured.out == ""
+        assert captured.err == ""
+
     def test_multiple_resets(self, routing_env):
         """El entorno soporta múltiples resets consecutivos."""
         for _ in range(5):

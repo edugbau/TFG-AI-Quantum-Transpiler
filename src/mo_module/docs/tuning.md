@@ -68,13 +68,17 @@ El tuning soporta dos modos explícitos:
 - `calibrated`: antes de lanzar los trials, ejecuta un warm-up automático con varias configuraciones ancla del espacio de búsqueda y construye un `session_ref_point` conservador. Ese valor se muestra de forma explícita en la GUI y queda fijo para todos los trials Optuna de la sesión.
 - `manual`: no ejecuta warm-up. El usuario proporciona manualmente `ref_point` al crear `LayoutTuner`, y ese valor fijo se usa en toda la sesión.
 
-En modo `calibrated`, el `ref_point` se obtiene a partir del peor valor observado en las ejecuciones de calibración, con un margen adicional del 10 %. La idea es que sea deliberadamente conservador para reducir el riesgo de invalidarlo durante los trials reales.
+En modo `calibrated`, el `ref_point` se obtiene a partir del peor valor observado en las ejecuciones de calibración, con un margen adicional del 30 % (`1.3x + 1e-6`). La idea es que sea deliberadamente conservador para reducir el riesgo de invalidarlo durante los trials reales.
 
-### Fallo por `ref_point` inválido
+### Penalización por `ref_point` inválido
 
 El `ref_point` fijo debe ser **estrictamente peor** que todo frente de Pareto evaluado en cada objetivo. En este proyecto, como los objetivos (`depth`, `cnot_count`) se minimizan, eso significa que cada coordenada del `ref_point` debe ser estrictamente mayor que el máximo de ese frente en la coordenada correspondiente.
 
-Si durante la sesión aparece un frente cuya coordenada máxima alcanza o supera el `ref_point`, el cálculo de HV deja de ser válido y el tuning falla con un `ValueError` (`ref_point must be strictly greater than the Pareto front maximum in every objective`). Esto puede ocurrir si un `ref_point` manual se elige demasiado ajustado o si incluso el `ref_point` calibrado queda invalidado por un frente posterior peor que los usados en el warm-up.
+Si durante la sesión aparece un frente cuya coordenada máxima alcanza o supera el `ref_point`, ese frente se penaliza con `HV=0.0` y se registra un warning en logs. Esto puede ocurrir si un `ref_point` manual se elige demasiado ajustado o si incluso el `ref_point` calibrado queda invalidado por un frente posterior peor que los usados en el warm-up. La sesión continúa y el trial conserva un score comparable porque el promedio incorpora ese `0.0` como contribución de la seed afectada.
+
+### Score del trial: promedio por resultado/frente
+
+Cada trial se ejecuta con varias seeds (`n_seeds`). Para cada seed, `optimize_layout()` produce un `OptimizationResult` con su frente de Pareto y se calcula un HV usando el mismo `session_ref_point` fijo. El score final del trial es la media de esas contribuciones individuales; no se selecciona un único frente "ganador" dentro del trial.
 
 ### Espacio categórico de mutación
 
@@ -208,6 +212,8 @@ La interfaz de `benchmark_gui.py` refleja el comportamiento actual del tuner:
 - fase actual (`preparando`, `warm-up`, `tuning`, `completado`);
 - mejor HV observado hasta el momento;
 - `ref_point` explícito usado en la sesión.
+
+Los eventos del callback no comparten todos el mismo payload. En particular, `calibration_progress` incluye `current_step`, `total_steps`, `config` y `ref_point_candidate`, mientras que `trial_completed` incluye `score`, `best_score`, `params` y el `ref_point` fijo de la sesión.
 
 En modo `calibrated`, la GUI muestra cuándo empieza la calibración, cuándo termina el warm-up y cuál fue el `ref_point` fijado automáticamente. En modo `manual`, muestra desde el inicio el `ref_point` introducido por el usuario y deja claro que no hay warm-up.
 
