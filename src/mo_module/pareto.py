@@ -453,7 +453,7 @@ def plot_pareto_front_2d(
     """
     import matplotlib.pyplot as plt
 
-    if opt_result.pareto_fitness is None:
+    if opt_result.pareto_fitness is None or len(opt_result.pareto_fitness) == 0:
         logger.warning("No hay datos de Pareto para visualizar.")
         return None
 
@@ -552,7 +552,11 @@ def plot_pareto_front_3d(
     """
     import matplotlib.pyplot as plt
 
-    if opt_result.pareto_fitness is None or opt_result.pareto_fitness.shape[1] < 3:
+    if (
+        opt_result.pareto_fitness is None
+        or len(opt_result.pareto_fitness) == 0
+        or opt_result.pareto_fitness.shape[1] < 3
+    ):
         logger.warning("Se necesitan al menos 3 objetivos para plot 3D.")
         return None
 
@@ -613,7 +617,7 @@ def plot_parallel_coordinates(
     """
     import matplotlib.pyplot as plt
 
-    if opt_result.pareto_fitness is None:
+    if opt_result.pareto_fitness is None or len(opt_result.pareto_fitness) == 0:
         logger.warning("No hay datos de Pareto para visualizar.")
         return None
 

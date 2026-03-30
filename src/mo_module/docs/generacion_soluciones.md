@@ -24,15 +24,27 @@ El resultado es una matriz `(pop_size, n)` con `pop_size` layouts independientes
 
 ---
 
-## 2. Generación por Crossover — `LayoutCrossover._do`
+## 2. Generación por Crossover — `crossover_operator`
 
-En cada generación, pymoo selecciona pares de padres y aplica el operador de cruce para producir hijos. Se usa **Order Crossover (OX)** adaptado a permutaciones parciales.
+En cada generación, pymoo selecciona pares de padres y aplica el operador configurado en `OptimizerConfig.crossover_operator` para producir hijos:
+
+- `dpx`: usa `DPXCrossover` y es la opción por defecto del módulo.
+- `ox`: usa `LayoutCrossover` como alternativa compatible para permutaciones parciales.
 
 ### Selección de padres
 - **NSGA-II**: torneo binario (gestiona pymoo internamente).
 - **MOEA/D**: vecindad por vectores de referencia (gestiona pymoo internamente).
 
-### Procedimiento OX (`_ox_child`)
+### Procedimiento DPX (`_dpx_child`, caso por defecto)
+
+DPX preserva primero las asignaciones exactas que ambos padres comparten en la misma posición y rellena después las posiciones libres con el orden del padre donante.
+
+1. Se fijan las posiciones donde `parent_a[i] == parent_b[i]`.
+2. Se recopilan del padre donante los qubits aún no usados.
+3. Se rellenan las posiciones libres respetando ese orden.
+4. Si quedara algún hueco excepcional, se invoca `repair_layout()` como fallback.
+
+### Procedimiento OX (`_ox_child`, alternativa soportada)
 
 Dados el padre A (donante del segmento) y el padre B (donante del relleno):
 
@@ -57,7 +69,7 @@ Hijo 1:   [_, _, _, | 2, 0 | , _]  ← segmento de A
 Hijo 1:   [5, 4, 1, | 2, 0 | , 3]
 ```
 
-**Archivo**: `encoding.py` → clase `LayoutCrossover`, métodos `_do` y `_ox_child`.
+**Archivo**: `encoding.py` → clases `DPXCrossover` y `LayoutCrossover`, métodos `_do`, `_dpx_child` y `_ox_child`.
 
 ---
 
@@ -117,7 +129,7 @@ Población actual (pop_size individuos)
 Selección de padres (torneo / vecindad)
         │
         ▼
-LayoutCrossover._do → hijos con OX
+Operador de crossover configurado (`dpx` por defecto, `ox` opcional)
         │
         ▼
 LayoutMutation._do  → swap y/o replace
@@ -142,7 +154,7 @@ Se repite durante `n_generations` generaciones. Al finalizar, pymoo extrae el fr
 |:---|:---|:---|
 | `population_size` | 50 | Número de individuos por generación |
 | `n_generations` | 100 | Criterio de parada |
-| `prob_crossover` | 0.9 | Probabilidad de que un par de padres haga crossover |
+| `crossover_operator` | `"dpx"` | Selecciona el operador de crossover (`"dpx"` por defecto, `"ox"` como alternativa) |
 | `prob_swap_mutation` | 0.3 | Categoría de swap mutation por individuo |
 | `prob_replace_mutation` | 0.7 | Categoría de replace mutation por individuo |
 | `algorithm` | `"nsga2"` | Algoritmo evolutivo (`"nsga2"` o `"moead"`) |

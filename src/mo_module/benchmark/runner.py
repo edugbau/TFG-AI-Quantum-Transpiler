@@ -315,7 +315,6 @@ class BenchmarkRunner:
                     objectives=list(self.config.objectives),
                     optimization_level=self.config.optimization_level,
                     crossover_operator=self.config.crossover_operator,
-                    prob_crossover=self.config.prob_crossover,
                     prob_swap_mutation=self.config.prob_swap_mutation,
                     prob_replace_mutation=self.config.prob_replace_mutation,
                     seed=seed,

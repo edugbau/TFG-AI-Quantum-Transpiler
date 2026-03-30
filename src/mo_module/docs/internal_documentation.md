@@ -11,7 +11,7 @@ Define cómo se representan los layouts como individuos dentro del algoritmo evo
 - **LayoutSearchSpace**: Dataclass que encapsula las restricciones del espacio de búsqueda (número de qubits lógicos/físicos, qubits disponibles, aristas del coupling map).
 - **Operadores genéticos custom para pymoo**:
   - `LayoutSampling`: Genera individuos iniciales seleccionando subconjuntos aleatorios de qubits físicos.
-  - `LayoutCrossover`: Order Crossover (OX) adaptado a permutaciones parciales.
+  - `crossover_operator`: selecciona entre `DPXCrossover` (`"dpx"`, valor por defecto) y `LayoutCrossover` (`"ox"`) para recombinación de permutaciones parciales.
 - `LayoutMutation`: Combina *swap mutation* (intercambio de posiciones) y *replace mutation* (reemplazo por qubit no usado). A nivel de configuración del módulo, ambas probabilidades se seleccionan de forma categórica para mejorar reproducibilidad y comparabilidad entre experimentos.
 - **Validación y reparación**: `validate_layout()` verifica factibilidad; `repair_layout()` corrige duplicados tras crossover.
 
@@ -64,9 +64,10 @@ Orquesta el ajuste de `OptimizerConfig` con Optuna usando HV como score de sesi�
 - **Modos de `ref_point`**:
   - `calibrated`: ejecuta un warm-up previo con configuraciones ancla y fija automáticamente un `session_ref_point` conservador antes de empezar los trials.
   - `manual`: no ejecuta warm-up; exige `ref_point` explícito al usuario y usa ese valor fijo durante toda la sesión.
-- **Calibración conservadora**: `_build_calibration_configs()` genera anclas deterministas del espacio de búsqueda y `_calibrate_reference_point()` construye el `ref_point` a partir del peor frente observado con un margen del 10 %.
-- **Validación del HV**: `_compute_hypervolume_score()` exige que el `ref_point` sea estrictamente mayor que el máximo del frente de Pareto en cada objetivo. Si deja de cumplirse, lanza `ValueError` y la comparación HV de esa sesión queda invalidada.
-- **Progreso estructurado**: `progress_callback` emite `calibration_started`, `calibration_completed`, `trial_completed` y `tuning_completed`, con fase actual, mejor HV y `ref_point` explícito, para que la GUI muestre el estado en vivo.
+- **Calibración conservadora**: `_build_calibration_configs()` genera anclas deterministas del espacio de búsqueda y `_calibrate_reference_point()` construye el `session_ref_point` a partir del peor frente observado con un margen del 30 % (`1.3x + 1e-6`).
+- **Validación del HV**: `_compute_hypervolume_score()` exige que el `ref_point` sea estrictamente mayor que el máximo del frente de Pareto en cada objetivo. Si un frente evaluado viola ese `session_ref_point` fijo, el resultado de ese frente se penaliza con `HV=0.0` y se registra un warning; la sesión continúa para mantener un score comparable entre trials.
+- **Score por trial**: `_evaluate_config()` evalúa varias seeds por trial, calcula el HV de cada resultado/frente usando el mismo `session_ref_point` y promedia esas contribuciones para obtener el score final que recibe Optuna.
+- **Progreso estructurado**: `progress_callback` emite `calibration_started`, `calibration_progress`, `calibration_completed`, `trial_completed` y `tuning_completed`. No todos los eventos comparten el mismo payload: cada evento publica solo los campos relevantes para esa fase.
 
 ## Patrones de Diseño Aplicados
 
@@ -150,14 +151,15 @@ Flujo ejecutado por `LayoutTuner.tune()`:
    - **calibrated**: construir configuraciones de warm-up, ejecutar la calibración y fijar un `session_ref_point` conservador para toda la sesión.
 3. Para cada trial, sugerir una `OptimizerConfig` con `_suggest_config()`.
 4. Evaluar la configuración con varias seeds mediante `_evaluate_config()`, calculando el HV de cada frente con el mismo `self._session_ref_point`.
-5. Reportar progreso estructurado tras la calibración y tras cada trial, incluyendo fase, mejor HV y `ref_point` en uso.
-6. Al finalizar, reconstruir `best_config()` desde el mejor trial Optuna y conservar el `session_ref_point` usado en la sesión para inspección y GUI.
+5. Promediar los HV por seed para obtener el score del trial.
+6. Reportar progreso estructurado tras la calibración y tras cada trial, incluyendo fase, mejor HV y `ref_point` en uso.
+7. Al finalizar, reconstruir `best_config()` desde el mejor trial Optuna y conservar el `session_ref_point` usado en la sesión para inspección y GUI.
 
 Notas operativas:
 
 - El warm-up de `calibrated` no forma parte de los trials Optuna; solo sirve para fijar el `ref_point` de sesión.
 - El `ref_point` calibrado es conservador, pero no se reajusta a mitad de sesión aunque aparezca un frente peor.
-- Si un frente posterior deja de ser estrictamente peor que el `ref_point` fijo, el cálculo de HV falla por diseño, porque las comparaciones entre trials dejarían de ser coherentes.
+- Si un frente posterior deja de ser estrictamente peor que el `ref_point` fijo, ese frente aporta `HV=0.0` al promedio del trial y se emite un warning; no se recalibra el punto a mitad de sesión.
 
 ## Funciones Llamadas Extensamente
 
@@ -192,4 +194,5 @@ Notas operativas:
 ### Integración con la GUI de benchmark/tuning:
 - `benchmark/benchmark_gui.py` expone los modos `calibrated` y `manual` al usuario.
 - La GUI muestra progreso en vivo, fase actual, mejor HV y el `ref_point` explícito activo durante la sesión.
+- `calibration_progress` añade `current_step`, `total_steps`, `config` evaluada y `ref_point_candidate`; `trial_completed` añade score, `best_score` y parámetros del trial. Los payloads son específicos por evento.
 - En modo `calibrated`, la GUI informa del warm-up y del `ref_point` fijado automáticamente; en modo `manual`, deja claro que no hay warm-up y muestra el valor introducido por el usuario.

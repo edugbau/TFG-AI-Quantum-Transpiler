@@ -40,7 +40,6 @@ def _run_mo_one(bc_name, circuit, seed, backend, config):
         objectives=list(config.objectives),
         optimization_level=config.optimization_level,
         crossover_operator=config.crossover_operator,
-        prob_crossover=config.prob_crossover,
         prob_swap_mutation=config.prob_swap_mutation,
         prob_replace_mutation=config.prob_replace_mutation,
         seed=seed,
@@ -79,6 +78,7 @@ class BenchmarkGUI(ctk.CTk):
         self._tuner = None
         self._tuning_run_succeeded = False
         self._active_manual_ref_point = None
+        self._benchmark_crossover_operator = 'dpx'
         self._tuning_event_queue = Queue()
         self._tuning_poll_after_id = None
         self._tuning_poll_shutdown = False
@@ -737,6 +737,7 @@ class BenchmarkGUI(ctk.CTk):
         gens = int(self.gens_slider.get())
         prob_swap_mutation = float(self.swap_mut_option.get())
         prob_replace_mutation = float(self.replace_mut_option.get())
+        crossover_operator = getattr(self, '_benchmark_crossover_operator', 'dpx')
 
         self.log(f'Benchmark: {len(circuits)} circuitos × {len(seeds)} semillas = {len(circuits)*len(seeds)} tareas')
         self.log(f'Backend: {backend_name}  |  Algoritmo: {algo_name}  |  Workers: {n_workers}')
@@ -754,6 +755,7 @@ class BenchmarkGUI(ctk.CTk):
                 algo_name,
                 pop_size,
                 gens,
+                crossover_operator,
                 prob_swap_mutation,
                 prob_replace_mutation,
             ),
@@ -769,6 +771,7 @@ class BenchmarkGUI(ctk.CTk):
         algo_name,
         pop_size,
         gens,
+        crossover_operator,
         prob_swap_mutation,
         prob_replace_mutation,
     ):
@@ -778,7 +781,7 @@ class BenchmarkGUI(ctk.CTk):
             population_size=pop_size,
             n_generations=gens,
             objectives=['depth', 'cnot_count'],
-            crossover_operator='dpx',
+            crossover_operator=crossover_operator,
             prob_swap_mutation=prob_swap_mutation,
             prob_replace_mutation=prob_replace_mutation,
             verbose=False,
@@ -1097,6 +1100,7 @@ class BenchmarkGUI(ctk.CTk):
             self.replace_mut_option.set(str(best.prob_replace_mutation))
             self._update_swap_mut_label(str(best.prob_swap_mutation))
             self._update_replace_mut_label(str(best.prob_replace_mutation))
+            self._benchmark_crossover_operator = best.crossover_operator
             
             if best.algorithm in ['nsga2', 'moead']:
                  self.algo_option.set(best.algorithm)

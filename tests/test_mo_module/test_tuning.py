@@ -413,6 +413,7 @@ class TestLayoutTuner:
         backend_torino,
     ):
         """La calibración explora anclas del espacio para fijar un ref_point robusto."""
+        # Arrange
         def fake_optimize_layout(circuit, backend, config):
             if (config.population_size, config.n_generations) == (8, 5):
                 front = np.array([[20.0, 24.0]])
@@ -457,24 +458,27 @@ class TestLayoutTuner:
         monkeypatch.setattr(LayoutTuner, "_suggest_config", fake_suggest_config)
         monkeypatch.setattr(LayoutTuner, "_trial_to_config", fake_trial_to_config)
 
+        space = HyperparameterSpace(
+            population_size_range=(6, 8),
+            n_generations_range=(3, 5),
+            crossover_operators=["dpx"],
+            algorithms=["nsga2"],
+            prob_swap_mutation_choices=(0.3,),
+            prob_replace_mutation_choices=(0.5,),
+        )
         tuner = LayoutTuner(
             circuit=small_circuit,
             backend=backend_torino,
             n_trials=1,
             n_seeds=1,
-            space=HyperparameterSpace(
-                population_size_range=(6, 8),
-                n_generations_range=(3, 5),
-                crossover_operators=["dpx"],
-                algorithms=["nsga2"],
-                prob_swap_mutation_choices=(0.3,),
-                prob_replace_mutation_choices=(0.5,),
-            ),
+            space=space,
             ref_point_mode="calibrated",
         )
 
+        # Act
         tuner.tune(show_progress_bar=False)
 
+        # Assert
         expected_ref_point = np.array([26.0, 31.2]) + 1e-6
         assert np.allclose(tuner.session_ref_point, expected_ref_point)
 
@@ -638,6 +642,7 @@ class TestLayoutTuner:
         backend_torino,
     ):
         """El callback de progreso recibe eventos estructurados del tuning."""
+        # Arrange
         events = []
         scores = iter([0.5, 0.8])
         warmup_fronts = iter(
@@ -662,23 +667,26 @@ class TestLayoutTuner:
         monkeypatch.setattr(tuning, "optimize_layout", fake_optimize_layout)
         monkeypatch.setattr(tuning, "_evaluate_config", fake_evaluate_config)
 
+        space = HyperparameterSpace(
+            population_size_range=(6, 8),
+            n_generations_range=(3, 5),
+            crossover_operators=["dpx"],
+            algorithms=["nsga2"],
+        )
         tuner = LayoutTuner(
             circuit=small_circuit,
             backend=backend_torino,
             n_trials=2,
             n_seeds=1,
-            space=HyperparameterSpace(
-                population_size_range=(6, 8),
-                n_generations_range=(3, 5),
-                crossover_operators=["dpx"],
-                algorithms=["nsga2"],
-            ),
+            space=space,
             ref_point_mode="calibrated",
             progress_callback=events.append,
         )
 
+        # Act
         tuner.tune(show_progress_bar=False)
 
+        # Assert
         event_names = [event["event"] for event in events]
         calibration_progress_events = [
             event for event in events if event["event"] == "calibration_progress"
@@ -792,6 +800,7 @@ class TestLayoutTuner:
         backend_torino,
     ):
         """El warm-up corto sigue fijando un ref_point valido con varios algoritmos."""
+        # Arrange
         captured_ref_points = []
         warmup_configs = []
 
@@ -817,24 +826,27 @@ class TestLayoutTuner:
         monkeypatch.setattr(tuning, "optimize_layout", fake_optimize_layout)
         monkeypatch.setattr(tuning, "_evaluate_config", fake_evaluate_config)
 
+        space = HyperparameterSpace(
+            population_size_range=(6, 8),
+            n_generations_range=(3, 5),
+            crossover_operators=["dpx", "ox"],
+            algorithms=["nsga2", "moead"],
+            prob_swap_mutation_choices=(0.1, 0.7),
+            prob_replace_mutation_choices=(0.1, 0.9),
+        )
         tuner = LayoutTuner(
             circuit=small_circuit,
             backend=backend_torino,
             n_trials=2,
             n_seeds=5,
-            space=HyperparameterSpace(
-                population_size_range=(6, 8),
-                n_generations_range=(3, 5),
-                crossover_operators=["dpx", "ox"],
-                algorithms=["nsga2", "moead"],
-                prob_swap_mutation_choices=(0.1, 0.7),
-                prob_replace_mutation_choices=(0.1, 0.9),
-            ),
+            space=space,
             ref_point_mode="calibrated",
         )
 
+        # Act
         tuner.tune(show_progress_bar=False)
 
+        # Assert
         # With 5 seeds × 3 anchors = 15 unique calibration configs
         assert len(warmup_configs) == 15
         assert {config[0] for config in warmup_configs} == {"nsga2", "moead"}
@@ -1041,6 +1053,7 @@ class TestLayoutTuner:
         """
         from src.mo_module import tuning as tuning_module
 
+        # Arrange
         warmup_front = np.array([[20.0, 9.0], [24.0, 10.0]])
         # Calibrated ref_point will be: max([20,24])*1.3+1e-6=31.2+1e-6, max([9,10])*1.3+1e-6=13+1e-6
         # This trial front exceeds the calibrated ref_point in both objectives
@@ -1069,21 +1082,24 @@ class TestLayoutTuner:
 
         monkeypatch.setattr(tuning_module, "optimize_layout", fake_optimize_layout)
 
+        space = HyperparameterSpace(
+            population_size_range=(20, 80),
+            n_generations_range=(30, 120),
+        )
         tuner = LayoutTuner(
             circuit=small_circuit,
             backend=backend_torino,
             n_trials=2,
             n_seeds=3,
-            space=HyperparameterSpace(
-                population_size_range=(20, 80),
-                n_generations_range=(30, 120),
-            ),
+            space=space,
             ref_point_mode="calibrated",
         )
 
+        # Act
         # Must not raise — this was the original bug
         tuner.tune(show_progress_bar=False)
 
+        # Assert
         assert tuner.session_ref_point is not None
         # All trials get score=0.0 because their front exceeds the ref_point
         assert tuner._best_score == 0.0

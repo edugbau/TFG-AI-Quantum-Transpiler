@@ -160,8 +160,6 @@ class OptimizerConfig:
             Operador de cruce a usar. Valores válidos:
             ``"dpx"`` (Dynastic Potential Crossover, por defecto) o
             ``"ox"`` (Order Crossover, alternativa legacy).
-        prob_crossover:
-            Probabilidad de cruce.
         prob_swap_mutation:
             Categoria de probabilidad de mutacion por swap.
         prob_replace_mutation:
@@ -180,7 +178,6 @@ class OptimizerConfig:
     )
     optimization_level: int = 1
     crossover_operator: str = "dpx"
-    prob_crossover: float = 0.9
     prob_swap_mutation: float = DEFAULT_SWAP_MUTATION_CATEGORIES[1]
     prob_replace_mutation: float = DEFAULT_REPLACE_MUTATION_CATEGORIES[3]
     seed: int = 42

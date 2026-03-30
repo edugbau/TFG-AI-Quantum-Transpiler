@@ -72,6 +72,53 @@ def single_circuit() -> list[BenchmarkCircuit]:
     return [make_custom_circuit("test_3q", qc, tags=("test",))]
 
 
+def _make_optimization_result(
+    pareto_fitness: list[list[float]] | None,
+    *,
+    objective_names: list[str] | None = None,
+    elapsed_time_s: float = 1.0,
+    pareto_layouts: list[list[int]] | None = None,
+) -> OptimizationResult:
+    """Construye un OptimizationResult sintético para tests."""
+    if objective_names is None:
+        objective_names = ["depth", "cnot_count"]
+
+    fitness_array = None
+    if pareto_fitness is not None:
+        fitness_array = np.array(pareto_fitness, dtype=float)
+
+    if pareto_layouts is None:
+        n_solutions = 0 if pareto_fitness is None else len(pareto_fitness)
+        pareto_layouts = [list(range(3)) for _ in range(n_solutions)]
+
+    return OptimizationResult(
+        pareto_layouts=pareto_layouts,
+        pareto_fitness=fitness_array,
+        objective_names=objective_names,
+        elapsed_time_s=elapsed_time_s,
+        algorithm_name="nsga2",
+        backend_name="fake_torino",
+        circuit_name="synthetic",
+    )
+
+
+def _make_result_set(runs: list[BenchmarkRun]) -> BenchmarkResultSet:
+    """Construye un BenchmarkResultSet sintético para tests."""
+    config = OptimizerConfig(
+        algorithm="nsga2",
+        population_size=6,
+        n_generations=4,
+        objectives=["depth", "cnot_count"],
+        verbose=False,
+    )
+    return BenchmarkResultSet(
+        runs=runs,
+        backend_name="fake_torino",
+        config=config,
+        total_elapsed_s=12.5,
+    )
+
+
 # ===========================================================================
 #  Tests de circuits.py
 # ===========================================================================
@@ -211,6 +258,106 @@ class TestBenchmarkRunner:
         results = runner.run()
         assert results.total_elapsed_s > 0
 
+    def test_runs_for_circuit_excludes_failed_runs(self):
+        """runs_for_circuit filtra ejecuciones fallidas."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result(
+                        [[5.0, 7.0]], elapsed_time_s=1.25
+                    ),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    error="optimization failed",
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_b",
+                    seed=0,
+                    result=_make_optimization_result(
+                        [[9.0, 11.0]], elapsed_time_s=2.0
+                    ),
+                ),
+            ]
+        )
+
+        # Act
+        runs = result_set.runs_for_circuit("circuit_a")
+
+        # Assert
+        assert [run.seed for run in runs] == [0]
+        assert all(run.ok for run in runs)
+
+    def test_elapsed_per_seed_returns_successful_run_times(self):
+        """elapsed_per_seed devuelve tiempos sólo de runs correctos."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result(
+                        [[5.0, 7.0]], elapsed_time_s=1.25
+                    ),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    error="failed seed",
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=2,
+                    result=_make_optimization_result(
+                        [[6.0, 8.0]], elapsed_time_s=2.5
+                    ),
+                ),
+            ]
+        )
+
+        # Act
+        elapsed = result_set.elapsed_per_seed("circuit_a")
+
+        # Assert
+        assert elapsed == [1.25, 2.5]
+
+    def test_pareto_sizes_returns_front_sizes_for_successful_runs(self):
+        """pareto_sizes devuelve tamaños de frente de runs correctos."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result(
+                        [[5.0, 7.0], [4.0, 8.0]], elapsed_time_s=1.0
+                    ),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    error="failed seed",
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=2,
+                    result=_make_optimization_result(
+                        [[3.0, 9.0]], elapsed_time_s=1.5
+                    ),
+                ),
+            ]
+        )
+
+        # Act
+        pareto_sizes = result_set.pareto_sizes("circuit_a")
+
+        # Assert
+        assert pareto_sizes == [2, 1]
+
 
 # ===========================================================================
 #  Tests de analysis.py
@@ -282,6 +429,191 @@ class TestAnalysis:
         assert "rows" in d
         assert len(d["rows"]) == 1  # 1 circuito
         assert "depth_mean" in d["rows"][0]
+
+    def test_analyze_results_with_valid_baseline_computes_hv_stats(self):
+        """El baseline válido produce estadísticas de hipervolumen."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result(
+                        [[2.0, 6.0], [4.0, 3.0]], elapsed_time_s=1.0
+                    ),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    result=_make_optimization_result(
+                        [[3.0, 5.0], [5.0, 2.0]], elapsed_time_s=1.5
+                    ),
+                ),
+            ]
+        )
+        baseline_results = {
+            "circuit_a": {
+                0: {"depth": 5.0, "cnot_count": 5.0},
+                1: {"depth": 6.0, "cnot_count": 4.0},
+            }
+        }
+
+        # Act
+        report = analyze_results(result_set, baseline_results=baseline_results)
+
+        # Assert
+        analysis = report.circuit_analyses[0]
+        assert analysis.mo_hv_stats is not None
+        assert analysis.bl_hv_stats is not None
+        assert analysis.mo_hv_stats.name == "HV_MO"
+        assert analysis.bl_hv_stats.name == "HV_Qiskit"
+        assert analysis.mo_hv_stats.mean > 0.0
+        assert analysis.bl_hv_stats.mean > 0.0
+        assert analysis.hv_pvalue is not None
+
+    def test_analyze_results_missing_baseline_seed_uses_zero_hv_for_that_seed(self):
+        """Una semilla ausente en baseline cuenta como HV=0 para baseline."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result([[2.0, 6.0], [4.0, 3.0]]),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    result=_make_optimization_result([[3.0, 5.0], [5.0, 2.0]]),
+                ),
+            ]
+        )
+        baseline_results = {
+            "circuit_a": {
+                0: {"depth": 6.0, "cnot_count": 6.0},
+            }
+        }
+
+        # Act
+        report = analyze_results(result_set, baseline_results=baseline_results)
+
+        # Assert
+        analysis = report.circuit_analyses[0]
+        assert analysis.bl_hv_stats is not None
+        assert analysis.bl_hv_stats.values[-1] == 0.0
+        assert analysis.hv_pvalue is not None
+
+    def test_analyze_results_empty_front_and_invalid_baseline_keep_hv_stats_finite(self):
+        """Frentes vacíos e inf en baseline no rompen el cálculo de HV."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result(
+                        [], elapsed_time_s=1.0, pareto_layouts=[]
+                    ),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    result=_make_optimization_result(
+                        [[3.0, 4.0]], elapsed_time_s=1.2
+                    ),
+                ),
+            ]
+        )
+        baseline_results = {
+            "circuit_a": {
+                0: {"depth": float("inf"), "cnot_count": float("inf")},
+                1: {"depth": 5.0, "cnot_count": 6.0},
+            }
+        }
+
+        # Act
+        report = analyze_results(result_set, baseline_results=baseline_results)
+
+        # Assert
+        analysis = report.circuit_analyses[0]
+        assert analysis.mo_hv_stats is not None
+        assert analysis.bl_hv_stats is not None
+        assert analysis.mo_hv_stats.values[0] == 0.0
+        assert analysis.bl_hv_stats.values[0] == 0.0
+        assert np.isfinite(analysis.mo_hv_stats.mean)
+        assert np.isfinite(analysis.bl_hv_stats.mean)
+
+    def test_analyze_results_none_front_is_treated_as_zero_hv(self):
+        """Un frente ausente produce HV=0 sin romper el análisis."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result(None, elapsed_time_s=1.0),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    result=_make_optimization_result(
+                        [[3.0, 4.0]], elapsed_time_s=1.2
+                    ),
+                ),
+            ]
+        )
+        baseline_results = {
+            "circuit_a": {
+                0: {"depth": 7.0, "cnot_count": 8.0},
+                1: {"depth": 5.0, "cnot_count": 6.0},
+            }
+        }
+
+        # Act
+        report = analyze_results(result_set, baseline_results=baseline_results)
+
+        # Assert
+        analysis = report.circuit_analyses[0]
+        assert analysis.mo_hv_stats is not None
+        assert analysis.bl_hv_stats is not None
+        assert analysis.mo_hv_stats.values[0] == 0.0
+        assert analysis.bl_hv_stats.values[0] > 0.0
+
+    def test_analyze_results_identical_mo_and_baseline_sets_hv_pvalue_to_one(self):
+        """HV idéntico entre MO y baseline fija hv_pvalue=1.0."""
+        # Arrange
+        result_set = _make_result_set(
+            [
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=0,
+                    result=_make_optimization_result([[2.0, 3.0]]),
+                ),
+                BenchmarkRun(
+                    circuit_name="circuit_a",
+                    seed=1,
+                    result=_make_optimization_result([[4.0, 5.0]]),
+                ),
+            ]
+        )
+        baseline_results = {
+            "circuit_a": {
+                0: {"depth": 2.0, "cnot_count": 3.0},
+                1: {"depth": 4.0, "cnot_count": 5.0},
+            }
+        }
+
+        # Act
+        report = analyze_results(result_set, baseline_results=baseline_results)
+
+        # Assert
+        analysis = report.circuit_analyses[0]
+        assert analysis.mo_hv_stats is not None
+        assert analysis.bl_hv_stats is not None
+        assert analysis.mo_hv_stats.values == pytest.approx(
+            analysis.bl_hv_stats.values
+        )
+        assert analysis.hv_pvalue == 1.0
 
 
 # ===========================================================================

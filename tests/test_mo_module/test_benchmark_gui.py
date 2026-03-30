@@ -1,5 +1,6 @@
 """Tests de regresion de la GUI de benchmark/tuning."""
 
+import types
 from queue import Queue
 
 from src.mo_module.benchmark.benchmark_gui import BenchmarkGUI
@@ -18,6 +19,15 @@ class _DummyWidget:
         self.values["value"] = value
         self.calls.append(("set", value))
 
+    def get(self):
+        return self.values.get("value")
+
+    def delete(self, *_args):
+        self.calls.append(("delete", _args))
+
+    def destroy(self):
+        self.calls.append(("destroy", None))
+
 
 class _DummyVar:
     def __init__(self, value):
@@ -25,6 +35,19 @@ class _DummyVar:
 
     def get(self):
         return self.value
+
+
+class _DummyContainer:
+    def winfo_children(self):
+        return []
+
+
+class _DummyTabView:
+    def __init__(self):
+        self.selected = None
+
+    def set(self, value):
+        self.selected = value
 
 
 class _DummyGuiHarness:
@@ -129,11 +152,39 @@ class TestBenchmarkGuiTuningQueue:
 
     def test_calibration_progress_uses_existing_step_fields_for_visible_warmup_state(self):
         """La GUI traduce current_step/total_steps a texto y barra visibles de warm-up."""
+        # Arrange
         harness = _DummyGuiHarness()
+        progress_event = {
+            "event": "calibration_progress",
+            "current_step": 2,
+            "total_steps": 3,
+            "ref_point_mode": "calibrated",
+            "ref_point_candidate": [8.8, 9.9],
+            "config": {
+                "algorithm": "nsga2",
+                "population_size": 30,
+                "n_generations": 50,
+            },
+        }
 
-        BenchmarkGUI._apply_tuner_progress_event(
-            harness,
-            {
+        # Act
+        BenchmarkGUI._apply_tuner_progress_event(harness, progress_event)
+
+        # Assert
+        assert harness.t_progress_label.values["text"] == "Warm-up 2/3 completado (calibrated)."
+        assert harness.t_phase_value.values["text"] == "Fase: warm-up"
+        assert harness.t_trial_value.values["text"] == "Warm-up: 2/3"
+        assert harness.t_progress_bar.values["value"] == 0.1 * (2 / 3)
+        assert harness.t_ref_value.values["text"] == "Ref. point: calibrated [8.800, 9.900]"
+        assert any("[Warm-up 2/3]" in line for line in harness.logged)
+
+    def test_polling_loop_processes_completed_event_and_restores_ui_before_plotting(self):
+        """La cola usa completed y decide el render en el main thread tras restaurar la UI."""
+        # Arrange
+        harness = _DummyGuiHarness()
+        calibration_progress_event = {
+            "type": "progress",
+            "payload": {
                 "event": "calibration_progress",
                 "current_step": 2,
                 "total_steps": 3,
@@ -145,52 +196,26 @@ class TestBenchmarkGuiTuningQueue:
                     "n_generations": 50,
                 },
             },
-        )
+        }
+        completed_event = {
+            "type": "completed",
+            "elapsed_s": 12.3,
+            "summary": "summary text",
+            "best_config": "best config text",
+            "best_score": 0.8,
+            "total_trials": 5,
+            "ref_point_mode": "calibrated",
+            "ref_point": [8.8, 9.9],
+            "can_copy_best_config": True,
+        }
 
-        assert harness.t_progress_label.values["text"] == "Warm-up 2/3 completado (calibrated)."
-        assert harness.t_phase_value.values["text"] == "Fase: warm-up"
-        assert harness.t_trial_value.values["text"] == "Warm-up: 2/3"
-        assert harness.t_progress_bar.values["value"] == 0.1 * (2 / 3)
-        assert harness.t_ref_value.values["text"] == "Ref. point: calibrated [8.800, 9.900]"
-        assert any("[Warm-up 2/3]" in line for line in harness.logged)
+        harness._tuning_event_queue.put(calibration_progress_event)
+        harness._tuning_event_queue.put(completed_event)
 
-    def test_polling_loop_processes_completed_event_and_restores_ui_before_plotting(self):
-        """La cola usa completed y decide el render en el main thread tras restaurar la UI."""
-        harness = _DummyGuiHarness()
-
-        harness._tuning_event_queue.put(
-            {
-                "type": "progress",
-                "payload": {
-                    "event": "calibration_progress",
-                    "current_step": 2,
-                    "total_steps": 3,
-                    "ref_point_mode": "calibrated",
-                    "ref_point_candidate": [8.8, 9.9],
-                    "config": {
-                        "algorithm": "nsga2",
-                        "population_size": 30,
-                        "n_generations": 50,
-                    },
-                },
-            }
-        )
-        harness._tuning_event_queue.put(
-            {
-                "type": "completed",
-                "elapsed_s": 12.3,
-                "summary": "summary text",
-                "best_config": "best config text",
-                "best_score": 0.8,
-                "total_trials": 5,
-                "ref_point_mode": "calibrated",
-                "ref_point": [8.8, 9.9],
-                "can_copy_best_config": True,
-            }
-        )
-
+        # Act
         BenchmarkGUI._poll_tuning_events(harness)
 
+        # Assert
         assert harness.t_phase_value.values["text"] == "Fase: completado"
         assert harness.t_progress_label.values["text"] == "Tuning completado (calibrated)."
         assert harness.t_progress_bar.values["value"] == 1
@@ -286,6 +311,76 @@ class TestBenchmarkGuiTuningQueue:
         assert harness.t_progress_label.values["text"] == ""
         assert harness.after_calls == []
 
+    def test_copy_best_to_benchmark_preserves_tuned_crossover_for_benchmark_run(
+        self, monkeypatch
+    ):
+        """Copiar la mejor config debe propagar el crossover real al benchmark."""
+        # Arrange
+        import src.mo_module.benchmark.benchmark_gui as gui_module
+
+        captured_thread = {}
+
+        class _FakeThread:
+            def __init__(self, *, target, args, daemon):
+                captured_thread["target"] = target
+                captured_thread["args"] = args
+                captured_thread["daemon"] = daemon
+
+            def start(self):
+                captured_thread["started"] = True
+
+        monkeypatch.setattr(gui_module.threading, "Thread", _FakeThread)
+
+        best_config = types.SimpleNamespace(
+            population_size=24,
+            n_generations=12,
+            prob_swap_mutation=0.5,
+            prob_replace_mutation=0.9,
+            algorithm="nsga2",
+            crossover_operator="ox",
+        )
+
+        class _DummyTuner:
+            def best_config(self):
+                return best_config
+
+        harness = types.SimpleNamespace(
+            _tuning_run_succeeded=True,
+            _tuner=_DummyTuner(),
+            pop_slider=_DummyWidget(value=30),
+            gens_slider=_DummyWidget(value=50),
+            swap_mut_option=_DummyWidget(value="0.3"),
+            replace_mut_option=_DummyWidget(value="0.7"),
+            algo_option=_DummyWidget(value="moead"),
+            master_tabview=_DummyTabView(),
+            is_running=False,
+            run_button=_DummyWidget(state="normal"),
+            terminal_text=_DummyWidget(state="disabled"),
+            summary_text=_DummyWidget(state="disabled"),
+            plot_frame=_DummyContainer(),
+            circuit_vars={gui_module.DEFAULT_BENCHMARK_CIRCUITS[0].name: _DummyVar(True)},
+            seeds_slider=_DummyWidget(value=1),
+            workers_slider=_DummyWidget(value=1),
+            backend_option=_DummyWidget(value="fake_torino"),
+            log=lambda _text: None,
+            t_log=lambda _text: None,
+            _update_pop_label=lambda _value: None,
+            _update_gens_label=lambda _value: None,
+            _update_swap_mut_label=lambda _value: None,
+            _update_replace_mut_label=lambda _value: None,
+            _run_benchmark_thread=lambda *args: None,
+        )
+
+        # Act
+        BenchmarkGUI._copy_best_to_benchmark(harness)
+        BenchmarkGUI.start_benchmark(harness)
+
+        # Assert
+        assert harness._benchmark_crossover_operator == "ox"
+        assert captured_thread["target"] == harness._run_benchmark_thread
+        assert captured_thread["args"][7] == "ox"
+        assert captured_thread["started"] is True
+
 
 class TestRenderTuningPlots:
     """Regresiones del método _render_tuning_plots."""
@@ -297,6 +392,7 @@ class TestRenderTuningPlots:
         propio subplot y devuelve el Axes. El método debe llamarla sin ese argumento,
         obtener el Axes devuelto y extraer la figura con ax.get_figure().
         """
+        # Arrange
         import types
         import matplotlib
         matplotlib.use("Agg")  # backend sin pantalla para tests
@@ -358,9 +454,11 @@ class TestRenderTuningPlots:
             _FakeCanvas,
         )
 
+        # Act
         # Ejecutar — no debe lanzar excepción
         BenchmarkGUI._render_tuning_plots(harness)
 
+        # Assert
         # Verificar que no se logueó ningún error
         assert harness.logged == [], f"Se logueó un error: {harness.logged}"
 
