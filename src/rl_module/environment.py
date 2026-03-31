@@ -98,6 +98,8 @@ class QuantumTranspilationEnv(gym.Env):
         self._frontier: FrontierProvider = SequentialFrontier()
         self.current_step = 0
         self.total_swaps = 0
+        self._recent_layout_signatures: deque[tuple[int, ...]] = deque(maxlen=4)
+        self._last_swap_edge: Optional[Tuple[int, int]] = None
 
     @property
     def remaining_gates(self) -> deque:
@@ -152,6 +154,8 @@ class QuantumTranspilationEnv(gym.Env):
         
         self.current_step = 0
         self.total_swaps = 0
+        self._recent_layout_signatures.clear()
+        self._last_swap_edge = None
         extracted_gates = self._extract_gates_from_circuit()
         self._frontier = self._build_frontier(extracted_gates)
         
@@ -232,6 +236,19 @@ class QuantumTranspilationEnv(gym.Env):
             cascade_successors=True,
         )
 
+    def _layout_signature(self) -> Tuple[int, ...]:
+        return tuple(int(value) for value in self.current_layout.tolist())
+
+    def _routing_signal(self, obs: Dict[str, np.ndarray]) -> float:
+        distances = np.asarray(obs.get("lookahead_routing_distance", []), dtype=np.float32)
+        if distances.size == 0:
+            return 0.0
+
+        valid_mask = np.asarray(obs.get("lookahead_valid_mask", []), dtype=np.float32)
+        unreachable_penalty = float(self.num_physical_qubits)
+        sanitized = np.where(distances < 0.0, unreachable_penalty, distances)
+        return float(np.sum(sanitized * valid_mask, dtype=np.float32))
+
     def step(self, action: Any) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         self.current_step += 1
         
@@ -241,18 +258,26 @@ class QuantumTranspilationEnv(gym.Env):
             self.current_layout, self._frontier,
             step_progress=(self.current_step - 1) / self.max_steps,
         )
-        
+        prev_routing_signal = self._routing_signal(prev_obs)
+        prev_layout_signature = self._layout_signature()
+         
         info = {
             "action_type": action_info.get("type"),
             "is_valid_action": True,
             "gates_executed": 0,
-            "is_completed": False
+            "is_completed": False,
+            "repeated_layout": False,
+            "undo_swap": False,
+            "routing_progress_delta": 0.0,
         }
         
         # 2. Aplicar la lógica según el tipo de acción
         if action_info["type"] == "swap":
             pq1 = action_info["physical_q1"]
             pq2 = action_info["physical_q2"]
+            swap_edge = tuple(sorted((pq1, pq2)))
+            info["undo_swap"] = self._last_swap_edge == swap_edge
+            layout_changed = False
             
             # ── SWAP usando el mapa inverso ──────────────────────────
             #  _inverse_layout[physical] = logical   →   O(1) lookup
@@ -274,11 +299,28 @@ class QuantumTranspilationEnv(gym.Env):
                 # Actualizar layout inverso: _inverse_layout[physical] = logical
                 self._inverse_layout[pq1] = lq2
                 self._inverse_layout[pq2] = lq1
+
+            current_layout_signature = self._layout_signature()
+            layout_changed = current_layout_signature != prev_layout_signature
+            info["repeated_layout"] = (
+                current_layout_signature == prev_layout_signature
+                or current_layout_signature in self._recent_layout_signatures
+            )
+            self._recent_layout_signatures.append(prev_layout_signature)
+            if info["is_valid_action"] and layout_changed:
+                self._last_swap_edge = swap_edge
+            else:
+                info["undo_swap"] = False
+                self._last_swap_edge = None
             
             self.total_swaps += 1
             
             # 3. Intentar ejecutar puertas pendientes
             info["gates_executed"] = self._try_execute_front_layer()
+            if info["gates_executed"] > 0:
+                info["undo_swap"] = False
+                info["repeated_layout"] = False
+                self._last_swap_edge = None
         
         elif action_info["type"] == "gate":
             # ── PLACEHOLDER: Modo Synthesis ──────────────────────────
@@ -297,10 +339,12 @@ class QuantumTranspilationEnv(gym.Env):
                 action_info.get("gate_name"),
             )
             info["gate_matched_target"] = False
+            self._last_swap_edge = None
             
         elif action_info["type"] == "invalid":
              info["is_valid_action"] = False
-             
+             self._last_swap_edge = None
+              
         # Evaluar estado final
         terminated = self._frontier.remaining_gate_count == 0
         truncated = self.current_step >= self.max_steps
@@ -321,6 +365,10 @@ class QuantumTranspilationEnv(gym.Env):
             self.current_layout, self._frontier,
             step_progress=self.current_step / self.max_steps,
         )
+        routing_progress_delta = prev_routing_signal - self._routing_signal(obs)
+        if info["gates_executed"] > 0:
+            routing_progress_delta = max(routing_progress_delta, 0.0)
+        info["routing_progress_delta"] = routing_progress_delta
         reward = self.reward_function.compute_reward(prev_obs, action, obs, info)
         
         return obs, reward, terminated, truncated, info

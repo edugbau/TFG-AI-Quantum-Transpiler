@@ -16,6 +16,8 @@ import pathlib
 import threading
 import time
 import logging
+import os
+from datetime import datetime
 
 import numpy as np
 import matplotlib
@@ -29,7 +31,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent.par
 
 from qiskit import QuantumCircuit
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
@@ -39,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
+
+
+def _make_run_dir(base_dir: str, prefix: str = "run") -> str:
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return os.path.join(base_dir, f"{prefix}_{run_id}")
 
 
 # ===========================================================================
@@ -470,7 +477,19 @@ class RLBenchmarkGUI(ctk.CTk):
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
             )
+            raw_env.reset(seed=cfg["seed"])
             self._env = Monitor(raw_env)
+
+            eval_raw_env = QuantumTranspilationEnv(
+                target_circuit=cfg["circuit"],
+                coupling_map=cfg["coupling_map"],
+                mode=cfg["mode"],
+                frontier_mode=cfg["frontier_mode"],
+                lookahead_window=cfg["lookahead"],
+                max_steps=cfg["max_steps"],
+            )
+            eval_raw_env.reset(seed=cfg["seed"])
+            eval_env = Monitor(eval_raw_env)
 
             self.after(0, self._log, "[1/3] Entorno creado ✓")
 
@@ -479,6 +498,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 env=self._env,
                 algorithm=cfg["algorithm"],
                 verbose=0,
+                seed=cfg["seed"],
             )
             self.after(0, self._log, f"[2/3] Agente {cfg['algorithm']} creado ✓")
             self.after(0, self._log, f"      Dispositivo: {self._agent.device.upper()}")
@@ -489,14 +509,43 @@ class RLBenchmarkGUI(ctk.CTk):
             callback = GUIProgressCallback(
                 gui=self, total_timesteps=cfg["timesteps"]
             )
+            run_model_dir = _make_run_dir("./experiments/models/rl_models", prefix="gui_rl")
+            run_log_dir = _make_run_dir("./experiments/logs/rl_logs", prefix="gui_rl")
+            os.makedirs(run_model_dir, exist_ok=True)
+            os.makedirs(run_log_dir, exist_ok=True)
+
+            callbacks = [callback]
+            should_track_best = cfg["timesteps"] > 1
+            if should_track_best:
+                eval_callback = EvalCallback(
+                    eval_env,
+                    best_model_save_path=run_model_dir,
+                    log_path=run_log_dir,
+                    eval_freq=max(1, cfg["timesteps"] // 2),
+                    deterministic=True,
+                    render=False,
+                )
+                callbacks.append(eval_callback)
 
             # Entrenar
             self._agent.train(
                 total_timesteps=cfg["timesteps"],
-                callbacks=[callback],
+                callbacks=callbacks,
                 progress_bar=False,
             )
             self._last_callback = callback
+
+            final_model_path = os.path.join(run_model_dir, "final_model.zip")
+            self._agent.save(final_model_path)
+            cfg["last_model_path"] = final_model_path
+            cfg["run_model_dir"] = run_model_dir
+            cfg["run_log_dir"] = run_log_dir
+
+            best_model_path = os.path.join(run_model_dir, "best_model.zip")
+            if should_track_best and os.path.exists(best_model_path):
+                cfg["best_model_path"] = best_model_path
+            else:
+                cfg["best_model_path"] = None
 
             elapsed = time.perf_counter() - t0
             n_eps = len(callback.episode_rewards)
@@ -620,10 +669,32 @@ class RLBenchmarkGUI(ctk.CTk):
                 max_steps=cfg["max_steps"],
             )
 
+            eval_agent = self._agent
+            best_model_path = cfg.get("best_model_path")
+            last_model_path = cfg.get("last_model_path")
+            run_model_dir = cfg.get("run_model_dir")
+            if (
+                best_model_path
+                and run_model_dir
+                and os.path.dirname(best_model_path) == run_model_dir
+                and os.path.exists(best_model_path)
+            ):
+                eval_agent = QuantumRLAgent.load(
+                    best_model_path,
+                    env=eval_env,
+                    algorithm=cfg["algorithm"],
+                )
+            elif last_model_path and run_model_dir and os.path.dirname(last_model_path) == run_model_dir and os.path.exists(last_model_path):
+                eval_agent = QuantumRLAgent.load(
+                    last_model_path,
+                    env=eval_env,
+                    algorithm=cfg["algorithm"],
+                )
+
             obs, info = eval_env.reset(seed=cfg["seed"])
 
             self.after(0, self._eval_log_write, "=" * 70)
-            self.after(0, self._eval_log_write, "  EVALUACIÓN DE EPISODIO (Política Estocástica)")
+            self.after(0, self._eval_log_write, "  EVALUACIÓN DE EPISODIO (Política Determinista)")
             self.after(0, self._eval_log_write, "=" * 70)
             self.after(0, self._eval_log_write, f"Circuito: {cfg['circuit_name']}  |  Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}")
             self.after(0, self._eval_log_write, f"Layout inicial: {eval_env.current_layout.tolist()}")
@@ -650,7 +721,7 @@ class RLBenchmarkGUI(ctk.CTk):
             CYCLE_THRESHOLD = 3  # Un layout visitado 3 veces = bucle claro
 
             while not done:
-                action, _ = self._agent.predict(obs, deterministic=False)
+                action, _ = eval_agent.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = eval_env.step(action)
 
                 total_reward += reward

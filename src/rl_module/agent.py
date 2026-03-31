@@ -64,6 +64,8 @@ class QuantumRLAgent:
             kwargs.setdefault("exploration_fraction", 0.5)
             kwargs.setdefault("tau", 0.05)
             kwargs.setdefault("learning_starts", 1000)
+
+        kwargs.setdefault("seed", None)
             
         # Instanciar modelo de SB3
         self.model = AlgorithmClass(
