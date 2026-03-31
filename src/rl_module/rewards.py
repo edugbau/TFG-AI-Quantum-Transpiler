@@ -62,6 +62,15 @@ class RoutingReward(RewardStrategy):
         sin haber completado el circuito.  Un valor negativo grande
         incentiva al agente a resolver el circuito dentro del límite
         de pasos.  Configurar a ``0.0`` para deshabilitar la penalización.
+    repeated_layout_penalty : float
+        Penalización aplicada si la transición vuelve a un layout ya visto
+        recientemente, incluyendo auto-bucles inmediatos.
+    undo_swap_penalty : float
+        Penalización aplicada si el SWAP actual deshace el SWAP anterior.
+    routing_progress_reward : float
+        Factor lineal de shaping sobre ``routing_progress_delta``. Valores
+        positivos recompensan reducir la distancia agregada de routing y
+        penalizan empeorarla.
     """
 
     def __init__( #TODO: REVISAR VALORES DE PENALIZACIÓN Y REWARD CON TUTORES
@@ -71,12 +80,18 @@ class RoutingReward(RewardStrategy):
         invalid_action_penalty: float = -5.0,
         completion_bonus: float = 50.0,
         truncation_penalty: float = -20.0,
+        repeated_layout_penalty: float = -1.0,
+        undo_swap_penalty: float = -1.0,
+        routing_progress_reward: float = 0.5,
     ):
         self.swap_penalty = swap_penalty
         self.gate_execution_reward = gate_execution_reward
         self.invalid_action_penalty = invalid_action_penalty
         self.completion_bonus = completion_bonus
         self.truncation_penalty = truncation_penalty
+        self.repeated_layout_penalty = repeated_layout_penalty
+        self.undo_swap_penalty = undo_swap_penalty
+        self.routing_progress_reward = routing_progress_reward
 
     def compute_reward(self, prev_state: Any, action: Any, current_state: Any, info: Dict[str, Any]) -> float:
         reward = 0.0
@@ -93,7 +108,15 @@ class RoutingReward(RewardStrategy):
         # 3. Penalización si el agente intenta una acción no válida
         if info.get('is_valid_action') is False:
             reward += self.invalid_action_penalty
-            
+
+        if info.get('repeated_layout', False):
+            reward += self.repeated_layout_penalty
+
+        if info.get('undo_swap', False):
+            reward += self.undo_swap_penalty
+
+        reward += self.routing_progress_reward * float(info.get('routing_progress_delta', 0.0))
+             
         # 4. Bonificación final si el circuito se completa
         if info.get('is_completed', False):
             reward += self.completion_bonus

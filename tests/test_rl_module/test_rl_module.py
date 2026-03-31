@@ -24,6 +24,7 @@ import numpy as np
 import os
 import tempfile
 import warnings
+from pathlib import Path
 from collections import deque
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,18 @@ def synthesis_env(simple_circuit_3q, linear_coupling_3q) -> QuantumTranspilation
         coupling_map=linear_coupling_3q,
         mode="synthesis",
         max_steps=50,
+    )
+
+
+@pytest.fixture
+def nontrivial_routing_env(circuit_4q, linear_coupling_4q) -> QuantumTranspilationEnv:
+    """Entorno de routing con una CX no adyacente que requiere SWAPs."""
+    return QuantumTranspilationEnv(
+        target_circuit=circuit_4q,
+        coupling_map=linear_coupling_4q,
+        mode="routing",
+        max_steps=50,
+        lookahead_window=4,
     )
 
 
@@ -430,6 +443,50 @@ class TestRoutingReward:
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == pytest.approx(-2.5 + 40.0)
 
+    def test_transition_shaping_penalties_and_progress_reward(self):
+        """Las señales de transición ajustan la recompensa de routing."""
+        reward_fn = RoutingReward(
+            swap_penalty=0.0,
+            gate_execution_reward=0.0,
+            repeated_layout_penalty=-2.0,
+            undo_swap_penalty=-3.0,
+            routing_progress_reward=1.5,
+        )
+        info = {
+            "action_type": "swap",
+            "gates_executed": 0,
+            "is_valid_action": True,
+            "is_completed": False,
+            "is_truncated": False,
+            "repeated_layout": True,
+            "undo_swap": True,
+            "routing_progress_delta": 2.0,
+        }
+
+        reward = reward_fn.compute_reward(None, None, None, info)
+
+        assert reward == pytest.approx(-2.0 + -3.0 + (1.5 * 2.0))
+
+    def test_negative_routing_progress_is_penalized_symmetrically(self):
+        """Empeorar la distancia de routing aplica shaping negativo si está configurado."""
+        reward_fn = RoutingReward(
+            swap_penalty=0.0,
+            gate_execution_reward=0.0,
+            routing_progress_reward=2.0,
+        )
+        info = {
+            "action_type": "swap",
+            "gates_executed": 0,
+            "is_valid_action": True,
+            "is_completed": False,
+            "is_truncated": False,
+            "routing_progress_delta": -1.5,
+        }
+
+        reward = reward_fn.compute_reward(None, None, None, info)
+
+        assert reward == pytest.approx(-3.0)
+
 
 # ===========================================================================
 #  Tests — rewards: SynthesisReward
@@ -698,6 +755,30 @@ class TestQuantumTranspilationEnv:
         np.testing.assert_array_equal(obs["lookahead_executable"], np.array([0.0, 0.0], dtype=np.float32))
         np.testing.assert_array_equal(obs["lookahead_routing_distance"], np.array([1.0, 0.0], dtype=np.float32))
         np.testing.assert_array_equal(obs["lookahead_valid_mask"], np.array([1.0, 0.0], dtype=np.float32))
+
+    def test_reset_nontrivial_routing_case_keeps_blocked_two_qubit_gate(self, nontrivial_routing_env):
+        """Un caso de 4 qubits no trivial mantiene una CX bloqueada con distancia > 1."""
+        obs, info = nontrivial_routing_env.reset(seed=42)
+
+        assert info["total_gates"] == 4
+        assert len(nontrivial_routing_env.remaining_gates) == 1
+        assert nontrivial_routing_env.remaining_gates[0] == ("cx", 0, 3)
+        np.testing.assert_array_equal(
+            obs["lookahead"],
+            np.array([0, 3, -1, -1, -1, -1, -1, -1], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(
+            obs["lookahead_executable"],
+            np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            obs["lookahead_routing_distance"],
+            np.array([2.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            obs["lookahead_valid_mask"],
+            np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        )
 
     def test_reset_clears_state(self, routing_env):
         """reset() reinicia current_step y total_swaps a 0."""
@@ -997,6 +1078,124 @@ class TestQuantumTranspilationEnv:
         np.testing.assert_array_equal(env.current_layout, layout_before)
         np.testing.assert_array_equal(env._inverse_layout, inverse_before)
 
+    def test_step_reports_transition_signals_for_repeated_layout_and_undo_swap(self):
+        """step() expone señales para layout repetido, undo swap y progreso de routing."""
+        qc = QuantumCircuit(4)
+        qc.cx(0, 3)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+        first_action = env.strategy.edges.index((0, 1))
+        second_action = env.strategy.edges.index((0, 1))
+
+        _, _, _, _, info1 = env.step(first_action)
+        _, _, _, _, info2 = env.step(second_action)
+
+        assert info1["repeated_layout"] is False
+        assert info1["undo_swap"] is False
+        assert info1["routing_progress_delta"] == pytest.approx(1.0)
+        assert info2["repeated_layout"] is True
+        assert info2["undo_swap"] is True
+        assert info2["routing_progress_delta"] == pytest.approx(-1.0)
+
+    def test_step_reports_zero_routing_progress_when_frontier_already_executable(self, routing_env):
+        """Si no hay distancia de routing pendiente, el delta informado es 0."""
+        routing_env.reset(seed=42)
+
+        _, _, _, _, info = routing_env.step(0)
+
+        assert info["routing_progress_delta"] == pytest.approx(0.0)
+        assert info["repeated_layout"] is False
+        assert info["undo_swap"] is False
+
+    def test_invalid_empty_empty_swap_does_not_arm_undo_swap(self):
+        """Un swap vacío-inválido no debe contar como el swap previo a deshacer."""
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+        env.reset(seed=42, options={"initial_layout": [2, 3]})
+        empty_swap_action = env.strategy.edges.index((0, 1))
+
+        _, _, _, _, info1 = env.step(empty_swap_action)
+        _, _, _, _, info2 = env.step(empty_swap_action)
+
+        assert info1["is_valid_action"] is False
+        assert info1["undo_swap"] is False
+        assert info2["is_valid_action"] is False
+        assert info2["undo_swap"] is False
+
+    def test_gate_execution_does_not_make_routing_progress_negative(self):
+        """Ejecutar puertas en cascada no debe volver negativo el delta de progreso."""
+        qc = QuantumCircuit(4)
+        qc.cx(0, 1)
+        qc.cx(0, 2)
+        qc.cx(0, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 2, 1, 3]})
+        action = env.strategy.edges.index((1, 2))
+
+        _, _, _, _, info = env.step(action)
+
+        assert info["gates_executed"] == 1
+        assert info["routing_progress_delta"] == pytest.approx(0.0)
+
+    def test_reusing_swap_after_frontier_advances_is_not_undo_or_repeated_layout(self):
+        """Reutilizar la misma arista tras ejecutar puertas no cuenta como undo ni repetición vacía."""
+        qc = QuantumCircuit(3)
+        qc.cx(0, 2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+        action = env.strategy.edges.index((1, 2))
+
+        _, _, _, _, info1 = env.step(action)
+        _, _, terminated, _, info2 = env.step(action)
+
+        assert info1["gates_executed"] == 1
+        assert info1["undo_swap"] is False
+        assert info1["repeated_layout"] is False
+        assert info2["gates_executed"] == 1
+        assert info2["undo_swap"] is False
+        assert info2["repeated_layout"] is False
+        assert terminated is True
+
+    def test_routing_stability_roadmap_exists(self):
+        """La hoja de ruta de estabilidad documenta la expansión futura a nivel 3."""
+        roadmap_path = Path("src/rl_module/docs/routing_stability_roadmap.md")
+
+        assert roadmap_path.exists()
+
+        content = roadmap_path.read_text(encoding="utf-8")
+        assert "current limitation" in content.lower()
+        assert "intermediate" in content.lower()
+        assert "level 3" in content.lower()
+        assert "maskableppo" in content.lower()
+        assert "action mask" in content.lower()
+        assert "recurrent policy" in content.lower()
+        assert "migration risk" in content.lower()
+
     def test_render_human_prints_step_summary_and_layout(self, routing_env, capsys):
         """render() en modo human imprime el resumen del estado y el layout actual."""
         # Arrange
@@ -1191,6 +1390,25 @@ class TestQuantumRLAgent:
             assert loaded.device in ("cpu", "cuda")
             assert loaded.model is not None
 
+    def test_init_forwards_seed_into_sb3_constructor(self, monkeypatch, routing_env):
+        """QuantumRLAgent reenvia la seed al constructor SB3 subyacente."""
+        captured_seed = None
+
+        class DummyAlgorithm:
+            def __init__(self, policy, env, tensorboard_log, verbose, device, **kwargs):
+                nonlocal captured_seed
+                captured_seed = kwargs.get("seed")
+
+            def predict(self, observation, deterministic=True):
+                return 0, None
+
+        monkeypatch.setitem(QuantumRLAgent.ALGORITHMS, "PPO", DummyAlgorithm)
+
+        agent = QuantumRLAgent(env=routing_env, algorithm="PPO", verbose=0, seed=321)
+
+        assert captured_seed == 321
+        assert agent.model is not None
+
 
 # ===========================================================================
 #  Tests — training: Utilidades
@@ -1240,6 +1458,9 @@ class TestTrainingUtilities:
             def __init__(self, *args, **kwargs):
                 captured_frontier_modes.append(kwargs.get("frontier_mode"))
 
+            def reset(self, seed=None):
+                return {}, {}
+
         class DummyAgent:
             def __init__(self, env, algorithm, tensorboard_log, **hyperparams):
                 self.env = env
@@ -1265,6 +1486,612 @@ class TestTrainingUtilities:
         )
 
         assert captured_frontier_modes == ["dag", "dag"]
+
+    def test_setup_training_pipeline_passes_seed_into_agent_construction(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q
+    ):
+        """El pipeline reenvia la seed al wrapper del agente para SB3."""
+        captured_seed = None
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log, **hyperparams):
+                nonlocal captured_seed
+                captured_seed = hyperparams.get("seed")
+
+            def train(self, total_timesteps, callbacks):
+                return None
+
+            def save(self, path):
+                return None
+
+        monkeypatch.setattr("src.rl_module.training.QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr("src.rl_module.training.Monitor", lambda env: env)
+        monkeypatch.setattr("src.rl_module.training.QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr("src.rl_module.training.CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.EvalCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.os.makedirs", lambda *args, **kwargs: None)
+
+        setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            total_timesteps=1,
+            seed=123,
+        )
+
+        assert captured_seed == 123
+
+    def test_setup_training_pipeline_seeds_train_and_eval_env_resets(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q
+    ):
+        """El pipeline inicializa train/eval env con reset(seed=...)."""
+        reset_seeds = []
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                reset_seeds.append(seed)
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log, **hyperparams):
+                pass
+
+            def train(self, total_timesteps, callbacks):
+                return None
+
+            def save(self, path):
+                return None
+
+        monkeypatch.setattr("src.rl_module.training.QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr("src.rl_module.training.Monitor", lambda env: env)
+        monkeypatch.setattr("src.rl_module.training.QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr("src.rl_module.training.CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.EvalCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.os.makedirs", lambda *args, **kwargs: None)
+
+        setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            total_timesteps=1,
+            seed=55,
+        )
+
+        assert reset_seeds == [55, 55]
+
+    def test_setup_training_pipeline_reports_best_model_artifact_when_available(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
+    ):
+        """Si EvalCallback guarda best_model.zip, el pipeline lo expone sin reemplazar el retorno."""
+        run_dir = tmp_path / "rl_run"
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log, **hyperparams):
+                self.algorithm = algorithm
+                self.best_model_path = None
+
+            def train(self, total_timesteps, callbacks):
+                best_model_path = run_dir / "best_model.zip"
+                best_model_path.parent.mkdir(parents=True, exist_ok=True)
+                best_model_path.write_bytes(b"best")
+                return None
+
+            def save(self, path):
+                Path(path).write_bytes(b"final")
+
+        monkeypatch.setattr("src.rl_module.training.QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr("src.rl_module.training.Monitor", lambda env: env)
+        monkeypatch.setattr("src.rl_module.training.QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr("src.rl_module.training.CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.EvalCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training._make_run_dir", lambda base_dir, prefix="run": str(run_dir))
+
+        agent = setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            total_timesteps=1,
+            model_save_dir=str(tmp_path),
+        )
+
+        assert agent.best_model_path == os.path.join(str(run_dir), "best_model.zip")
+
+    def test_setup_training_pipeline_ignores_foreign_best_model_artifact(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
+    ):
+        """Un best_model.zip preexistente no cuenta si el run actual no lo produce."""
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log, **hyperparams):
+                self.best_model_path = None
+
+            def train(self, total_timesteps, callbacks):
+                return None
+
+            def save(self, path):
+                Path(path).write_bytes(b"final")
+
+        foreign_best = tmp_path / "best_model.zip"
+        foreign_best.write_bytes(b"foreign")
+
+        monkeypatch.setattr("src.rl_module.training.QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr("src.rl_module.training.Monitor", lambda env: env)
+        monkeypatch.setattr("src.rl_module.training.QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr("src.rl_module.training.CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.EvalCallback", lambda *args, **kwargs: object())
+
+        agent = setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            total_timesteps=1,
+            model_save_dir=str(tmp_path),
+        )
+
+        assert agent.best_model_path is None
+
+
+class TestRLEvaluationGUI:
+    """Tests de la evaluación mostrada por la GUI RL."""
+
+    @staticmethod
+    def _load_rl_gui_module(monkeypatch):
+        import importlib
+        import sys
+        import types
+
+        fake_matplotlib = types.ModuleType("matplotlib")
+        fake_matplotlib.use = lambda *args, **kwargs: None
+        fake_pyplot = types.ModuleType("matplotlib.pyplot")
+        fake_backend = types.ModuleType("matplotlib.backends.backend_tkagg")
+        fake_backend.FigureCanvasTkAgg = object
+        fake_ctk = types.ModuleType("customtkinter")
+        fake_ctk.CTk = type("CTk", (), {})
+        fake_ctk.CTkFrame = type("CTkFrame", (), {})
+        fake_ctk.CTkLabel = type("CTkLabel", (), {})
+        fake_ctk.CTkFont = type("CTkFont", (), {})
+        fake_ctk.CTkOptionMenu = type("CTkOptionMenu", (), {})
+        fake_ctk.CTkSlider = type("CTkSlider", (), {})
+        fake_ctk.CTkButton = type("CTkButton", (), {})
+        fake_ctk.CTkTabview = type("CTkTabview", (), {})
+        fake_ctk.CTkTextbox = type("CTkTextbox", (), {})
+        fake_ctk.CTkProgressBar = type("CTkProgressBar", (), {})
+        fake_ctk.set_appearance_mode = lambda *args, **kwargs: None
+        fake_ctk.set_default_color_theme = lambda *args, **kwargs: None
+
+        monkeypatch.setitem(sys.modules, "customtkinter", fake_ctk)
+        monkeypatch.setitem(sys.modules, "matplotlib", fake_matplotlib)
+        monkeypatch.setitem(sys.modules, "matplotlib.pyplot", fake_pyplot)
+        monkeypatch.setitem(sys.modules, "matplotlib.backends.backend_tkagg", fake_backend)
+
+        sys.modules.pop("src.rl_module.gui.rl_gui", None)
+        return importlib.import_module("src.rl_module.gui.rl_gui")
+
+    def test_training_thread_passes_seed_into_agent_construction(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q
+    ):
+        """El flujo de entrenamiento de la GUI reenvia la seed al agente SB3."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+        captured_seed = None
+        reset_seeds = []
+        saw_eval_callback = False
+        rendered_plots = False
+        progress_updated = False
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                reset_seeds.append(seed)
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, verbose, seed=None, **kwargs):
+                nonlocal captured_seed
+                captured_seed = seed
+                self.device = "cpu"
+                self.saved_paths = []
+
+            def train(self, total_timesteps, callbacks, progress_bar):
+                nonlocal saw_eval_callback
+                saw_eval_callback = any(isinstance(cb, DummyEvalCallback) for cb in callbacks)
+                return None
+
+            def save(self, path):
+                self.saved_paths.append(path)
+
+        class DummyEvalCallback:
+            def __init__(self, *args, **kwargs):
+                self.best_model_save_path = kwargs.get("best_model_save_path")
+                self.log_path = kwargs.get("log_path")
+
+        class DummyProgressCallback:
+            def __init__(self):
+                self.episode_rewards = []
+                self.episode_lengths = []
+
+        class DummyLabel:
+            def configure(self, **kwargs):
+                nonlocal progress_updated
+                progress_updated = True
+
+        class DummyWidget:
+            def configure(self, **kwargs):
+                return None
+
+            def set(self, value):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._agent = None
+                self._env = None
+                self._last_callback = None
+                self._is_training = True
+                self._train_button = DummyWidget()
+                self._eval_button = DummyWidget()
+                self._progress_label = DummyLabel()
+                self._progress_bar = DummyWidget()
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+            def _log(self, text):
+                return None
+
+            def _render_training_plots(self):
+                nonlocal rendered_plots
+                rendered_plots = True
+
+        made_dirs = []
+
+        def fake_makedirs(path, exist_ok=False):
+            made_dirs.append(path)
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(rl_gui, "Monitor", lambda env: env)
+        monkeypatch.setattr(rl_gui, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(rl_gui, "GUIProgressCallback", lambda gui, total_timesteps: DummyProgressCallback())
+        monkeypatch.setattr(rl_gui, "EvalCallback", DummyEvalCallback)
+        monkeypatch.setattr(rl_gui.os, "makedirs", fake_makedirs)
+        monkeypatch.setattr(rl_gui.os.path, "exists", lambda path: False)
+
+        gui = DummyGUI()
+        cfg = {
+            "seed": 77,
+            "circuit": simple_circuit_3q,
+            "coupling_map": linear_coupling_3q,
+            "mode": "routing",
+            "frontier_mode": "sequential",
+            "lookahead": 2,
+            "max_steps": 5,
+            "algorithm": "PPO",
+            "timesteps": 2,
+        }
+
+        rl_gui.RLBenchmarkGUI._training_thread(gui, cfg)
+
+        assert captured_seed == 77
+        assert reset_seeds == [77, 77]
+        assert saw_eval_callback is True
+        assert cfg["best_model_path"] is None
+        assert cfg["last_model_path"].endswith("final_model.zip")
+        assert rendered_plots is True
+        assert progress_updated is True
+        assert any("rl_models" in path for path in made_dirs)
+        assert any("rl_logs" in path for path in made_dirs)
+
+    def test_training_thread_labels_single_eval_as_last_model_artifact(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q
+    ):
+        """Con una sola evaluación al final, la GUI no lo presenta como best_model."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, verbose, seed=None, **kwargs):
+                self.device = "cpu"
+
+            def train(self, total_timesteps, callbacks, progress_bar):
+                return None
+
+            def save(self, path):
+                return None
+
+        class DummyEvalCallback:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class DummyProgressCallback:
+            def __init__(self):
+                self.episode_rewards = []
+                self.episode_lengths = []
+
+        class DummyWidget:
+            def configure(self, **kwargs):
+                return None
+
+            def set(self, value):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._agent = None
+                self._env = None
+                self._last_callback = None
+                self._is_training = True
+                self._train_button = DummyWidget()
+                self._eval_button = DummyWidget()
+                self._progress_label = DummyWidget()
+                self._progress_bar = DummyWidget()
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+            def _log(self, text):
+                return None
+
+            def _render_training_plots(self):
+                return None
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(rl_gui, "Monitor", lambda env: env)
+        monkeypatch.setattr(rl_gui, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(rl_gui, "GUIProgressCallback", lambda gui, total_timesteps: DummyProgressCallback())
+        monkeypatch.setattr(rl_gui, "EvalCallback", DummyEvalCallback)
+        monkeypatch.setattr(rl_gui.os, "makedirs", lambda *args, **kwargs: None)
+        monkeypatch.setattr(rl_gui.os.path, "exists", lambda path: path.endswith("final_model.zip"))
+
+        gui = DummyGUI()
+        cfg = {
+            "seed": 7,
+            "circuit": simple_circuit_3q,
+            "coupling_map": linear_coupling_3q,
+            "mode": "routing",
+            "frontier_mode": "sequential",
+            "lookahead": 2,
+            "max_steps": 5,
+            "algorithm": "PPO",
+            "timesteps": 1,
+        }
+
+        rl_gui.RLBenchmarkGUI._training_thread(gui, cfg)
+
+        assert cfg["best_model_path"] is None
+        assert cfg["last_model_path"].endswith("final_model.zip")
+
+    def test_evaluation_thread_uses_deterministic_policy_by_default(self, monkeypatch, simple_circuit_3q, linear_coupling_3q):
+        """La evaluación principal de la GUI usa predict(..., deterministic=True)."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+        deterministic_flags = []
+        eval_log_lines = []
+        loaded_model_paths = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2], dtype=np.int32)
+                self.remaining_gates = deque()
+                self.total_swaps = 0
+
+            def reset(self, seed=None):
+                self.last_seed = seed
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {"total_gates": 0}
+                return obs, info
+
+            def step(self, action):
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "gates_executed": 0,
+                    "is_completed": True,
+                }
+                return obs, 1.0, True, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                deterministic_flags.append(deterministic)
+                return 0, None
+
+            @classmethod
+            def load(cls, path, env, algorithm="PPO", **kwargs):
+                loaded_model_paths.append(path)
+                return cls()
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": simple_circuit_3q,
+                    "circuit_name": "fixture",
+                    "coupling_map": linear_coupling_3q,
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": os.path.join("models", "best_model.zip"),
+                    "last_model_path": os.path.join("models", "final_model.zip"),
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEvalEnv)
+        monkeypatch.setattr(rl_gui, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(rl_gui.os.path, "exists", lambda path: path == os.path.join("models", "best_model.zip"))
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert deterministic_flags == [True]
+        assert loaded_model_paths == [os.path.join("models", "best_model.zip")]
+        assert any("EVALUACIÓN DE EPISODIO (Política Determinista)" in line for line in eval_log_lines)
+
+    def test_evaluation_thread_ignores_missing_or_foreign_best_artifact(self, monkeypatch, simple_circuit_3q, linear_coupling_3q):
+        """La GUI usa el último modelo del run si no hay best artifact válido del run actual."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+        loaded_model_paths = []
+        deterministic_flags = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2], dtype=np.int32)
+                self.remaining_gates = deque()
+                self.total_swaps = 0
+
+            def reset(self, seed=None):
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 0}
+
+            def step(self, action):
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "gates_executed": 0,
+                    "is_completed": True,
+                }
+                return obs, 1.0, True, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                deterministic_flags.append(deterministic)
+                return 0, None
+
+            @classmethod
+            def load(cls, path, env, algorithm="PPO", **kwargs):
+                loaded_model_paths.append(path)
+                return cls()
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": simple_circuit_3q,
+                    "circuit_name": "fixture",
+                    "coupling_map": linear_coupling_3q,
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": os.path.join("other_run", "best_model.zip"),
+                    "last_model_path": os.path.join("models", "final_model.zip"),
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                return None
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEvalEnv)
+        monkeypatch.setattr(rl_gui, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(rl_gui.os.path, "exists", lambda path: path == os.path.join("models", "final_model.zip"))
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert loaded_model_paths == [os.path.join("models", "final_model.zip")]
+        assert deterministic_flags == [True]
 
 
 # ===========================================================================

@@ -9,6 +9,7 @@ y lanzar el proceso de entrenamiento.
 import os
 import logging
 import random
+from datetime import datetime
 import numpy as np
 import torch
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
@@ -21,6 +22,11 @@ from qiskit import QuantumCircuit
 from typing import Tuple, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _make_run_dir(base_dir: str, prefix: str = "run") -> str:
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return os.path.join(base_dir, f"{prefix}_{run_id}")
 
 def set_global_seeds(seed: int = 42):
     """
@@ -85,6 +91,7 @@ def setup_training_pipeline(
         lookahead_window=lookahead_window,
         max_steps=max_steps,
     )
+    raw_env.reset(seed=seed)
     env = Monitor(raw_env)
     
     # Entorno de Evaluación independiente
@@ -96,22 +103,25 @@ def setup_training_pipeline(
         lookahead_window=lookahead_window,
         max_steps=max_steps,
     )
+    eval_raw_env.reset(seed=seed)
     eval_env = Monitor(eval_raw_env)
     
     # 3. Callbacks (Logs y Checkpoints)
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_save_dir, exist_ok=True)
+    run_log_dir = _make_run_dir(log_dir, prefix="rl")
+    run_model_dir = _make_run_dir(model_save_dir, prefix="rl")
+    os.makedirs(run_log_dir, exist_ok=True)
+    os.makedirs(run_model_dir, exist_ok=True)
     
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,
-        save_path=model_save_dir,
+        save_path=run_model_dir,
         name_prefix=f"rl_model_{mode}_{algorithm}"
     )
     
     eval_callback = EvalCallback(
         eval_env, 
-        best_model_save_path=model_save_dir,
-        log_path=log_dir,
+        best_model_save_path=run_model_dir,
+        log_path=run_log_dir,
         eval_freq=5_000,
         deterministic=True,
         render=False
@@ -126,14 +136,25 @@ def setup_training_pipeline(
     agent = QuantumRLAgent(
         env=env,
         algorithm=algorithm,
-        tensorboard_log=log_dir,
+        tensorboard_log=run_log_dir,
+        seed=seed,
         **hyperparams
     )
     
     agent.train(total_timesteps=total_timesteps, callbacks=callbacks)
     
     # 5. Guardar modelo final
-    final_path = os.path.join(model_save_dir, f"final_{mode}_{algorithm}.zip")
+    final_path = os.path.join(run_model_dir, f"final_{mode}_{algorithm}.zip")
     agent.save(final_path)
-    
+    agent.last_model_path = final_path
+    agent.run_model_dir = run_model_dir
+    agent.run_log_dir = run_log_dir
+
+    best_model_path = os.path.join(run_model_dir, "best_model.zip")
+    if os.path.exists(best_model_path):
+        logger.info("Mejor artefacto evaluado disponible en %s", best_model_path)
+        agent.best_model_path = best_model_path
+    else:
+        agent.best_model_path = None
+
     return agent
