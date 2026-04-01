@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Iterable
+
+import customtkinter as ctk
+
+
+@dataclass(frozen=True)
+class EvaluationStepRecord:
+    step: int
+    reward: float
+    action_type: str | None
+    is_valid_action: bool
+    layout_before: list[int]
+    layout_after: list[int]
+    visible_frontier_before: list[dict[str, Any]] = field(default_factory=list)
+    executed_gates: list[tuple[Any, ...]] = field(default_factory=list)
+    swap_edge: tuple[int, int] | None = None
+    routing_progress_delta: float = 0.0
+    repeated_layout: bool = False
+    undo_swap: bool = False
+    primitive_name: str | None = None
+    primitive_physical_qargs: tuple[int, ...] = ()
+    primitive_cost: float = 0.0
+    residual_distance_before: float = 0.0
+    residual_distance_after: float = 0.0
+    residual_distance_delta: float = 0.0
+
+
+def frontier_entry_to_dict(entry: Any) -> dict[str, Any]:
+    if isinstance(entry, dict):
+        return dict(entry)
+
+    return {
+        "gate_name": getattr(entry, "gate_name", None),
+        "logical_q1": getattr(entry, "logical_q1", None),
+        "logical_q2": getattr(entry, "logical_q2", None),
+        "physical_q1": getattr(entry, "physical_q1", None),
+        "physical_q2": getattr(entry, "physical_q2", None),
+        "executable": getattr(entry, "executable", None),
+    }
+
+
+class EpisodeInspectorPanel(ctk.CTkFrame):
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.records: list[EvaluationStepRecord] = []
+        self.selected_record: EvaluationStepRecord | None = None
+        self._record_labels: list[str] = []
+
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self._title = ctk.CTkLabel(
+            self,
+            text="Inspector de episodio",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self._title.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+
+        self._step_selector = ctk.CTkOptionMenu(
+            self,
+            values=["Paso actual"],
+            command=self._on_step_selected,
+        )
+        self._step_selector.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+
+        self._details = ctk.CTkTextbox(
+            self,
+            state="disabled",
+            font=ctk.CTkFont(family="Consolas", size=12),
+        )
+        self._details.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._render_selected_record()
+
+    def set_records(self, records: Iterable[EvaluationStepRecord]):
+        previous_step = self.selected_record.step if self.selected_record is not None else None
+        self.records = list(records)
+        self._record_labels = [f"Paso {record.step}" for record in self.records]
+
+        if previous_step is not None:
+            self.selected_record = next(
+                (record for record in self.records if record.step == previous_step),
+                None,
+            )
+        else:
+            self.selected_record = None
+
+        if self.selected_record is None:
+            self.selected_record = self.records[-1] if self.records else None
+
+        selector_values = self._record_labels or ["Paso actual"]
+        self._step_selector.configure(values=selector_values)
+        self._step_selector.set(self._label_for_selected_record())
+        self._render_selected_record()
+
+    def _label_for_selected_record(self) -> str:
+        if self.selected_record is None:
+            return "Paso actual"
+        return f"Paso {self.selected_record.step}"
+
+    def _on_step_selected(self, label: str):
+        for record in self.records:
+            if f"Paso {record.step}" == label:
+                self.selected_record = record
+                break
+        self._render_selected_record()
+
+    def _render_selected_record(self):
+        lines: list[str] = []
+        if self.selected_record is None:
+            lines.append("Sin pasos de evaluacion todavia.")
+        else:
+            record = self.selected_record
+            lines.extend(
+                [
+                    f"Paso: {record.step}",
+                    f"Accion: {record.action_type}",
+                    f"Reward: {record.reward:+.3f}",
+                    f"Valida: {record.is_valid_action}",
+                    f"Layout antes: {record.layout_before}",
+                    f"Layout despues: {record.layout_after}",
+                ]
+            )
+
+            if record.visible_frontier_before:
+                lines.append(f"Frontier visible antes: {record.visible_frontier_before}")
+            if record.executed_gates:
+                lines.append(f"Puertas ejecutadas: {record.executed_gates}")
+            if record.swap_edge is not None:
+                lines.append(f"SWAP edge: {record.swap_edge}")
+                lines.append(f"Routing delta: {record.routing_progress_delta:+.3f}")
+                lines.append(f"Repeated layout: {record.repeated_layout}")
+                lines.append(f"Undo swap: {record.undo_swap}")
+            if record.primitive_name is not None:
+                lines.append(f"Primitiva: {record.primitive_name}")
+                lines.append(f"Physical qargs: {record.primitive_physical_qargs}")
+                lines.append(f"Primitive cost: {record.primitive_cost}")
+                lines.append(
+                    "Residual: "
+                    f"{record.residual_distance_before} -> {record.residual_distance_after} "
+                    f"(delta {record.residual_distance_delta:+.3f})"
+                )
+
+        self._details.configure(state="normal")
+        self._details.delete("1.0", "end")
+        self._details.insert("end", "\n".join(lines))
+        self._details.configure(state="disabled")

@@ -5,6 +5,8 @@ import pathlib
 import sys
 import types
 
+import numpy as np
+
 
 def _install_stub_modules():
     matplotlib_stub = types.ModuleType("matplotlib")
@@ -48,6 +50,8 @@ def _install_stub_modules():
                 self.text = kwargs["text"]
             if "state" in kwargs:
                 self.state = kwargs["state"]
+            if "values" in kwargs:
+                self.values = list(kwargs["values"])
 
         def winfo_children(self):
             return list(self.children)
@@ -102,13 +106,20 @@ def _install_stub_modules():
             return None
 
     class _CTkTextbox(_BaseWidget):
+        def __init__(self, parent=None, **kwargs):
+            super().__init__(parent, **kwargs)
+            self.buffer = ""
+
         def insert(self, *_args, **_kwargs):
+            if len(_args) >= 2:
+                self.buffer += _args[1]
             return None
 
         def see(self, *_args, **_kwargs):
             return None
 
         def delete(self, *_args, **_kwargs):
+            self.buffer = ""
             return None
 
     class _CTkProgressBar(_BaseWidget):
@@ -196,6 +207,7 @@ def _load_gui_modules():
     for qualified_name, filename in [
         ("src.rl_module.gui.routing_view", "routing_view.py"),
         ("src.rl_module.gui.synthesis_view", "synthesis_view.py"),
+        ("src.rl_module.gui.evaluation_panel", "evaluation_panel.py"),
         ("test_rl_gui_module", "rl_gui.py"),
     ]:
         sys.modules.pop(qualified_name, None)
@@ -209,13 +221,29 @@ def _load_gui_modules():
     return loaded
 
 
+def _load_gui_module(qualified_name, filename):
+    _install_stub_modules()
+
+    gui_dir = pathlib.Path(__file__).resolve().parents[2] / "src" / "rl_module" / "gui"
+    sys.modules.pop(qualified_name, None)
+    module_path = gui_dir / filename
+    spec = importlib.util.spec_from_file_location(qualified_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[qualified_name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 _MODULES = _load_gui_modules()
 RL_GUI_MODULE = _MODULES["test_rl_gui_module"]
 ROUTING_VIEW_MODULE = _MODULES["src.rl_module.gui.routing_view"]
 SYNTHESIS_VIEW_MODULE = _MODULES["src.rl_module.gui.synthesis_view"]
+EVALUATION_PANEL_MODULE = _MODULES["src.rl_module.gui.evaluation_panel"]
 RLBenchmarkGUI = RL_GUI_MODULE.RLBenchmarkGUI
 RoutingView = ROUTING_VIEW_MODULE.RoutingView
 SynthesisView = SYNTHESIS_VIEW_MODULE.SynthesisView
+EvaluationStepRecord = EVALUATION_PANEL_MODULE.EvaluationStepRecord
 SYNTHESIS_BASIS_PROFILES = RL_GUI_MODULE.SYNTHESIS_BASIS_PROFILES
 
 
@@ -275,3 +303,435 @@ class TestRLGuiModeViews:
         assert cfg["max_steps"] == 321
         assert cfg["lookahead"] == 7
         assert cfg["seed"] == 9
+
+
+class TestRLEvaluationInspector:
+    def test_evaluation_tab_uses_shared_inspector_panel_and_updates_when_records_arrive(self):
+        gui_module = _load_gui_module("test_rl_gui_eval_module", "rl_gui.py")
+        app = gui_module.RLBenchmarkGUI()
+
+        record = EvaluationStepRecord(
+            step=1,
+            reward=1.5,
+            action_type="swap",
+            is_valid_action=True,
+            layout_before=[0, 1, 2],
+            layout_after=[1, 0, 2],
+            visible_frontier_before=[
+                {
+                    "gate_name": "cx",
+                    "logical_q1": 0,
+                    "logical_q2": 2,
+                    "physical_q1": 0,
+                    "physical_q2": 2,
+                    "executable": False,
+                }
+            ],
+            executed_gates=[("cx", 0, 1)],
+            swap_edge=(0, 1),
+            routing_progress_delta=1.0,
+            repeated_layout=False,
+            undo_swap=False,
+        )
+
+        assert isinstance(app._eval_inspector, EVALUATION_PANEL_MODULE.EpisodeInspectorPanel)
+        assert app._eval_inspector.selected_record is None
+
+        app._append_eval_record(record)
+
+        assert app._eval_log == [record]
+        assert app._eval_inspector.records == [record]
+        assert app._eval_inspector.selected_record == record
+
+    def test_episode_inspector_panel_renders_selected_record_details(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        record = EvaluationStepRecord(
+            step=2,
+            reward=-0.5,
+            action_type="gate",
+            is_valid_action=False,
+            layout_before=[1],
+            layout_after=[1],
+            visible_frontier_before=[{"gate_name": "cz", "logical_q1": 0}],
+            executed_gates=[("cz", 0, 0)],
+            primitive_name="cz",
+            primitive_physical_qargs=(0, 1),
+            primitive_cost=2.0,
+            residual_distance_before=4.0,
+            residual_distance_after=1.0,
+            residual_distance_delta=3.0,
+        )
+
+        panel.set_records([record])
+
+        assert panel.selected_record == record
+        assert "Paso: 2" in panel._details.buffer
+        assert "Accion: gate" in panel._details.buffer
+        assert "Primitiva: cz" in panel._details.buffer
+        assert "Residual: 4.0 -> 1.0 (delta +3.000)" in panel._details.buffer
+
+    def test_episode_inspector_panel_can_browse_multiple_records(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        first_record = EvaluationStepRecord(
+            step=1,
+            reward=1.0,
+            action_type="swap",
+            is_valid_action=True,
+            layout_before=[0, 1],
+            layout_after=[1, 0],
+            swap_edge=(0, 1),
+        )
+        second_record = EvaluationStepRecord(
+            step=2,
+            reward=-0.5,
+            action_type="gate",
+            is_valid_action=False,
+            layout_before=[1, 0],
+            layout_after=[1, 0],
+            primitive_name="cz",
+            primitive_physical_qargs=(0, 1),
+            primitive_cost=2.0,
+            residual_distance_before=4.0,
+            residual_distance_after=1.0,
+            residual_distance_delta=3.0,
+        )
+
+        panel.set_records([first_record, second_record])
+
+        assert panel.selected_record == second_record
+        assert panel._step_selector.values == ["Paso 1", "Paso 2"]
+        panel._step_selector.set("Paso 1")
+
+        assert panel.selected_record == first_record
+        assert "Paso: 1" in panel._details.buffer
+        assert "SWAP edge: (0, 1)" in panel._details.buffer
+        assert "Primitiva: cz" not in panel._details.buffer
+
+    def test_episode_inspector_panel_preserves_selection_when_new_records_arrive(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        first_record = EvaluationStepRecord(
+            step=1,
+            reward=1.0,
+            action_type="swap",
+            is_valid_action=True,
+            layout_before=[0],
+            layout_after=[0],
+        )
+        second_record = EvaluationStepRecord(
+            step=2,
+            reward=2.0,
+            action_type="swap",
+            is_valid_action=True,
+            layout_before=[0],
+            layout_after=[0],
+        )
+        third_record = EvaluationStepRecord(
+            step=3,
+            reward=3.0,
+            action_type="gate",
+            is_valid_action=True,
+            layout_before=[0],
+            layout_after=[0],
+            primitive_name="x",
+        )
+
+        panel.set_records([first_record, second_record])
+        panel._step_selector.set("Paso 1")
+        panel.set_records([first_record, second_record, third_record])
+
+        assert panel.selected_record == first_record
+        assert panel._step_selector.get() == "Paso 1"
+        assert "Paso: 1" in panel._details.buffer
+
+    def test_start_evaluation_clears_inspector_state_before_launching_thread(self):
+        gui_module = _load_gui_module("test_rl_gui_start_eval_module", "rl_gui.py")
+        app = gui_module.RLBenchmarkGUI()
+        app._agent = object()
+        app._is_training = False
+        app._eval_log = [
+            EvaluationStepRecord(
+                step=1,
+                reward=1.0,
+                action_type="swap",
+                is_valid_action=True,
+                layout_before=[0],
+                layout_after=[0],
+            )
+        ]
+        app._eval_inspector.set_records(app._eval_log)
+
+        original_thread = gui_module.threading.Thread
+
+        class DummyThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                return None
+
+        gui_module.threading.Thread = DummyThread
+        try:
+            app._start_evaluation()
+        finally:
+            gui_module.threading.Thread = original_thread
+
+        assert app._eval_log == []
+        assert app._eval_inspector.records == []
+        assert app._eval_inspector.selected_record is None
+        assert app._eval_terminal.buffer == ""
+
+    def test_evaluation_thread_builds_structured_routing_step_records(self):
+        rl_gui = _load_gui_module("test_rl_gui_eval_routing_module", "rl_gui.py")
+        eval_log_lines = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2], dtype=np.int32)
+                self.remaining_gates = [("cx", 0, 2)]
+                self.total_swaps = 0
+
+            def get_visible_frontier_entries(self):
+                return [
+                    types.SimpleNamespace(
+                        gate_name="cx",
+                        logical_q1=0,
+                        logical_q2=2,
+                        physical_q1=0,
+                        physical_q2=2,
+                        executable=False,
+                    )
+                ]
+
+            def reset(self, seed=None):
+                obs = {
+                    "lookahead": np.array([0, 2], dtype=np.int32),
+                    "lookahead_physical": np.array([0, 2], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([1.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([1.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 1}
+
+            def step(self, action):
+                self.current_layout = np.array([1, 0, 2], dtype=np.int32)
+                self.remaining_gates = []
+                self.total_swaps = 1
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "gates_executed": 1,
+                    "executed_gates": [("cx", 0, 2)],
+                    "swap_edge": (0, 1),
+                    "routing_progress_delta": 1.0,
+                    "repeated_layout": False,
+                    "undo_swap": False,
+                    "is_completed": True,
+                }
+                return obs, 2.5, True, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._eval_log = []
+                self._eval_inspector = types.SimpleNamespace(records=[])
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": object(),
+                    "circuit_name": "fixture-routing-structured",
+                    "coupling_map": [(0, 1), (1, 2)],
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _append_eval_record(self, record):
+                self._eval_log.append(record)
+                self._eval_inspector.records = list(self._eval_log)
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEvalEnv
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert len(gui._eval_log) == 1
+        record = gui._eval_log[0]
+        assert record.step == 1
+        assert record.reward == 2.5
+        assert record.action_type == "swap"
+        assert record.is_valid_action is True
+        assert record.layout_before == [0, 1, 2]
+        assert record.layout_after == [1, 0, 2]
+        assert record.visible_frontier_before == [
+            {
+                "gate_name": "cx",
+                "logical_q1": 0,
+                "logical_q2": 2,
+                "physical_q1": 0,
+                "physical_q2": 2,
+                "executable": False,
+            }
+        ]
+        assert record.executed_gates == [("cx", 0, 2)]
+        assert record.swap_edge == (0, 1)
+        assert record.routing_progress_delta == 1.0
+        assert record.repeated_layout is False
+        assert record.undo_swap is False
+        assert gui._eval_inspector.records == [record]
+        assert not any("│" in line for line in eval_log_lines)
+
+    def test_evaluation_thread_builds_structured_synthesis_step_records(self):
+        rl_gui = _load_gui_module("test_rl_gui_eval_synthesis_module", "rl_gui.py")
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([1], dtype=np.int32)
+                self.remaining_gates = ["pending"]
+                self.total_swaps = 0
+
+            def reset(self, seed=None):
+                obs = {
+                    "layout": np.array([1], dtype=np.int32),
+                    "physical_to_logical": np.array([-1, 0], dtype=np.int32),
+                    "residual_symplectic": np.zeros(16, dtype=np.int32),
+                    "residual_phase": np.zeros(4, dtype=np.int32),
+                    "step_progress": np.array([0.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 1}
+
+            def step(self, action):
+                self.remaining_gates = []
+                obs = {
+                    "layout": np.array([1], dtype=np.int32),
+                    "physical_to_logical": np.array([-1, 0], dtype=np.int32),
+                    "residual_symplectic": np.zeros(16, dtype=np.int32),
+                    "residual_phase": np.zeros(4, dtype=np.int32),
+                    "step_progress": np.array([1.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "gate",
+                    "is_valid_action": True,
+                    "gates_executed": 0,
+                    "primitive_name": "cz",
+                    "primitive_physical_qargs": (0, 1),
+                    "primitive_cost": 2.0,
+                    "residual_distance_before": 5,
+                    "residual_distance_after": 2,
+                    "residual_distance_delta": 3.0,
+                    "is_completed": True,
+                }
+                return obs, 1.25, True, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._eval_log = []
+                self._eval_inspector = types.SimpleNamespace(records=[])
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": object(),
+                    "circuit_name": "fixture-synthesis-structured",
+                    "coupling_map": [(0, 1)],
+                    "mode": "synthesis",
+                    "basis_gates": ["cz", "rz", "sx", "x"],
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _append_eval_record(self, record):
+                self._eval_log.append(record)
+                self._eval_inspector.records = list(self._eval_log)
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                return None
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEvalEnv
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert len(gui._eval_log) == 1
+        record = gui._eval_log[0]
+        assert record.step == 1
+        assert record.reward == 1.25
+        assert record.action_type == "gate"
+        assert record.is_valid_action is True
+        assert record.layout_before == [1]
+        assert record.layout_after == [1]
+        assert record.primitive_name == "cz"
+        assert record.primitive_physical_qargs == (0, 1)
+        assert record.primitive_cost == 2.0
+        assert record.residual_distance_before == 5
+        assert record.residual_distance_after == 2
+        assert record.residual_distance_delta == 3.0
+        assert gui._eval_inspector.records == [record]

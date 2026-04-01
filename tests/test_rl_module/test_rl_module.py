@@ -2590,6 +2590,100 @@ class TestRLEvaluationGUI:
         assert loaded_model_paths == [os.path.join("models", "best_model.zip")]
         assert any("EVALUACIÓN DE EPISODIO (Política Determinista)" in line for line in eval_log_lines)
 
+    def test_evaluation_thread_tolerates_gui_double_without_structured_inspector_hooks(self, monkeypatch, simple_circuit_3q, linear_coupling_3q):
+        """La ruta de evaluación sigue funcionando con doubles antiguos sin _append_eval_record."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+        deterministic_flags = []
+        eval_log_lines = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2], dtype=np.int32)
+                self.remaining_gates = deque()
+                self.total_swaps = 0
+
+            def reset(self, seed=None):
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 0}
+
+            def step(self, action):
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "gates_executed": 0,
+                    "is_completed": True,
+                }
+                return obs, 1.0, True, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                deterministic_flags.append(deterministic)
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": simple_circuit_3q,
+                    "circuit_name": "fixture-backward-safe",
+                    "coupling_map": linear_coupling_3q,
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEvalEnv)
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert deterministic_flags == [True]
+        assert any("Resultado: COMPLETADO" in line for line in eval_log_lines)
+        assert not any("⚠ Error durante evaluación" in line for line in eval_log_lines)
+
     def test_evaluation_thread_ignores_missing_or_foreign_best_artifact(self, monkeypatch, simple_circuit_3q, linear_coupling_3q):
         """La GUI usa el último modelo del run si no hay best artifact válido del run actual."""
         rl_gui = self._load_rl_gui_module(monkeypatch)
@@ -2886,6 +2980,7 @@ class TestRLEvaluationGUI:
         assert any("Resultado: COMPLETADO" in line for line in eval_log_lines)
         assert not any("CICLO DETECTADO" in line for line in eval_log_lines)
         assert any("Steps totales: 4" in line for line in eval_log_lines)
+
 
 
 # ===========================================================================

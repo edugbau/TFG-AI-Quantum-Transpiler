@@ -38,6 +38,11 @@ from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.training import set_global_seeds
 from src.rl_module.gui.routing_view import RoutingView
 from src.rl_module.gui.synthesis_view import SynthesisView
+from src.rl_module.gui.evaluation_panel import (
+    EpisodeInspectorPanel,
+    EvaluationStepRecord,
+    frontier_entry_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +188,7 @@ class RLBenchmarkGUI(ctk.CTk):
         self._env: QuantumTranspilationEnv | None = None
         self._last_callback: GUIProgressCallback | None = None
         self._training_cfg: dict | None = None  # Configuración usada en el entrenamiento
-        self._eval_log: list[dict] = []
+        self._eval_log: list[EvaluationStepRecord] = []
 
         self._create_sidebar()
         self._create_main_frame()
@@ -385,12 +390,16 @@ class RLBenchmarkGUI(ctk.CTk):
         tab_eval = self._tabview.add("Evaluación Episodio")
         tab_eval.grid_rowconfigure(0, weight=1)
         tab_eval.grid_columnconfigure(0, weight=1)
+        tab_eval.grid_columnconfigure(1, weight=2)
+
+        self._eval_inspector = EpisodeInspectorPanel(tab_eval)
+        self._eval_inspector.grid(row=0, column=0, sticky="nsew", padx=(5, 2), pady=5)
 
         self._eval_terminal = ctk.CTkTextbox(
             tab_eval, state="disabled",
             font=ctk.CTkFont(family="Consolas", size=12),
         )
-        self._eval_terminal.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self._eval_terminal.grid(row=0, column=1, sticky="nsew", padx=(2, 5), pady=5)
 
         # --- Tab: Gráficos ---
         tab_plots = self._tabview.add("Gráficos")
@@ -424,6 +433,16 @@ class RLBenchmarkGUI(ctk.CTk):
         self._eval_terminal.configure(state="normal")
         self._eval_terminal.delete("1.0", "end")
         self._eval_terminal.configure(state="disabled")
+
+    def _append_eval_record(self, record: EvaluationStepRecord):
+        if not hasattr(self, "_eval_log"):
+            self._eval_log = []
+
+        self._eval_log.append(record)
+
+        inspector = getattr(self, "_eval_inspector", None)
+        if inspector is not None and hasattr(inspector, "set_records"):
+            inspector.set_records(self._eval_log)
 
     # -----------------------------------------------------------------------
     #  Leer configuración del sidebar
@@ -677,6 +696,8 @@ class RLBenchmarkGUI(ctk.CTk):
             return
 
         self._eval_button.configure(state="disabled")
+        self._eval_log = []
+        self._eval_inspector.set_records(self._eval_log)
         self._clear_eval_terminal()
         self._tabview.set("Evaluación Episodio")
 
@@ -742,9 +763,6 @@ class RLBenchmarkGUI(ctk.CTk):
                 self.after(0, self._eval_log_write, f"Distancia routing: {obs['lookahead_routing_distance'].tolist()}")
                 self.after(0, self._eval_log_write, f"Máscara válida: {obs['lookahead_valid_mask'].tolist()}")
             self.after(0, self._eval_log_write, "-" * 70)
-            self.after(0, self._eval_log_write,
-                       f"{'Step':>5} │ {'Acción':^20} │ {'Reward':>8} │ {'Gates Ej.':>9} │ {'Restantes':>10} │ Layout")
-            self.after(0, self._eval_log_write, "-" * 70)
 
             total_reward = 0.0
             done = False
@@ -760,8 +778,17 @@ class RLBenchmarkGUI(ctk.CTk):
             CYCLE_THRESHOLD = 3  # Un layout visitado 3 veces = bucle claro
 
             while not done:
+                layout_before = eval_env.current_layout.tolist()
+                visible_frontier_before = []
+                if cfg["mode"] == "routing" and hasattr(eval_env, "get_visible_frontier_entries"):
+                    visible_frontier_before = [
+                        frontier_entry_to_dict(entry)
+                        for entry in eval_env.get_visible_frontier_entries()
+                    ]
+
                 action, _ = eval_agent.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = eval_env.step(action)
+                layout_after = eval_env.current_layout.tolist()
 
                 total_reward += reward
                 step += 1
@@ -775,24 +802,30 @@ class RLBenchmarkGUI(ctk.CTk):
                         cycle_detected = True
                         done = True
 
-                # Describir acción
-                action_desc = info.get("action_type", "?")
-                if action_desc == "swap":
-                    action_desc = f"SWAP"
-                elif action_desc == "gate":
-                    action_desc = f"GATE"
-
-                valid_mark = "" if info.get("is_valid_action", True) else " ⚠INVALID"
-
-                remaining = len(eval_env.remaining_gates)
-                layout_str = eval_env.current_layout.tolist()
-
-                line = (
-                    f"{step:5d} │ {action_desc + valid_mark:^20} │ "
-                    f"{reward:+8.1f} │ {info.get('gates_executed', 0):>9} │ "
-                    f"{remaining:>10} │ {layout_str}"
+                record = EvaluationStepRecord(
+                    step=step,
+                    reward=float(reward),
+                    action_type=info.get("action_type"),
+                    is_valid_action=bool(info.get("is_valid_action", True)),
+                    layout_before=list(layout_before),
+                    layout_after=list(layout_after),
+                    visible_frontier_before=visible_frontier_before,
+                    executed_gates=list(info.get("executed_gates", [])),
+                    swap_edge=info.get("swap_edge"),
+                    routing_progress_delta=float(info.get("routing_progress_delta", 0.0)),
+                    repeated_layout=bool(info.get("repeated_layout", False)),
+                    undo_swap=bool(info.get("undo_swap", False)),
+                    primitive_name=info.get("primitive_name"),
+                    primitive_physical_qargs=tuple(info.get("primitive_physical_qargs", ())),
+                    primitive_cost=float(info.get("primitive_cost", 0.0)),
+                    residual_distance_before=float(info.get("residual_distance_before", 0.0)),
+                    residual_distance_after=float(info.get("residual_distance_after", 0.0)),
+                    residual_distance_delta=float(info.get("residual_distance_delta", 0.0)),
                 )
-                self.after(0, self._eval_log_write, line)
+                append_eval_record = getattr(self, "_append_eval_record", None)
+                if not callable(append_eval_record):
+                    append_eval_record = lambda eval_record: RLBenchmarkGUI._append_eval_record(self, eval_record)
+                self.after(0, append_eval_record, record)
 
             self.after(0, self._eval_log_write, "-" * 70)
 
