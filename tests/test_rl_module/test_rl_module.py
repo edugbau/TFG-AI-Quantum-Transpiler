@@ -44,6 +44,7 @@ from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.training import set_global_seeds, setup_training_pipeline
 from src.rl_module.synthesis_clifford import CliffordSynthesisState
+from src.rl_module.frontier import LookaheadEntry
 
 # ---------------------------------------------------------------------------
 # Imports de dependencias externas
@@ -1270,6 +1271,64 @@ class TestQuantumTranspilationEnv:
         assert "is_truncated" in info
         assert info["action_type"] == "swap"
 
+    def test_step_routing_exposes_swap_edge_and_executed_gate_trace(self):
+        qc = QuantumCircuit(3)
+        qc.cx(0, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+        action = env.strategy.edges.index((1, 2))
+
+        _, _, terminated, truncated, info = env.step(action)
+
+        assert terminated is True
+        assert truncated is False
+        assert info["swap_edge"] == (1, 2)
+        assert info["executed_gates"] == [("cx", 0, 2)]
+
+    def test_get_visible_frontier_entries_returns_current_gui_projection(self):
+        qc = QuantumCircuit(3)
+        qc.cx(0, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            lookahead_window=2,
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+
+        assert env.get_visible_frontier_entries() == [
+            LookaheadEntry("cx", 0, 2, 0, 2, False),
+        ]
+
+    def test_get_visible_frontier_entries_returns_current_gui_projection_in_dag_mode(self):
+        qc = QuantumCircuit(4)
+        qc.cx(0, 1)
+        qc.cx(2, 3)
+        qc.cx(1, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            frontier_mode="dag",
+            lookahead_window=3,
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 2, 1, 3]})
+
+        assert env.get_visible_frontier_entries() == [
+            LookaheadEntry("cx", 0, 1, 0, 2, False),
+            LookaheadEntry("cx", 2, 3, 1, 3, False),
+        ]
+
     def test_step_marks_swap_between_empty_physical_nodes_as_invalid(self):
         """Un SWAP entre dos nodos fisicos vacios es invalido pero alcanzable desde la estrategia."""
         # Arrange
@@ -1522,6 +1581,21 @@ class TestQuantumTranspilationEnv:
         }
         assert info["already_completed_at_reset"] is False
 
+    def test_get_visible_frontier_entries_is_empty_in_synthesis_mode(self, linear_coupling_3q):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=linear_coupling_3q,
+            mode="synthesis",
+            basis_gates=["cz", "rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+
+        assert env.get_visible_frontier_entries() == []
+
     def test_synthesis_mode_step_completes_single_qubit_target(self):
         qc = QuantumCircuit(1)
         qc.x(0)
@@ -1546,6 +1620,37 @@ class TestQuantumTranspilationEnv:
         assert truncated is False
         assert info["is_completed"] is True
         assert info["residual_distance_after"] == 0
+
+    def test_synthesis_mode_step_exposes_primitive_trace_fields(self):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[],
+            mode="synthesis",
+            basis_gates=["rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+        x_index = next(
+            index
+            for index, primitive in enumerate(env.strategy.primitives)
+            if primitive.gate_name == "x" and primitive.physical_qargs == (0,)
+        )
+
+        _, _, terminated, truncated, info = env.step(x_index)
+
+        assert terminated is True
+        assert truncated is False
+        assert info["primitive_name"] == "x"
+        assert info["primitive_physical_qargs"] == (0,)
+        assert info["primitive_cost"] == pytest.approx(1.0)
+        assert info["residual_distance_before"] > 0
+        assert info["residual_distance_after"] == 0
+        assert info["residual_distance_delta"] == pytest.approx(
+            float(info["residual_distance_before"])
+        )
 
     def test_synthesis_mode_completion_clears_public_remaining_gates(self):
         qc = QuantumCircuit(1)

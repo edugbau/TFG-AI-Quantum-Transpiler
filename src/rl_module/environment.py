@@ -10,9 +10,9 @@ import warnings
 from collections import deque
 import gymnasium as gym
 import numpy as np
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, MutableSequence
 from .env_strategies import RoutingStrategy, SynthesisStrategy
-from .frontier import DagFrontier, FrontierProvider, GateTuple, SequentialFrontier
+from .frontier import DagFrontier, FrontierProvider, GateTuple, LookaheadEntry, SequentialFrontier
 from .rewards import RoutingReward, SynthesisReward
 from .synthesis_clifford import CliffordSynthesisState
 from qiskit import QuantumCircuit
@@ -192,6 +192,7 @@ class QuantumTranspilationEnv(gym.Env):
     def _apply_synthesis_primitive(self, primitive: Any, info: Dict[str, Any]) -> None:
         before = self._synthesis_state.residual_distance()
         info["primitive_name"] = primitive.gate_name
+        info["primitive_physical_qargs"] = primitive.physical_qargs
         info["primitive_cost"] = float(primitive.cost)
         info["residual_distance_before"] = before
 
@@ -287,7 +288,10 @@ class QuantumTranspilationEnv(gym.Env):
         # FIX #4: Búsqueda O(1) en set precomputado
         return (pq1, pq2) in self._coupling_set
 
-    def _try_execute_front_layer(self) -> int:
+    def _try_execute_front_layer(
+        self,
+        executed_gates: MutableSequence[GateTuple] | None = None,
+    ) -> int:
         """
         Ejecuta todas las puertas consecutivas de la cabeza (front layer) cuyos
         qubits lógicos ya están mapeados a qubits físicos conectados.
@@ -299,6 +303,16 @@ class QuantumTranspilationEnv(gym.Env):
             current_layout=self.current_layout,
             is_connected=self._is_connected,
             cascade_successors=True,
+            executed_gates=executed_gates,
+        )
+
+    def get_visible_frontier_entries(self) -> List[LookaheadEntry]:
+        if self.mode != "routing":
+            return []
+        return self._frontier.get_visible_entries(
+            current_layout=self.current_layout,
+            lookahead_window=self.lookahead_window,
+            is_connected=self._is_connected,
         )
 
     def _layout_signature(self) -> Tuple[int, ...]:
@@ -326,10 +340,14 @@ class QuantumTranspilationEnv(gym.Env):
                 "action_type": "terminal_noop",
                 "is_valid_action": False,
                 "gates_executed": 0,
+                "executed_gates": [],
+                "swap_edge": None,
                 "is_completed": False,
                 "repeated_layout": False,
                 "undo_swap": False,
                 "routing_progress_delta": 0.0,
+                "primitive_name": None,
+                "primitive_physical_qargs": (),
                 "primitive_cost": 0.0,
                 "residual_distance_before": 0,
                 "residual_distance_after": 0,
@@ -351,6 +369,8 @@ class QuantumTranspilationEnv(gym.Env):
             "action_type": action_info.get("type"),
             "is_valid_action": True,
             "gates_executed": 0,
+            "executed_gates": [],
+            "swap_edge": None,
             "is_completed": False,
             "repeated_layout": False,
             "undo_swap": False,
@@ -362,6 +382,7 @@ class QuantumTranspilationEnv(gym.Env):
             pq1 = action_info["physical_q1"]
             pq2 = action_info["physical_q2"]
             swap_edge = tuple(sorted((pq1, pq2)))
+            info["swap_edge"] = swap_edge
             info["undo_swap"] = self._last_swap_edge == swap_edge
             layout_changed = False
             
@@ -402,7 +423,9 @@ class QuantumTranspilationEnv(gym.Env):
             self.total_swaps += 1
             
             # 3. Intentar ejecutar puertas pendientes
-            info["gates_executed"] = self._try_execute_front_layer()
+            info["gates_executed"] = self._try_execute_front_layer(
+                executed_gates=info["executed_gates"],
+            )
             if info["gates_executed"] > 0:
                 info["undo_swap"] = False
                 info["repeated_layout"] = False
@@ -442,6 +465,8 @@ class QuantumTranspilationEnv(gym.Env):
                 routing_progress_delta = max(routing_progress_delta, 0.0)
             info["routing_progress_delta"] = routing_progress_delta
         else:
+            info.setdefault("primitive_name", None)
+            info.setdefault("primitive_physical_qargs", ())
             info.setdefault("primitive_cost", 0.0)
             info.setdefault("residual_distance_before", 0)
             info.setdefault("residual_distance_after", 0)

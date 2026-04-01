@@ -43,6 +43,25 @@ def test_execute_ready_cascade_stops_at_first_blocked_gate():
     assert list(frontier.pending_gates) == [("cx", 0, 2)]
 
 
+def test_execute_ready_cascade_optionally_appends_executed_gate_trace():
+    frontier = SequentialFrontier(
+        [("h", 0, 0), ("cx", 0, 1), ("cx", 0, 2)]
+    )
+    layout = np.array([0, 1, 2], dtype=np.int32)
+    coupling_set = {(0, 1), (1, 0), (1, 2), (2, 1)}
+    executed_gates = []
+
+    executed = frontier.execute_ready_cascade(
+        current_layout=layout,
+        is_connected=lambda a, b: (a, b) in coupling_set,
+        executed_gates=executed_gates,
+    )
+
+    assert executed == 2
+    assert executed_gates == [("h", 0, 0), ("cx", 0, 1)]
+    assert list(frontier.pending_gates) == [("cx", 0, 2)]
+
+
 def test_pending_gates_preserves_deque_compatibility():
     frontier = SequentialFrontier(deque([("cx", 0, 2)]))
 
@@ -109,6 +128,28 @@ def test_dag_frontier_execute_ready_cascade_removes_newly_unblocked_successors()
     )
 
     assert executed == 3
+    assert frontier.remaining_gate_count == 0
+
+
+def test_dag_frontier_execute_ready_cascade_optionally_appends_executed_gate_trace():
+    qc = QuantumCircuit(4, name="dag_front_layer")
+    qc.cx(0, 1)
+    qc.cx(2, 3)
+    qc.cx(1, 2)
+
+    frontier = DagFrontier.from_circuit(qc)
+    layout = np.arange(4, dtype=np.int32)
+    coupling_set = {(0, 1), (1, 0), (1, 2), (2, 1), (2, 3), (3, 2)}
+    executed_gates = []
+
+    executed = frontier.execute_ready_cascade(
+        current_layout=layout,
+        is_connected=lambda a, b: (a, b) in coupling_set,
+        executed_gates=executed_gates,
+    )
+
+    assert executed == 3
+    assert executed_gates == [("cx", 0, 1), ("cx", 2, 3), ("cx", 1, 2)]
     assert frontier.remaining_gate_count == 0
 
 

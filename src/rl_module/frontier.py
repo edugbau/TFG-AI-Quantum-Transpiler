@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Deque, Iterable, List, Protocol, Tuple
+from typing import Callable, Deque, Iterable, List, MutableSequence, Protocol, Tuple
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -45,6 +45,7 @@ class FrontierProvider(Protocol):
         current_layout: np.ndarray,
         is_connected: Callable[[int, int], bool],
         cascade_successors: bool = True,
+        executed_gates: MutableSequence[GateTuple] | None = None,
     ) -> int:
         ...
 
@@ -99,11 +100,13 @@ class SequentialFrontier:
         current_layout: np.ndarray,
         is_connected: Callable[[int, int], bool],
         cascade_successors: bool = True,
+        executed_gates: MutableSequence[GateTuple] | None = None,
     ) -> int:
         executed_count = 0
 
         while self.pending_gates:
-            _, logical_q1, logical_q2 = self.pending_gates[0]
+            gate = self.pending_gates[0]
+            _, logical_q1, logical_q2 = gate
             physical_q1 = int(current_layout[logical_q1])
             physical_q2 = int(current_layout[logical_q2])
 
@@ -111,6 +114,8 @@ class SequentialFrontier:
                 break
 
             self.pending_gates.popleft()
+            if executed_gates is not None:
+                executed_gates.append(gate)
             executed_count += 1
 
         return executed_count
@@ -183,6 +188,7 @@ class DagFrontier:
         current_layout: np.ndarray,
         is_connected: Callable[[int, int], bool],
         cascade_successors: bool = True,
+        executed_gates: MutableSequence[GateTuple] | None = None,
     ) -> int:
         executed_count = 0
 
@@ -196,6 +202,8 @@ class DagFrontier:
                 break
 
             for node in ready_nodes:
+                if executed_gates is not None:
+                    executed_gates.append(self._node_to_gate_tuple(node))
                 self._dag.remove_op_node(node)
                 executed_count += 1
 
