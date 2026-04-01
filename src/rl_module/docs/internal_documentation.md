@@ -10,11 +10,22 @@ Para ofrecer una escalabilidad completa, la arquitectura del entorno ha sido dis
 src/rl_module/
 ├── environment.py       # Entorno Gymnasium (QuantumTranspilationEnv) optimizado con búsquedas O(1) en Layout.
 ├── env_strategies.py    # Patrón Strategy que expone modos: RoutingStrategy, SynthesisStrategy.
+├── frontier.py          # Proveedores de frontera (secuencial y DAG) para routing.
 ├── rewards.py           # Sistema desacoplado de heurísticas (RoutingReward, SynthesisReward).
 ├── agent.py             # Wrapper (QuantumRLAgent) orquestando Stable-Baselines3 (PPO / DQN) y soporte GPU/CUDA.
 ├── training.py          # Script de abstracción y pipeline de entrenamiento (logs en TensorBoard y Checkpoint callbacks).
+├── gui/                 # GUI única con vistas especializadas por modo y panel de inspección de episodios.
 └── docs/                # Documentación interna (como este archivo).
 ```
+
+## GUI RL: una app, dos vistas especializadas
+
+La interfaz `rl_gui.py` ya no debe entenderse como dos aplicaciones separadas. La GUI es una sola app (`RLBenchmarkGUI`) con configuración compartida y dos vistas especializadas:
+
+- **Vista de routing**: expone controles específicos de frontera (`frontier_mode="sequential"` o `"dag"`) y métricas ligadas a lookahead, layout dinámico y SWAPs.
+- **Vista de synthesis**: oculta los controles exclusivos de routing y centra la evaluación en primitivas hardware-aware y en el progreso del residual.
+
+Ambas vistas comparten el mismo flujo general de entrenamiento/evaluación, pero cada una muestra únicamente los controles y los detalles de episodio que tienen significado semántico para su modo.
 
 ## Arquitectura de Escalabilidad (Patrón Strategy)
 
@@ -46,12 +57,37 @@ El entorno puede operar con dos modos de frontera:
 
 Esto mejora la observabilidad del efecto del `SWAP`: el agente ya no ve solo el par lógico futuro, sino también su proyección física, su ejecutabilidad actual y su distancia de routing.
 
+### Semántica del inspector de episodios en routing
+
+Durante la evaluación interactiva, el `EpisodeInspectorPanel` registra un `EvaluationStepRecord` por paso y muestra metadatos propios de routing:
+
+- **`layout_before` / `layout_after`**: estado del mapeo lógico->físico antes y después de la acción.
+- **`visible_frontier_before`**: snapshot de la frontera visible antes del paso. Cada entrada incluye puerta, qubits lógicos, qubits físicos proyectados y si la puerta ya era ejecutable.
+- **`swap_edge`**: arista física seleccionada por la acción discreta cuando el agente inserta un SWAP.
+- **`executed_gates`**: puertas que el entorno pudo ejecutar en cascada tras actualizar el layout.
+- **`routing_progress_delta`**: progreso neto de routing inducido por la acción.
+- **`repeated_layout` / `undo_swap`**: señales de diagnóstico para detectar oscilaciones o deshacer el SWAP inmediatamente anterior.
+
+La lectura correcta del inspector en routing es: primero se observa la frontera visible bajo el layout actual, luego la acción modifica el layout físico mediante un SWAP y, si eso desbloquea dependencias, el entorno ejecuta automáticamente las puertas habilitadas. Por eso el panel muestra frontera, layout, SWAP y puertas ejecutadas en ese orden lógico.
+
 ### 2. Modo Síntesis (`mode="synthesis"`)
 - **Estado actual**: primer modo entrenable restringido a circuitos Clifford.
 - **Conciencia de hardware**: requiere `coupling_map` y `basis_gates`; la topología sola no determina la puerta nativa de 2 qubits.
 - **Espacio de acción**: `Discrete(N)` sobre un catálogo fijo de primitivas Clifford hardware-aware.
 - **Criterio de éxito**: equivalencia Clifford por residual identidad en espacio físico.
 - **Limitación actual**: el layout es fijo durante el episodio; no hay `swap` dinámico en synthesis v1.
+
+### Semántica del inspector de episodios en synthesis
+
+En `synthesis`, el inspector reutiliza el mismo panel pero cambia completamente la interpretación del paso:
+
+- **`primitive_name`**: nombre de la primitiva aplicada desde el catálogo hardware-aware.
+- **`primitive_physical_qargs`**: qubits físicos sobre los que se intenta aplicar la primitiva.
+- **`primitive_cost`**: coste asociado a la primitiva elegida.
+- **`residual_distance_before` / `residual_distance_after`**: distancia del residual antes y después del paso.
+- **`residual_distance_delta`**: mejora neta del residual causada por la acción.
+
+La visualización de `synthesis` es deliberadamente **residual-céntrica**. El panel no debe interpretarse como una cola de "puertas restantes" al estilo routing. El episodio progresa reduciendo el residual Clifford hacia la identidad física, y cada paso se describe por la primitiva aplicada y por cuánto reduce (o no) esa distancia residual.
 
 ## Sistema de Recompensas (`rewards.py`)
 
@@ -94,7 +130,7 @@ Durante el entrenamiento, PPO utiliza una **política estocástica**: muestrea a
 - **`step_progress` en observación** (`env_strategies.py`): Escalar $\in [0, 1]$ que da contexto temporal al agente. Ayuda parcialmente pero no resuelve el problema por completo.
 - **Lookahead enriquecido**: `lookahead_physical`, `lookahead_executable`, `lookahead_routing_distance` y `lookahead_valid_mask` hacen explícito el efecto de cada `SWAP` sobre la frontera observable.
 - **`frontier_mode="dag"`**: permite representar correctamente puertas paralelas en circuitos con dependencias no lineales.
-- **Detección visual de ciclos en GUI** (`rl_gui.py`): durante la evaluación interactiva de **routing**, la GUI detecta si un layout se visita 3 veces y corta el episodio mostrando `"CICLO DETECTADO ⚠"`. Esto **no afecta** al entorno de entrenamiento y no se aplica a `synthesis`, donde el layout puede permanecer fijo por diseño.
+- **Detección visual de ciclos en GUI** (`rl_gui.py`): durante la evaluación interactiva de **routing**, la GUI detecta si un layout se visita 3 veces y corta el episodio mostrando `"CICLO DETECTADO ⚠"`. Esto **no afecta** al entorno de entrenamiento y no se aplica a `synthesis`, donde el layout puede permanecer fijo por diseño y el progreso se mide sobre el residual, no sobre cambios de layout.
 - **Penalización de SWAPs vacíos** (`environment.py`): Los SWAPs entre dos posiciones físicas sin qubit lógico se marcan como inválidos (-5.0 de penalización).
 - **Shaping por repetición en routing** (`rewards.py` + `environment.py`): el entorno expone señales `repeated_layout`, `undo_swap` y `routing_progress_delta`, y `RoutingReward` ya penaliza repeticiones/undo-swap y bonifica progreso neto de routing.
 

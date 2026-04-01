@@ -9,12 +9,17 @@ import numpy as np
 
 
 def _install_stub_modules():
+    repo_src_dir = pathlib.Path(__file__).resolve().parents[2] / "src"
+    rl_module_dir = repo_src_dir / "rl_module"
+    gui_dir = rl_module_dir / "gui"
+
     matplotlib_stub = types.ModuleType("matplotlib")
     matplotlib_stub.use = lambda *_args, **_kwargs: None
     pyplot_stub = types.ModuleType("matplotlib.pyplot")
     pyplot_stub.subplots = lambda *_args, **_kwargs: (None, [None, None])
     pyplot_stub.tight_layout = lambda *_args, **_kwargs: None
     pyplot_stub.close = lambda *_args, **_kwargs: None
+    pyplot_stub.switch_backend = lambda *_args, **_kwargs: None
     backend_stub = types.ModuleType("matplotlib.backends.backend_tkagg")
     backend_stub.FigureCanvasTkAgg = object
 
@@ -176,11 +181,11 @@ def _install_stub_modules():
     training_stub.set_global_seeds = lambda *_args, **_kwargs: None
 
     src_pkg = types.ModuleType("src")
-    src_pkg.__path__ = []
+    src_pkg.__path__ = [str(repo_src_dir)]
     rl_module_pkg = types.ModuleType("src.rl_module")
-    rl_module_pkg.__path__ = []
+    rl_module_pkg.__path__ = [str(rl_module_dir)]
     gui_pkg = types.ModuleType("src.rl_module.gui")
-    gui_pkg.__path__ = []
+    gui_pkg.__path__ = [str(gui_dir)]
 
     sys.modules.setdefault("src", src_pkg)
     sys.modules.setdefault("src.rl_module", rl_module_pkg)
