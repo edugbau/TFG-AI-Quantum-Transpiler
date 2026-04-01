@@ -306,6 +306,89 @@ class TestRLGuiModeViews:
 
 
 class TestRLEvaluationInspector:
+    def test_episode_inspector_panel_renders_routing_summary_and_details(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        record = EvaluationStepRecord(
+            step=3,
+            reward=1.25,
+            action_type="swap",
+            is_valid_action=True,
+            layout_before=[0, 1, 2],
+            layout_after=[1, 0, 2],
+            visible_frontier_before=[
+                {
+                    "gate_name": "cx",
+                    "logical_q1": 0,
+                    "logical_q2": 2,
+                    "physical_q1": 1,
+                    "physical_q2": 2,
+                    "executable": False,
+                }
+            ],
+            executed_gates=[("cx", 0, 2)],
+            swap_edge=(0, 1),
+            routing_progress_delta=1.0,
+            repeated_layout=True,
+            undo_swap=True,
+        )
+
+        panel.set_records([record])
+
+        assert "Resumen routing:" in panel._details.buffer
+        assert "swap_edge: (0, 1)" in panel._details.buffer
+        assert "executed_gates: [('cx', 0, 2)]" in panel._details.buffer
+        assert "visible_frontier_before:" in panel._details.buffer
+        assert "gate_name=cx" in panel._details.buffer
+        assert "repeated_layout: True" in panel._details.buffer
+        assert "undo_swap: True" in panel._details.buffer
+
+    def test_episode_inspector_panel_renders_synthesis_summary_and_details(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        record = EvaluationStepRecord(
+            step=4,
+            reward=0.75,
+            action_type="gate",
+            is_valid_action=True,
+            layout_before=[1, 0],
+            layout_after=[1, 0],
+            primitive_name="cz",
+            primitive_physical_qargs=(0, 1),
+            primitive_cost=2.0,
+            residual_distance_before=5.0,
+            residual_distance_after=2.0,
+            residual_distance_delta=3.0,
+        )
+
+        panel.set_records([record])
+
+        assert "Resumen synthesis:" in panel._details.buffer
+        assert "primitive_name: cz" in panel._details.buffer
+        assert "primitive_physical_qargs: (0, 1)" in panel._details.buffer
+        assert "primitive_cost: 2.0" in panel._details.buffer
+        assert "residual progression: 5.0 -> 2.0 (delta +3.000)" in panel._details.buffer
+
+    def test_episode_inspector_panel_synthesis_summary_avoids_routing_only_labels(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        record = EvaluationStepRecord(
+            step=5,
+            reward=0.5,
+            action_type="gate",
+            is_valid_action=True,
+            layout_before=[0, 1],
+            layout_after=[0, 1],
+            primitive_name="iswap",
+            primitive_physical_qargs=(0, 1),
+            primitive_cost=3.0,
+            residual_distance_before=6.0,
+            residual_distance_after=1.0,
+            residual_distance_delta=5.0,
+        )
+
+        panel.set_records([record])
+
+        assert "Resumen synthesis:" in panel._details.buffer
+        assert "SWAPs insertados" not in panel._details.buffer
+
     def test_evaluation_tab_uses_shared_inspector_panel_and_updates_when_records_arrive(self):
         gui_module = _load_gui_module("test_rl_gui_eval_module", "rl_gui.py")
         app = gui_module.RLBenchmarkGUI()
@@ -367,8 +450,9 @@ class TestRLEvaluationInspector:
         assert panel.selected_record == record
         assert "Paso: 2" in panel._details.buffer
         assert "Accion: gate" in panel._details.buffer
-        assert "Primitiva: cz" in panel._details.buffer
-        assert "Residual: 4.0 -> 1.0 (delta +3.000)" in panel._details.buffer
+        assert "Resumen synthesis:" in panel._details.buffer
+        assert "primitive_name: cz" in panel._details.buffer
+        assert "residual progression: 4.0 -> 1.0 (delta +3.000)" in panel._details.buffer
 
     def test_episode_inspector_panel_can_browse_multiple_records(self):
         panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
@@ -404,8 +488,50 @@ class TestRLEvaluationInspector:
 
         assert panel.selected_record == first_record
         assert "Paso: 1" in panel._details.buffer
-        assert "SWAP edge: (0, 1)" in panel._details.buffer
-        assert "Primitiva: cz" not in panel._details.buffer
+        assert "Resumen routing:" in panel._details.buffer
+        assert "swap_edge: (0, 1)" in panel._details.buffer
+        assert "primitive_name: cz" not in panel._details.buffer
+
+    def test_episode_inspector_panel_renders_both_sections_when_record_has_mixed_metadata(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        record = EvaluationStepRecord(
+            step=6,
+            reward=1.0,
+            action_type="gate",
+            is_valid_action=True,
+            layout_before=[0, 1],
+            layout_after=[1, 0],
+            visible_frontier_before=[
+                {
+                    "gate_name": "cx",
+                    "logical_q1": 0,
+                    "logical_q2": 1,
+                    "physical_q1": 0,
+                    "physical_q2": 1,
+                    "executable": True,
+                }
+            ],
+            executed_gates=[("cx", 0, 1)],
+            swap_edge=(0, 1),
+            routing_progress_delta=0.5,
+            repeated_layout=False,
+            undo_swap=False,
+            primitive_name="cz",
+            primitive_physical_qargs=(0, 1),
+            primitive_cost=2.0,
+            residual_distance_before=3.0,
+            residual_distance_after=1.0,
+            residual_distance_delta=2.0,
+        )
+
+        panel.set_records([record])
+
+        assert "Resumen routing:" in panel._details.buffer
+        assert "Detalles routing:" in panel._details.buffer
+        assert "Resumen synthesis:" in panel._details.buffer
+        assert "Detalles synthesis:" in panel._details.buffer
+        assert "swap_edge: (0, 1)" in panel._details.buffer
+        assert "primitive_name: cz" in panel._details.buffer
 
     def test_episode_inspector_panel_preserves_selection_when_new_records_arrive(self):
         panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)

@@ -42,6 +42,65 @@ def frontier_entry_to_dict(entry: Any) -> dict[str, Any]:
     }
 
 
+def _has_routing_metadata(record: "EvaluationStepRecord") -> bool:
+    return bool(
+        record.swap_edge is not None
+        or record.executed_gates
+        or record.visible_frontier_before
+        or record.repeated_layout
+        or record.undo_swap
+    )
+
+
+def _has_synthesis_metadata(record: "EvaluationStepRecord") -> bool:
+    return record.primitive_name is not None
+
+
+def _format_routing_record(record: "EvaluationStepRecord") -> list[str]:
+    lines = [
+        "Resumen routing:",
+        f"  accion={record.action_type} reward={record.reward:+.3f} swap_edge={record.swap_edge}",
+        f"  executed_gates={len(record.executed_gates)} routing_delta={record.routing_progress_delta:+.3f}",
+        "Detalles routing:",
+        f"swap_edge: {record.swap_edge}",
+        f"executed_gates: {record.executed_gates}",
+    ]
+
+    if record.visible_frontier_before:
+        lines.append("visible_frontier_before:")
+        for entry in record.visible_frontier_before:
+            lines.append(
+                "  - "
+                f"gate_name={entry.get('gate_name')} "
+                f"logical=({entry.get('logical_q1')}, {entry.get('logical_q2')}) "
+                f"physical=({entry.get('physical_q1')}, {entry.get('physical_q2')}) "
+                f"executable={entry.get('executable')}"
+            )
+
+    lines.extend(
+        [
+            f"repeated_layout: {record.repeated_layout}",
+            f"undo_swap: {record.undo_swap}",
+        ]
+    )
+    return lines
+
+
+def _format_synthesis_record(record: "EvaluationStepRecord") -> list[str]:
+    return [
+        "Resumen synthesis:",
+        f"  accion={record.action_type} reward={record.reward:+.3f} primitive={record.primitive_name}",
+        f"  primitive_cost={record.primitive_cost} residual_delta={record.residual_distance_delta:+.3f}",
+        "Detalles synthesis:",
+        f"primitive_name: {record.primitive_name}",
+        f"primitive_physical_qargs: {record.primitive_physical_qargs}",
+        f"primitive_cost: {record.primitive_cost}",
+        "residual progression: "
+        f"{record.residual_distance_before} -> {record.residual_distance_after} "
+        f"(delta {record.residual_distance_delta:+.3f})",
+    ]
+
+
 class EpisodeInspectorPanel(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
@@ -123,27 +182,20 @@ class EpisodeInspectorPanel(ctk.CTkFrame):
                     f"Layout despues: {record.layout_after}",
                 ]
             )
-
-            if record.visible_frontier_before:
-                lines.append(f"Frontier visible antes: {record.visible_frontier_before}")
-            if record.executed_gates:
-                lines.append(f"Puertas ejecutadas: {record.executed_gates}")
-            if record.swap_edge is not None:
-                lines.append(f"SWAP edge: {record.swap_edge}")
-                lines.append(f"Routing delta: {record.routing_progress_delta:+.3f}")
-                lines.append(f"Repeated layout: {record.repeated_layout}")
-                lines.append(f"Undo swap: {record.undo_swap}")
-            if record.primitive_name is not None:
-                lines.append(f"Primitiva: {record.primitive_name}")
-                lines.append(f"Physical qargs: {record.primitive_physical_qargs}")
-                lines.append(f"Primitive cost: {record.primitive_cost}")
-                lines.append(
-                    "Residual: "
-                    f"{record.residual_distance_before} -> {record.residual_distance_after} "
-                    f"(delta {record.residual_distance_delta:+.3f})"
-                )
+            lines.extend(self._format_mode_specific_lines(record))
 
         self._details.configure(state="normal")
         self._details.delete("1.0", "end")
         self._details.insert("end", "\n".join(lines))
         self._details.configure(state="disabled")
+
+    def _format_mode_specific_lines(self, record: EvaluationStepRecord) -> list[str]:
+        lines: list[str] = []
+
+        if _has_routing_metadata(record):
+            lines.extend(_format_routing_record(record))
+
+        if _has_synthesis_metadata(record):
+            lines.extend(_format_synthesis_record(record))
+
+        return lines
