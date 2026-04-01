@@ -55,7 +55,8 @@ def setup_training_pipeline(
     model_save_dir: str = "./experiments/models/rl_models",
     lookahead_window: int = 10,
     max_steps: int = 1000,
-    hyperparams: Optional[dict] = None
+    hyperparams: Optional[dict] = None,
+    basis_gates: Optional[List[str]] = None,
 ) -> QuantumRLAgent:
     """
     Configura y lanza el pipeline completo de entrenamiento del agente.
@@ -73,6 +74,7 @@ def setup_training_pipeline(
         lookahead_window: Número de puertas futuras visibles para el agente.
         max_steps: Máximo de pasos por episodio antes de truncar.
         hyperparams: Diccionario con hiperparámetros para PPO/DQN.
+        basis_gates: Base nativa explícita requerida por ``mode="synthesis"``.
         
     Returns:
         El agente entrenado listo para evaluación.
@@ -90,6 +92,7 @@ def setup_training_pipeline(
         frontier_mode=frontier_mode,
         lookahead_window=lookahead_window,
         max_steps=max_steps,
+        basis_gates=basis_gates,
     )
     raw_env.reset(seed=seed)
     env = Monitor(raw_env)
@@ -102,6 +105,7 @@ def setup_training_pipeline(
         frontier_mode=frontier_mode,
         lookahead_window=lookahead_window,
         max_steps=max_steps,
+        basis_gates=basis_gates,
     )
     eval_raw_env.reset(seed=seed)
     eval_env = Monitor(eval_raw_env)

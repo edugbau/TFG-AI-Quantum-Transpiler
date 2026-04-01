@@ -47,9 +47,11 @@ El entorno puede operar con dos modos de frontera:
 Esto mejora la observabilidad del efecto del `SWAP`: el agente ya no ve solo el par lógico futuro, sino también su proyección física, su ejecutabilidad actual y su distancia de routing.
 
 ### 2. Modo Síntesis (`mode="synthesis"`)
-- **Action Space:** Multi-Discreto (`gym.spaces.MultiDiscrete`). El agente elige un operador explícito (ej. CX, RX, RZ) junto con sus qubits físicos (targets).
-- **Observation Space:** Comparte la caja `Dict` con *Routing*, pero pensado para expandirse a Tableaus de Clifford u operaciones vectoriales.
-- **Estado actual:** la infraestructura de observación y frontier ya está preparada, pero la lógica específica de síntesis sigue siendo placeholder y no debe considerarse entrenable todavía.
+- **Estado actual**: primer modo entrenable restringido a circuitos Clifford.
+- **Conciencia de hardware**: requiere `coupling_map` y `basis_gates`; la topología sola no determina la puerta nativa de 2 qubits.
+- **Espacio de acción**: `Discrete(N)` sobre un catálogo fijo de primitivas Clifford hardware-aware.
+- **Criterio de éxito**: equivalencia Clifford por residual identidad en espacio físico.
+- **Limitación actual**: el layout es fijo durante el episodio; no hay `swap` dinámico en synthesis v1.
 
 ## Sistema de Recompensas (`rewards.py`)
 
@@ -63,6 +65,7 @@ Extraído con el patrón *RewardStrategy*. Permite modificar heurísticas de rec
 ## Entrenamiento y Agente (SB3)
 Se utilizan los wrappers del archivo `agent.py` y `training.py` basados en `stable_baselines3`.
 El método `setup_training_pipeline()` permite acoplar automáticamente semillas de reproducibilidad (`set_global_seeds`), encapsular el entorno Gymnasium para reportes (`Monitor`), e inyectar `Dict` Policies a través del motor PyTorch que correrá predefinido en CUDA. Se levantan periódicamente *TensorBoard Logs* y *Checkpoint Calbacks* como sistema de salvado.
+En `mode="synthesis"`, el pipeline también debe recibir `basis_gates` explícitas para construir el catálogo de primitivas tanto en entrenamiento como en evaluación.
 
 Para DQN, se inyectan automáticamente hiperparámetros estabilizadores: `exploration_fraction=0.5` (mayor exploración durante el entrenamiento), `tau=0.05` (soft target updates para suavizar el aprendizaje) y `learning_starts=1000`.
 
@@ -91,13 +94,14 @@ Durante el entrenamiento, PPO utiliza una **política estocástica**: muestrea a
 - **`step_progress` en observación** (`env_strategies.py`): Escalar $\in [0, 1]$ que da contexto temporal al agente. Ayuda parcialmente pero no resuelve el problema por completo.
 - **Lookahead enriquecido**: `lookahead_physical`, `lookahead_executable`, `lookahead_routing_distance` y `lookahead_valid_mask` hacen explícito el efecto de cada `SWAP` sobre la frontera observable.
 - **`frontier_mode="dag"`**: permite representar correctamente puertas paralelas en circuitos con dependencias no lineales.
-- **Detección visual de ciclos** (`rl_gui.py`): La GUI detecta si un layout se visita 3 veces y corta el episodio mostrando `"CICLO DETECTADO ⚠"`. Esto **no afecta** al entorno de entrenamiento, es solo una protección de la interfaz.
+- **Detección visual de ciclos en GUI** (`rl_gui.py`): durante la evaluación interactiva de **routing**, la GUI detecta si un layout se visita 3 veces y corta el episodio mostrando `"CICLO DETECTADO ⚠"`. Esto **no afecta** al entorno de entrenamiento y no se aplica a `synthesis`, donde el layout puede permanecer fijo por diseño.
 - **Penalización de SWAPs vacíos** (`environment.py`): Los SWAPs entre dos posiciones físicas sin qubit lógico se marcan como inválidos (-5.0 de penalización).
+- **Shaping por repetición en routing** (`rewards.py` + `environment.py`): el entorno expone señales `repeated_layout`, `undo_swap` y `routing_progress_delta`, y `RoutingReward` ya penaliza repeticiones/undo-swap y bonifica progreso neto de routing.
 
 ### Posibles Soluciones Futuras (No Implementadas)
 1. **Redes recurrentes (LSTM):** Usar `RecurrentPPO` de `sb3-contrib` para dar al agente memoria real de acciones pasadas.
 2. **State hashing en la observación:** Incluir un hash de los últimos N layouts visitados como parte de la observación.
-3. **Penalización por repetición in-environment:** Penalizar directamente en la función de recompensa cuando se revisita un layout (con cuidado de no matar la exploración durante training, posiblemente activable solo en eval).
+3. **Memoria explícita o contexto histórico richer:** Añadir contexto de historial sin depender solo de `step_progress`, por ejemplo mediante observaciones recurrentes o features de trayectoria más expresivas.
 4. **Mayor entrenamiento y `max_steps` ajustado:** Con circuitos más complejos y más timesteps, la política podría converger lo suficiente para no oscilar.
 
 ---

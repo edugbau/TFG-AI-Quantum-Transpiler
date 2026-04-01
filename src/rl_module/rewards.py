@@ -130,50 +130,52 @@ class RoutingReward(RewardStrategy):
 
 class SynthesisReward(RewardStrategy):
     """
-    Estrategia de recompensa para Síntesis completa.
-    El objetivo es reconstruir el circuito objetivo minimizando el coste total de las puertas.
+    Estrategia de recompensa para síntesis Clifford basada en progreso residual.
 
     Parámetros configurables
     ------------------------
-    valid_gate_reward : float
-        Recompensa cuando la puerta aplicada contribuye a la síntesis.
-    incorrect_gate_penalty : float
-        Penalización cuando la puerta aplicada no contribuye.
+    invalid_action_penalty : float
+        Penalización aplicada cuando la primitive seleccionada no es válida.
+    step_penalty : float
+        Coste base por paso válido para incentivar episodios cortos.
+    primitive_cost_weight : float
+        Peso lineal aplicado al coste intrínseco de la primitive ejecutada.
+    residual_progress_reward : float
+        Factor lineal aplicado a ``residual_distance_delta``.
     completion_bonus : float
-        Bonificación por completar la síntesis exacta del circuito.
+        Bonificación por completar la síntesis (residual identidad).
     truncation_penalty : float
-        Penalización cuando el episodio se trunca por agotar ``max_steps``
-        sin haber completado la síntesis.  Configurar a ``0.0`` para
-        deshabilitar.
+        Penalización cuando el episodio se trunca sin completar la síntesis.
     """
 
     def __init__(
         self,
-        valid_gate_reward: float = 2.0,
-        incorrect_gate_penalty: float = -1.0,
+        invalid_action_penalty: float = -5.0,
+        step_penalty: float = -0.25,
+        primitive_cost_weight: float = 0.5,
+        residual_progress_reward: float = 1.0,
         completion_bonus: float = 100.0,
         truncation_penalty: float = -30.0,
     ):
-        self.valid_gate_reward = valid_gate_reward
-        self.incorrect_gate_penalty = incorrect_gate_penalty
+        self.invalid_action_penalty = invalid_action_penalty
+        self.step_penalty = step_penalty
+        self.primitive_cost_weight = primitive_cost_weight
+        self.residual_progress_reward = residual_progress_reward
         self.completion_bonus = completion_bonus
         self.truncation_penalty = truncation_penalty
 
     def compute_reward(self, prev_state: Any, action: Any, current_state: Any, info: Dict[str, Any]) -> float:
-        reward = 0.0
-        
-        # 1. Recompensa si la puerta aplicada contribuye positivamente a la síntesis del circuito target
-        if info.get('gate_matched_target', False):
-            reward += self.valid_gate_reward
+        if info.get("is_valid_action") is False:
+            reward = self.invalid_action_penalty
         else:
-            reward += self.incorrect_gate_penalty
-            
-        # 2. Bonificación por completar la síntesis exacta
-        if info.get('is_completed', False):
+            reward = self.step_penalty
+            reward -= self.primitive_cost_weight * float(info.get("primitive_cost", 0.0))
+            reward += self.residual_progress_reward * float(info.get("residual_distance_delta", 0.0))
+
+        if info.get("is_completed", False):
             reward += self.completion_bonus
 
-        # 3. Penalización si el episodio fue truncado sin completarse
-        if info.get('is_truncated', False) and not info.get('is_completed', False):
+        if info.get("is_truncated", False) and not info.get("is_completed", False):
             reward += self.truncation_penalty
-            
+
         return reward

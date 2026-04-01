@@ -72,6 +72,11 @@ PRESET_COUPLINGS = {
     "Grid-4 (2x2)": [(0, 1), (1, 3), (0, 2), (2, 3)],
 }
 
+SYNTHESIS_BASIS_PROFILES = {
+    "Clifford-CZ": ["cz", "rz", "sx", "x"],
+    "Clifford-ECR": ["ecr", "rz", "sx", "x"],
+}
+
 
 def _make_ghz(n: int) -> QuantumCircuit:
     qc = QuantumCircuit(n, name=f"GHZ-{n}")
@@ -225,6 +230,17 @@ class RLBenchmarkGUI(ctk.CTk):
         row += 1
         self._mode_option = ctk.CTkOptionMenu(sidebar, values=["routing", "synthesis"])
         self._mode_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
+        row += 1
+
+        # --- Synthesis Basis Profile ---
+        ctk.CTkLabel(sidebar, text="Synthesis Basis:", anchor="w").grid(
+            row=row, column=0, padx=20, pady=(10, 0), sticky="w"
+        )
+        row += 1
+        self._basis_profile_option = ctk.CTkOptionMenu(
+            sidebar, values=list(SYNTHESIS_BASIS_PROFILES.keys())
+        )
+        self._basis_profile_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
         row += 1
 
         # --- Frontier Mode ---
@@ -413,6 +429,7 @@ class RLBenchmarkGUI(ctk.CTk):
             "coupling_map": PRESET_COUPLINGS[coupling_name],
             "coupling_name": coupling_name,
             "mode": self._mode_option.get(),
+            "basis_gates": SYNTHESIS_BASIS_PROFILES[self._basis_profile_option.get()],
             "frontier_mode": self._frontier_option.get(),
             "algorithm": self._algo_option.get(),
             "timesteps": int(self._timesteps_slider.get()),
@@ -452,6 +469,8 @@ class RLBenchmarkGUI(ctk.CTk):
         self._log(f"Circuito: {cfg['circuit_name']}  |  Qubits: {cfg['circuit'].num_qubits}")
         self._log(f"Coupling: {cfg['coupling_name']}")
         self._log(f"Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}  |  Algoritmo: {cfg['algorithm']}")
+        if cfg["mode"] == "synthesis":
+            self._log(f"Basis Gates: {cfg['basis_gates']}")
         self._log(f"Timesteps: {cfg['timesteps']:,}  |  Max Steps/Ep: {cfg['max_steps']}  |  Lookahead: {cfg['lookahead']}")
         self._log(f"Seed: {cfg['seed']}")
         self._log("=" * 60)
@@ -464,6 +483,7 @@ class RLBenchmarkGUI(ctk.CTk):
 
     def _training_thread(self, cfg: dict):
         t0 = time.perf_counter()
+        training_succeeded = False
 
         try:
             set_global_seeds(cfg["seed"])
@@ -476,6 +496,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 frontier_mode=cfg["frontier_mode"],
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
+                basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
             )
             raw_env.reset(seed=cfg["seed"])
             self._env = Monitor(raw_env)
@@ -487,6 +508,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 frontier_mode=cfg["frontier_mode"],
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
+                basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
             )
             eval_raw_env.reset(seed=cfg["seed"])
             eval_env = Monitor(eval_raw_env)
@@ -563,6 +585,7 @@ class RLBenchmarkGUI(ctk.CTk):
             self.after(0, self._render_training_plots)
             self.after(0, lambda: self._progress_label.configure(text="Entrenamiento completado."))
             self.after(0, self._progress_bar.set, 1.0)
+            training_succeeded = True
 
         except Exception as e:
             self.after(0, self._log, f"\n⚠ Error durante entrenamiento: {e}")
@@ -572,7 +595,7 @@ class RLBenchmarkGUI(ctk.CTk):
         finally:
             self._is_training = False
             self.after(0, lambda: self._train_button.configure(state="normal"))
-            if self._agent is not None:
+            if training_succeeded:
                 self.after(0, lambda: self._eval_button.configure(state="normal"))
 
     # -----------------------------------------------------------------------
@@ -667,6 +690,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 frontier_mode=cfg["frontier_mode"],
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
+                basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
             )
 
             eval_agent = self._agent
@@ -699,11 +723,16 @@ class RLBenchmarkGUI(ctk.CTk):
             self.after(0, self._eval_log_write, f"Circuito: {cfg['circuit_name']}  |  Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}")
             self.after(0, self._eval_log_write, f"Layout inicial: {eval_env.current_layout.tolist()}")
             self.after(0, self._eval_log_write, f"Puertas totales: {info['total_gates']}")
-            self.after(0, self._eval_log_write, f"Lookahead lógico: {obs['lookahead'].tolist()}")
-            self.after(0, self._eval_log_write, f"Lookahead físico: {obs['lookahead_physical'].tolist()}")
-            self.after(0, self._eval_log_write, f"Ejecutable: {obs['lookahead_executable'].tolist()}")
-            self.after(0, self._eval_log_write, f"Distancia routing: {obs['lookahead_routing_distance'].tolist()}")
-            self.after(0, self._eval_log_write, f"Máscara válida: {obs['lookahead_valid_mask'].tolist()}")
+            if cfg["mode"] == "synthesis":
+                self.after(0, self._eval_log_write, f"Residual symplectic: {obs['residual_symplectic'].tolist()}")
+                self.after(0, self._eval_log_write, f"Residual phase: {obs['residual_phase'].tolist()}")
+                self.after(0, self._eval_log_write, f"Physical->logical: {obs['physical_to_logical'].tolist()}")
+            else:
+                self.after(0, self._eval_log_write, f"Lookahead lógico: {obs['lookahead'].tolist()}")
+                self.after(0, self._eval_log_write, f"Lookahead físico: {obs['lookahead_physical'].tolist()}")
+                self.after(0, self._eval_log_write, f"Ejecutable: {obs['lookahead_executable'].tolist()}")
+                self.after(0, self._eval_log_write, f"Distancia routing: {obs['lookahead_routing_distance'].tolist()}")
+                self.after(0, self._eval_log_write, f"Máscara válida: {obs['lookahead_valid_mask'].tolist()}")
             self.after(0, self._eval_log_write, "-" * 70)
             self.after(0, self._eval_log_write,
                        f"{'Step':>5} │ {'Acción':^20} │ {'Reward':>8} │ {'Gates Ej.':>9} │ {'Restantes':>10} │ Layout")
@@ -713,11 +742,13 @@ class RLBenchmarkGUI(ctk.CTk):
             done = False
             step = 0
             cycle_detected = False
+            should_detect_layout_cycles = cfg["mode"] == "routing"
 
             # Detección de bucles (solo visual, no afecta al entorno de entrenamiento)
             from collections import Counter
             layout_visit_counts = Counter()
-            layout_visit_counts[tuple(eval_env.current_layout.tolist())] = 1
+            if should_detect_layout_cycles:
+                layout_visit_counts[tuple(eval_env.current_layout.tolist())] = 1
             CYCLE_THRESHOLD = 3  # Un layout visitado 3 veces = bucle claro
 
             while not done:
@@ -729,11 +760,12 @@ class RLBenchmarkGUI(ctk.CTk):
                 done = terminated or truncated
 
                 # Detectar oscilación (solo afecta al display, no al entorno)
-                current_layout_tuple = tuple(eval_env.current_layout.tolist())
-                layout_visit_counts[current_layout_tuple] += 1
-                if layout_visit_counts[current_layout_tuple] >= CYCLE_THRESHOLD:
-                    cycle_detected = True
-                    done = True
+                if should_detect_layout_cycles:
+                    current_layout_tuple = tuple(eval_env.current_layout.tolist())
+                    layout_visit_counts[current_layout_tuple] += 1
+                    if layout_visit_counts[current_layout_tuple] >= CYCLE_THRESHOLD:
+                        cycle_detected = True
+                        done = True
 
                 # Describir acción
                 action_desc = info.get("action_type", "?")

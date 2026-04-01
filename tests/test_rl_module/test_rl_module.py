@@ -43,6 +43,7 @@ from src.rl_module.rewards import (
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.training import set_global_seeds, setup_training_pipeline
+from src.rl_module.synthesis_clifford import CliffordSynthesisState
 
 # ---------------------------------------------------------------------------
 # Imports de dependencias externas
@@ -120,6 +121,7 @@ def synthesis_env(simple_circuit_3q, linear_coupling_3q) -> QuantumTranspilation
         target_circuit=simple_circuit_3q,
         coupling_map=linear_coupling_3q,
         mode="synthesis",
+        basis_gates=["cz", "rz", "sx", "x"],
         max_steps=50,
     )
 
@@ -282,85 +284,304 @@ class TestRoutingStrategy:
 # ===========================================================================
 
 class TestSynthesisStrategy:
-    """Tests de la estrategia de síntesis (SynthesisStrategy)."""
+    """Tests de la estrategia de síntesis Clifford hardware-aware."""
 
-    def test_observation_space_structure(self, linear_coupling_3q):
-        """El observation space tiene las claves esperadas."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
-        obs_space = strategy.get_observation_space()
-        assert isinstance(obs_space, gym.spaces.Dict)
-        assert "layout" in obs_space.spaces
-        assert "lookahead" in obs_space.spaces
-        assert "lookahead_physical" in obs_space.spaces
-        assert "lookahead_executable" in obs_space.spaces
-        assert "lookahead_routing_distance" in obs_space.spaces
-        assert "lookahead_valid_mask" in obs_space.spaces
+    def test_synthesis_strategy_requires_basis_gates(self, linear_coupling_3q):
+        with pytest.raises(ValueError, match="basis_gates"):
+            SynthesisStrategy(
+                num_qubits=3,
+                num_physical_qubits=3,
+                coupling_map=linear_coupling_3q,
+                lookahead_window=5,
+                basis_gates=None,
+            )
 
-    def test_action_space_is_multi_discrete(self, linear_coupling_3q):
-        """El action space es MultiDiscrete con 3 dimensiones."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
-        action_space = strategy.get_action_space()
-        assert isinstance(action_space, gym.spaces.MultiDiscrete)
-        # [num_basis_gates, num_qubits, num_qubits]
-        assert len(action_space.nvec) == 3
+    def test_synthesis_strategy_rejects_unsupported_basis_only(self):
+        with pytest.raises(ValueError, match="primitive"):
+            SynthesisStrategy(
+                num_qubits=1,
+                num_physical_qubits=1,
+                coupling_map=[],
+                lookahead_window=5,
+                basis_gates=["t"],
+            )
 
-    def test_action_space_dimensions_match_config(self, linear_coupling_3q):
-        """Las dimensiones del MultiDiscrete coinciden con basis_gates y num_qubits."""
-        basis = ["cx", "sx", "rz", "x"]
+    def test_synthesis_strategy_rejects_empty_catalog_from_disconnected_basis(self):
+        with pytest.raises(ValueError, match="primitive"):
+            SynthesisStrategy(
+                num_qubits=2,
+                num_physical_qubits=2,
+                coupling_map=[],
+                lookahead_window=5,
+                basis_gates=["cx"],
+            )
+
+    def test_synthesis_strategy_uses_discrete_catalog_action_space(self, linear_coupling_3q):
         strategy = SynthesisStrategy(
-            num_qubits=3, coupling_map=linear_coupling_3q,
-            lookahead_window=5, basis_gates=basis
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
         )
+
         action_space = strategy.get_action_space()
-        assert action_space.nvec[0] == len(basis)  # 4 puertas
-        assert action_space.nvec[1] == 3           # 3 qubits
-        assert action_space.nvec[2] == 3           # 3 qubits
 
-    def test_decode_action_returns_gate(self, linear_coupling_3q):
-        """decode_action retorna tipo 'gate' con el nombre de puerta correcto."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
-        action = np.array([0, 0, 1])  # Primera puerta base (cx), qubits 0 y 1
-        result = strategy.decode_action(action)
-        assert result["type"] == "gate"
-        assert result["gate_name"] == "cx"
-        assert result["physical_q1"] == 0
-        assert result["physical_q2"] == 1
+        assert isinstance(action_space, gym.spaces.Discrete)
+        assert action_space.n == len(strategy.primitives)
 
-    def test_decode_action_invalid_gate_index(self, linear_coupling_3q):
-        """decode_action con gate_idx fuera de rango retorna 'invalid'."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
-        action = np.array([99, 0, 1])
-        result = strategy.decode_action(action)
-        assert result["type"] == "invalid"
+    def test_synthesis_strategy_decode_action_returns_primitive_payload(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
 
-    def test_decode_action_invalid_qubit_index(self, linear_coupling_3q):
-        """decode_action con qubit fuera de rango retorna 'invalid'."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
-        action = np.array([0, 0, 99])
-        result = strategy.decode_action(action)
-        assert result["type"] == "invalid"
+        action_info = strategy.decode_action(0)
 
-    def test_build_observation_in_space(self, linear_coupling_3q):
-        """La observación generada pertenece al observation space."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
+        assert action_info["type"] == "gate"
+        assert "primitive_index" in action_info
+        assert "primitive" in action_info
+        assert action_info["gate_name"] == action_info["primitive"].gate_name
+        assert action_info["physical_qargs"] == action_info["primitive"].physical_qargs
+
+    def test_synthesis_strategy_decode_action_rejects_malformed_nonscalar_input(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+
+        assert strategy.decode_action(np.array([99, 0, 0])) == {"type": "invalid"}
+
+    def test_synthesis_strategy_decode_action_accepts_scalar_numpy_action(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+
+        action_info = strategy.decode_action(np.array(0))
+
+        assert action_info["type"] == "gate"
+        assert action_info["primitive_index"] == 0
+
+    def test_synthesis_observation_space_tracks_residual_arrays(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+
+        obs_space = strategy.get_observation_space()
+
+        assert set(obs_space.spaces) == {
+            "layout",
+            "physical_to_logical",
+            "residual_symplectic",
+            "residual_phase",
+            "step_progress",
+        }
+        assert obs_space["residual_symplectic"].shape == (4 * 3 * 3,)
+        assert obs_space["residual_phase"].shape == (2 * 3,)
+
+    def test_synthesis_build_observation_requires_state_and_inverse_layout(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
         layout = np.array([0, 1, 2], dtype=np.int32)
-        gates = [("cx", 0, 1)]
-        obs = strategy.build_observation(layout, gates)
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=3,
+        )
+        physical_to_logical = np.array([0, 1, 2], dtype=np.int32)
+
+        obs = strategy.build_observation(
+            layout,
+            [],
+            step_progress=0.25,
+            synthesis_state=synthesis_state,
+            physical_to_logical=physical_to_logical,
+        )
+
+        assert set(obs) == {
+            "layout",
+            "physical_to_logical",
+            "residual_symplectic",
+            "residual_phase",
+            "step_progress",
+        }
         assert strategy.get_observation_space().contains(obs)
 
-    def test_build_observation_handles_single_qubit_gates(self, linear_coupling_3q):
-        """SynthesisStrategy codifica puertas de 1-qubit como (q, q)."""
-        strategy = SynthesisStrategy(num_qubits=3, coupling_map=linear_coupling_3q, lookahead_window=5)
-        layout = np.array([0, 1, 2], dtype=np.int32)
-        # Puerta de 1 qubit codificada como (name, q, q)
-        gates = [("h", 0, 0), ("cx", 0, 1)]
-        obs = strategy.build_observation(layout, gates)
-        # Primera puerta: H en qubit 0 → (0, 0)
-        assert obs["lookahead"][0] == 0
-        assert obs["lookahead"][1] == 0
-        # Segunda puerta: CX(0,1) → (0, 1)
-        assert obs["lookahead"][2] == 0
-        assert obs["lookahead"][3] == 1
+        with pytest.raises(TypeError):
+            strategy.build_observation(layout, [], step_progress=0.25)
+
+    def test_synthesis_build_observation_rejects_invalid_layout_shape(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=3,
+        )
+
+        with pytest.raises(ValueError, match="current_layout"):
+            strategy.build_observation(
+                np.array([0, 1], dtype=np.int32),
+                [],
+                synthesis_state=synthesis_state,
+                physical_to_logical=np.array([0, 1, 2], dtype=np.int32),
+            )
+
+    def test_synthesis_build_observation_rejects_out_of_range_current_layout(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=3,
+        )
+
+        with pytest.raises(ValueError, match="current_layout"):
+            strategy.build_observation(
+                np.array([0, 1, 3], dtype=np.int32),
+                [],
+                synthesis_state=synthesis_state,
+                physical_to_logical=np.array([0, 1, 2], dtype=np.int32),
+            )
+
+    def test_synthesis_build_observation_rejects_out_of_range_inverse_layout(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=3,
+        )
+
+        with pytest.raises(ValueError, match="physical_to_logical"):
+            strategy.build_observation(
+                np.array([0, 1, 2], dtype=np.int32),
+                [],
+                synthesis_state=synthesis_state,
+                physical_to_logical=np.array([0, 1, 3], dtype=np.int32),
+            )
+
+    def test_synthesis_build_observation_rejects_inconsistent_inverse_layout(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=3,
+        )
+
+        with pytest.raises(ValueError, match="consistent"):
+            strategy.build_observation(
+                np.array([0, 2, 1], dtype=np.int32),
+                [],
+                synthesis_state=synthesis_state,
+                physical_to_logical=np.array([0, 1, 2], dtype=np.int32),
+            )
+
+    def test_synthesis_build_observation_rejects_duplicate_logical_assignment_on_unused_physical_qubit(self):
+        strategy = SynthesisStrategy(
+            num_qubits=2,
+            num_physical_qubits=3,
+            coupling_map=[(0, 1)],
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(2),
+            layout=[0, 1],
+            num_physical_qubits=3,
+        )
+
+        with pytest.raises(ValueError, match="physical_to_logical"):
+            strategy.build_observation(
+                np.array([0, 1], dtype=np.int32),
+                [],
+                synthesis_state=synthesis_state,
+                physical_to_logical=np.array([0, 1, 0], dtype=np.int32),
+            )
+
+    def test_synthesis_build_observation_rejects_inverse_layout_that_maps_unassigned_logical_qubit(self):
+        strategy = SynthesisStrategy(
+            num_qubits=2,
+            num_physical_qubits=3,
+            coupling_map=[(0, 1)],
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=3,
+        )
+
+        with pytest.raises(ValueError, match="consistent"):
+            strategy.build_observation(
+                np.array([0, -1], dtype=np.int32),
+                [],
+                synthesis_state=synthesis_state,
+                physical_to_logical=np.array([0, -1, 1], dtype=np.int32),
+            )
+
+    def test_synthesis_build_observation_rejects_residual_arrays_for_wrong_physical_width(self, linear_coupling_3q):
+        strategy = SynthesisStrategy(
+            num_qubits=3,
+            num_physical_qubits=3,
+            coupling_map=linear_coupling_3q,
+            lookahead_window=5,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+        wrong_width_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=QuantumCircuit(1),
+            layout=[0],
+            num_physical_qubits=2,
+        )
+
+        with pytest.raises(ValueError, match="residual"):
+            strategy.build_observation(
+                np.array([0, 1, 2], dtype=np.int32),
+                [],
+                synthesis_state=wrong_width_state,
+                physical_to_logical=np.array([0, 1, 2], dtype=np.int32),
+            )
 
 
 # ===========================================================================
@@ -495,40 +716,39 @@ class TestRoutingReward:
 class TestSynthesisReward:
     """Tests de la función de recompensa de síntesis."""
 
-    def test_valid_gate_reward(self):
-        """Puerta que contribuye a la síntesis genera recompensa positiva."""
-        reward_fn = SynthesisReward(valid_gate_reward=2.0)
-        info = {"gate_matched_target": True, "is_completed": False, "is_truncated": False}
-        reward = reward_fn.compute_reward(None, None, None, info)
-        assert reward == 2.0
+    def test_reward_combines_progress_and_primitive_cost(self):
+        reward_fn = SynthesisReward(
+            invalid_action_penalty=-5.0,
+            step_penalty=-0.25,
+            primitive_cost_weight=0.5,
+            residual_progress_reward=2.0,
+            completion_bonus=100.0,
+            truncation_penalty=-30.0,
+        )
 
-    def test_incorrect_gate_penalty(self):
-        """Puerta que no contribuye genera penalización."""
-        reward_fn = SynthesisReward(incorrect_gate_penalty=-1.0)
-        info = {"gate_matched_target": False, "is_completed": False, "is_truncated": False}
-        reward = reward_fn.compute_reward(None, None, None, info)
-        assert reward == -1.0
+        info = {
+            "is_valid_action": True,
+            "primitive_cost": 3.0,
+            "residual_distance_delta": 4.0,
+            "is_completed": False,
+            "is_truncated": False,
+        }
 
-    def test_synthesis_completion_bonus(self):
-        """Completar la síntesis genera bonificación."""
-        reward_fn = SynthesisReward(completion_bonus=100.0)
-        info = {"gate_matched_target": True, "is_completed": True, "is_truncated": False}
         reward = reward_fn.compute_reward(None, None, None, info)
-        assert reward == pytest.approx(2.0 + 100.0)  # default valid + completion
 
-    def test_incorrect_gate_no_completion(self):
-        """Puerta incorrecta sin completar solo penaliza."""
-        reward_fn = SynthesisReward(incorrect_gate_penalty=-3.0, completion_bonus=100.0)
-        info = {"gate_matched_target": False, "is_completed": False, "is_truncated": False}
-        reward = reward_fn.compute_reward(None, None, None, info)
-        assert reward == -3.0
+        assert reward == pytest.approx(-0.25 - (0.5 * 3.0) + (2.0 * 4.0))
 
-    def test_synthesis_truncation_penalty(self):
-        """Truncar la síntesis sin completar genera penalización configurable."""
-        reward_fn = SynthesisReward(truncation_penalty=-30.0)
-        info = {"gate_matched_target": False, "is_completed": False, "is_truncated": True}
-        reward = reward_fn.compute_reward(None, None, None, info)
-        assert reward == pytest.approx(-1.0 + -30.0)  # default incorrect + truncation
+    def test_invalid_action_uses_invalid_penalty(self):
+        reward_fn = SynthesisReward(invalid_action_penalty=-7.0)
+        info = {
+            "is_valid_action": False,
+            "primitive_cost": 0.0,
+            "residual_distance_delta": 0.0,
+            "is_completed": False,
+            "is_truncated": False,
+        }
+
+        assert reward_fn.compute_reward(None, None, None, info) == pytest.approx(-7.0)
 
 
 # ===========================================================================
@@ -555,10 +775,11 @@ class TestQuantumTranspilationEnv:
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
             mode="synthesis",
+            basis_gates=["cz", "rz", "sx", "x"],
         )
         assert isinstance(env.strategy, SynthesisStrategy)
         assert isinstance(env.reward_function, SynthesisReward)
-        assert isinstance(env.action_space, gym.spaces.MultiDiscrete)
+        assert isinstance(env.action_space, gym.spaces.Discrete)
 
     def test_init_accepts_dag_frontier_mode(self, simple_circuit_3q, linear_coupling_3q):
         """El constructor acepta frontier_mode='dag' y reset expone claves enriquecidas."""
@@ -1255,38 +1476,172 @@ class TestQuantumTranspilationEnv:
             done = terminated or truncated
             steps += 1
 
-    def test_synthesis_mode_step_handles_gate_action(self, simple_circuit_3q, linear_coupling_3q):
-        """El modo synthesis maneja acciones 'gate' sin error."""
-        env = QuantumTranspilationEnv(
-            target_circuit=simple_circuit_3q,
-            coupling_map=linear_coupling_3q,
-            mode="synthesis",
-            max_steps=10,
-        )
-        obs, _ = env.reset(seed=42)
-        for _ in range(10):
-            action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
-            # Las acciones gate deben llevar gate_matched_target en info
-            if info.get("action_type") == "gate":
-                assert "gate_matched_target" in info
-            if terminated or truncated:
-                break
+    def test_synthesis_mode_requires_basis_gates(self, simple_circuit_3q, linear_coupling_3q):
+        with pytest.raises(ValueError, match="basis_gates"):
+            QuantumTranspilationEnv(
+                target_circuit=simple_circuit_3q,
+                coupling_map=linear_coupling_3q,
+                mode="synthesis",
+                max_steps=10,
+            )
 
-    def test_synthesis_mode_gate_action_with_invalid_indices(self, simple_circuit_3q, linear_coupling_3q):
-        """Las acciones inválidas en modo synthesis se manejan correctamente."""
+    def test_synthesis_mode_rejects_non_clifford_target(self):
+        qc = QuantumCircuit(1)
+        qc.rz(0.25, 0)
+
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[],
+            mode="synthesis",
+            basis_gates=["rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        with pytest.raises(ValueError, match="Clifford"):
+            env.reset(seed=42)
+
+    def test_synthesis_mode_reset_exposes_residual_observation(self, linear_coupling_3q):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=linear_coupling_3q,
+            mode="synthesis",
+            basis_gates=["cz", "rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        obs, info = env.reset(seed=42, options={"initial_layout": [1]})
+
+        assert set(obs) == {
+            "layout",
+            "physical_to_logical",
+            "residual_symplectic",
+            "residual_phase",
+            "step_progress",
+        }
+        assert info["already_completed_at_reset"] is False
+
+    def test_synthesis_mode_step_completes_single_qubit_target(self):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[],
+            mode="synthesis",
+            basis_gates=["rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+        x_index = next(
+            index
+            for index, primitive in enumerate(env.strategy.primitives)
+            if primitive.gate_name == "x" and primitive.physical_qargs == (0,)
+        )
+
+        obs, reward, terminated, truncated, info = env.step(x_index)
+
+        assert terminated is True
+        assert truncated is False
+        assert info["is_completed"] is True
+        assert info["residual_distance_after"] == 0
+
+    def test_synthesis_mode_completion_clears_public_remaining_gates(self):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[],
+            mode="synthesis",
+            basis_gates=["rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+        x_index = next(
+            index
+            for index, primitive in enumerate(env.strategy.primitives)
+            if primitive.gate_name == "x" and primitive.physical_qargs == (0,)
+        )
+
+        obs, reward, terminated, truncated, info = env.step(x_index)
+
+        assert terminated is True
+        assert list(env.remaining_gates) == []
+
+    def test_synthesis_mode_invalid_action_on_empty_physical_qubit_is_penalized_not_terminal(self, linear_coupling_3q):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=linear_coupling_3q,
+            mode="synthesis",
+            basis_gates=["cz", "rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [2]})
+        invalid_index = next(
+            index
+            for index, primitive in enumerate(env.strategy.primitives)
+            if primitive.gate_name == "x" and primitive.physical_qargs == (0,)
+        )
+
+        obs, reward, terminated, truncated, info = env.step(invalid_index)
+
+        assert info["is_valid_action"] is False
+        assert terminated is False
+        assert truncated is False
+
+    def test_synthesis_mode_step_preserves_terminal_state_when_completed_at_reset(self):
+        qc = QuantumCircuit(1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[],
+            mode="synthesis",
+            basis_gates=["rz", "sx", "x"],
+            max_steps=10,
+        )
+
+        obs, info = env.reset(seed=42)
+
+        assert info["already_completed_at_reset"] is True
+
+        x_index = next(
+            index
+            for index, primitive in enumerate(env.strategy.primitives)
+            if primitive.gate_name == "x" and primitive.physical_qargs == (0,)
+        )
+
+        obs, reward, terminated, truncated, step_info = env.step(x_index)
+
+        assert terminated is True
+        assert truncated is False
+        assert step_info["is_completed"] is False
+        assert step_info["residual_distance_before"] == 0
+        assert step_info["residual_distance_after"] == 0
+        assert step_info["residual_distance_delta"] == 0.0
+
+    def test_routing_mode_contract_unchanged_after_synthesis_refactor(self, simple_circuit_3q, linear_coupling_3q):
         env = QuantumTranspilationEnv(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
-            mode="synthesis",
-            max_steps=10,
+            mode="routing",
+            max_steps=20,
         )
-        env.reset(seed=42)
-        # No hay acción OOB porque SB3 genera acciones dentro del espacio,
-        # pero el decode_action ahora tiene validación
-        strategy = env.strategy
-        result = strategy.decode_action(np.array([99, 0, 0]))
-        assert result["type"] == "invalid"
+
+        obs, _ = env.reset(seed=42)
+
+        assert set(obs) == {
+            "layout",
+            "lookahead",
+            "lookahead_physical",
+            "lookahead_executable",
+            "lookahead_routing_distance",
+            "lookahead_valid_mask",
+            "step_progress",
+        }
 
 
 # ===========================================================================
@@ -1566,6 +1921,54 @@ class TestTrainingUtilities:
         )
 
         assert reset_seeds == [55, 55]
+
+    def test_setup_training_pipeline_threads_basis_gates_into_env(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
+    ):
+        captured_basis_gates = []
+
+        class DummyEnv:
+            observation_space = gym.spaces.Discrete(1)
+            action_space = gym.spaces.Discrete(1)
+
+            def __init__(self, *args, **kwargs):
+                captured_basis_gates.append(kwargs.get("basis_gates"))
+
+            def reset(self, seed=None, options=None):
+                return 0, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log, seed, **kwargs):
+                self.model = object()
+
+            def train(self, total_timesteps, callbacks=None):
+                return None
+
+            def save(self, path):
+                Path(path).touch()
+
+        monkeypatch.setattr("src.rl_module.training.QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr("src.rl_module.training.Monitor", lambda env: env)
+        monkeypatch.setattr("src.rl_module.training.CheckpointCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.EvalCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr("src.rl_module.training.QuantumRLAgent", DummyAgent)
+
+        setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="synthesis",
+            algorithm="PPO",
+            total_timesteps=1,
+            max_steps=4,
+            basis_gates=["cz", "rz", "sx", "x"],
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+        )
+
+        assert captured_basis_gates == [
+            ["cz", "rz", "sx", "x"],
+            ["cz", "rz", "sx", "x"],
+        ]
 
     def test_setup_training_pipeline_reports_best_model_artifact_when_available(
         self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
@@ -1889,6 +2292,95 @@ class TestRLEvaluationGUI:
         assert cfg["best_model_path"] is None
         assert cfg["last_model_path"].endswith("final_model.zip")
 
+    def test_training_thread_keeps_eval_button_disabled_after_failed_training(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q
+    ):
+        """Si el entrenamiento falla, la GUI no debe habilitar evaluación por tener _agent no nulo."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, verbose, seed=None, **kwargs):
+                self.device = "cpu"
+
+            def train(self, total_timesteps, callbacks, progress_bar):
+                raise RuntimeError("boom")
+
+            def save(self, path):
+                raise AssertionError("save should not be reached after training failure")
+
+        class DummyProgressCallback:
+            def __init__(self):
+                self.episode_rewards = []
+                self.episode_lengths = []
+
+        class RecordingWidget:
+            def __init__(self):
+                self.states = []
+
+            def configure(self, **kwargs):
+                if "state" in kwargs:
+                    self.states.append(kwargs["state"])
+                return None
+
+            def set(self, value):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._agent = None
+                self._env = None
+                self._last_callback = None
+                self._is_training = True
+                self._train_button = RecordingWidget()
+                self._eval_button = RecordingWidget()
+                self._progress_label = RecordingWidget()
+                self._progress_bar = RecordingWidget()
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+            def _log(self, text):
+                return None
+
+            def _render_training_plots(self):
+                raise AssertionError("plots should not render after training failure")
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(rl_gui, "Monitor", lambda env: env)
+        monkeypatch.setattr(rl_gui, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(rl_gui, "GUIProgressCallback", lambda gui, total_timesteps: DummyProgressCallback())
+        monkeypatch.setattr(rl_gui, "EvalCallback", lambda *args, **kwargs: object())
+        monkeypatch.setattr(rl_gui.os, "makedirs", lambda *args, **kwargs: None)
+        monkeypatch.setattr(rl_gui.os.path, "exists", lambda path: False)
+
+        gui = DummyGUI()
+        cfg = {
+            "seed": 11,
+            "circuit": simple_circuit_3q,
+            "coupling_map": linear_coupling_3q,
+            "mode": "routing",
+            "frontier_mode": "sequential",
+            "lookahead": 2,
+            "max_steps": 5,
+            "algorithm": "PPO",
+            "timesteps": 2,
+        }
+
+        rl_gui.RLBenchmarkGUI._training_thread(gui, cfg)
+
+        assert gui._agent is not None
+        assert gui._is_training is False
+        assert gui._train_button.states[-1] == "normal"
+        assert gui._eval_button.states == []
+
     def test_evaluation_thread_uses_deterministic_policy_by_default(self, monkeypatch, simple_circuit_3q, linear_coupling_3q):
         """La evaluación principal de la GUI usa predict(..., deterministic=True)."""
         rl_gui = self._load_rl_gui_module(monkeypatch)
@@ -2092,6 +2584,203 @@ class TestRLEvaluationGUI:
 
         assert loaded_model_paths == [os.path.join("models", "final_model.zip")]
         assert deterministic_flags == [True]
+
+    def test_evaluation_thread_handles_synthesis_observations(self, monkeypatch):
+        """La evaluación GUI no asume claves de routing cuando el modo es synthesis."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+        eval_log_lines = []
+        deterministic_flags = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([1], dtype=np.int32)
+                self.remaining_gates = deque()
+                self.total_swaps = 0
+
+            def reset(self, seed=None):
+                obs = {
+                    "layout": np.array([1], dtype=np.int32),
+                    "physical_to_logical": np.array([-1, 0], dtype=np.int32),
+                    "residual_symplectic": np.zeros(16, dtype=np.int32),
+                    "residual_phase": np.zeros(4, dtype=np.int32),
+                    "step_progress": np.array([0.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 1}
+
+            def step(self, action):
+                obs = {
+                    "layout": np.array([1], dtype=np.int32),
+                    "physical_to_logical": np.array([-1, 0], dtype=np.int32),
+                    "residual_symplectic": np.zeros(16, dtype=np.int32),
+                    "residual_phase": np.zeros(4, dtype=np.int32),
+                    "step_progress": np.array([1.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "gate",
+                    "is_valid_action": True,
+                    "gates_executed": 0,
+                    "is_completed": True,
+                }
+                return obs, 1.0, True, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                deterministic_flags.append(deterministic)
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": QuantumCircuit(1),
+                    "circuit_name": "fixture-synthesis",
+                    "coupling_map": [(0, 1)],
+                    "mode": "synthesis",
+                    "basis_gates": ["cz", "rz", "sx", "x"],
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEvalEnv)
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert deterministic_flags == [True]
+        assert not any("⚠ Error durante evaluación" in line for line in eval_log_lines)
+        assert any("Modo: synthesis" in line for line in eval_log_lines)
+        assert any("Residual symplectic" in line for line in eval_log_lines)
+        assert any("Residual phase" in line for line in eval_log_lines)
+
+    def test_evaluation_thread_does_not_cut_off_synthesis_for_fixed_layout_revisits(self, monkeypatch):
+        """La detección de ciclos visual no debe abortar synthesis solo por repetir layout fijo."""
+        rl_gui = self._load_rl_gui_module(monkeypatch)
+        eval_log_lines = []
+        deterministic_flags = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([1], dtype=np.int32)
+                self.remaining_gates = deque(["pending"])
+                self.total_swaps = 0
+                self.step_count = 0
+
+            def reset(self, seed=None):
+                obs = {
+                    "layout": np.array([1], dtype=np.int32),
+                    "physical_to_logical": np.array([-1, 0], dtype=np.int32),
+                    "residual_symplectic": np.zeros(16, dtype=np.int32),
+                    "residual_phase": np.zeros(4, dtype=np.int32),
+                    "step_progress": np.array([0.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 1}
+
+            def step(self, action):
+                self.step_count += 1
+                if self.step_count >= 4:
+                    self.remaining_gates.clear()
+                obs = {
+                    "layout": np.array([1], dtype=np.int32),
+                    "physical_to_logical": np.array([-1, 0], dtype=np.int32),
+                    "residual_symplectic": np.zeros(16, dtype=np.int32),
+                    "residual_phase": np.zeros(4, dtype=np.int32),
+                    "step_progress": np.array([min(self.step_count / 4, 1.0)], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "gate",
+                    "is_valid_action": True,
+                    "gates_executed": 0,
+                    "is_completed": self.step_count >= 4,
+                }
+                return obs, 1.0, self.step_count >= 4, False, info
+
+        class DummyAgent:
+            def predict(self, observation, deterministic=True):
+                deterministic_flags.append(deterministic)
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": QuantumCircuit(1),
+                    "circuit_name": "fixture-synthesis-cycle",
+                    "coupling_map": [(0, 1)],
+                    "mode": "synthesis",
+                    "basis_gates": ["cz", "rz", "sx", "x"],
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 10,
+                    "algorithm": "PPO",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        monkeypatch.setattr(rl_gui, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(rl_gui, "QuantumTranspilationEnv", DummyEvalEnv)
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert deterministic_flags == [True, True, True, True]
+        assert any("Resultado: COMPLETADO" in line for line in eval_log_lines)
+        assert not any("CICLO DETECTADO" in line for line in eval_log_lines)
+        assert any("Steps totales: 4" in line for line in eval_log_lines)
 
 
 # ===========================================================================

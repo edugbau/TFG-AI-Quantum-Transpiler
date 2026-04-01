@@ -12,6 +12,9 @@ import numpy as np
 from typing import Tuple, Dict, Any, List, Union, Optional
 from collections import deque
 
+from .synthesis_clifford import CliffordSynthesisState, clifford_to_observation_arrays
+from .synthesis_primitives import SynthesisPrimitive, build_clifford_primitive_catalog
+
 class RLEnvStrategy(ABC):
     """
     Clase base para inyectar la lógica de estado/acción en el entorno principal.
@@ -226,45 +229,141 @@ class SynthesisStrategy(RLEnvStrategy):
     Estrategia de Síntesis Completa. (Plantilla escalable)
     Acción: Elegir una puerta de la base (ej. CX, RX, RZ) y los qubits físicos donde aplicarla.
     """
-    def __init__(self, num_qubits: int, num_physical_qubits: Optional[int] = None, coupling_map: Optional[List[Tuple[int, int]]] = None, lookahead_window: int = 10, basis_gates: List[str] = ['cx', 'sx', 'rz', 'x']):
+    def __init__(
+        self,
+        num_qubits: int,
+        num_physical_qubits: Optional[int] = None,
+        coupling_map: Optional[List[Tuple[int, int]]] = None,
+        lookahead_window: int = 10,
+        basis_gates: Optional[List[str]] = None,
+    ):
         super().__init__(num_qubits, num_physical_qubits, coupling_map, lookahead_window)
-        self.basis_gates = basis_gates
+        if not basis_gates:
+            raise ValueError(
+                "SynthesisStrategy requiere basis_gates explícitas para construir primitivas hardware-aware."
+            )
+        self.basis_gates = list(basis_gates)
+        self.primitives: List[SynthesisPrimitive] = build_clifford_primitive_catalog(
+            num_physical_qubits=self.num_physical_qubits,
+            coupling_map=self.coupling_map,
+            basis_gates=self.basis_gates,
+        )
+        if not self.primitives:
+            raise ValueError(
+                "SynthesisStrategy requiere una configuración de basis_gates que produzca al menos una primitive válida."
+            )
         
     def get_observation_space(self) -> gym.Space:
-        # Observación más compleja para síntesis (ej. Tableau estabilizador o equivalente)
-        # Por ahora devolvemos lo mismo que routing como scaffolding.
-        max_distance = float(max(self.num_physical_qubits - 1, 0))
         return gym.spaces.Dict({
             'layout': gym.spaces.Box(low=-1, high=self.num_physical_qubits - 1, shape=(self.num_qubits,), dtype=np.int32),
-            'lookahead': gym.spaces.Box(low=-1, high=self.num_qubits - 1, shape=(self.lookahead_window * 2,), dtype=np.int32),
-            'lookahead_physical': gym.spaces.Box(low=-1, high=self.num_physical_qubits - 1, shape=(self.lookahead_window * 2,), dtype=np.int32),
-            'lookahead_executable': gym.spaces.Box(low=0.0, high=1.0, shape=(self.lookahead_window,), dtype=np.float32),
-            'lookahead_routing_distance': gym.spaces.Box(low=-1.0, high=max_distance, shape=(self.lookahead_window,), dtype=np.float32),
-            'lookahead_valid_mask': gym.spaces.Box(low=0.0, high=1.0, shape=(self.lookahead_window,), dtype=np.float32),
+            'physical_to_logical': gym.spaces.Box(low=-1, high=self.num_qubits - 1, shape=(self.num_physical_qubits,), dtype=np.int32),
+            'residual_symplectic': gym.spaces.Box(low=0, high=1, shape=(4 * self.num_physical_qubits * self.num_physical_qubits,), dtype=np.int32),
+            'residual_phase': gym.spaces.Box(low=0, high=1, shape=(2 * self.num_physical_qubits,), dtype=np.int32),
             'step_progress': gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
         })
 
     def get_action_space(self) -> gym.Space:
-        # MultiDiscrete: [Seleccionar_puerta, q_fisico_1, q_fisico_2]
-        # (q_fisico_2 se ignora si la puerta es de 1 qubit)
-        return gym.spaces.MultiDiscrete([len(self.basis_gates), self.num_physical_qubits, self.num_physical_qubits])
+        return gym.spaces.Discrete(len(self.primitives))
 
-    def decode_action(self, action: np.ndarray) -> Dict[str, Any]:
-        """Decodifica una acción MultiDiscrete en una operación de puerta.
+    def _validate_synthesis_layout_inputs(
+        self,
+        current_layout: np.ndarray,
+        physical_to_logical: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        layout = np.asarray(current_layout, dtype=np.int32)
+        inverse_layout = np.asarray(physical_to_logical, dtype=np.int32)
 
-        Valida que los índices estén dentro de rango. Si no lo están,
-        retorna una acción de tipo ``"invalid"``.
-        """
-        gate_idx, pq1, pq2 = int(action[0]), int(action[1]), int(action[2])
+        if layout.shape != (self.num_qubits,):
+            raise ValueError(
+                f"current_layout debe tener forma ({self.num_qubits},)."
+            )
+        if inverse_layout.shape != (self.num_physical_qubits,):
+            raise ValueError(
+                f"physical_to_logical debe tener forma ({self.num_physical_qubits},)."
+            )
 
-        if gate_idx < 0 or gate_idx >= len(self.basis_gates):
+        if np.any((layout < -1) | (layout >= self.num_physical_qubits)):
+            raise ValueError(
+                "current_layout contiene índices físicos fuera del rango declarado."
+            )
+        if np.any((inverse_layout < -1) | (inverse_layout >= self.num_qubits)):
+            raise ValueError(
+                "physical_to_logical contiene índices lógicos fuera del rango declarado."
+            )
+        mapped_logical_qubits = inverse_layout[inverse_layout >= 0]
+        if len(np.unique(mapped_logical_qubits)) != len(mapped_logical_qubits):
+            raise ValueError(
+                "physical_to_logical contiene asignaciones lógicas duplicadas."
+            )
+
+        for logical_qubit, physical_qubit in enumerate(layout):
+            if physical_qubit == -1:
+                continue
+            if inverse_layout[physical_qubit] != logical_qubit:
+                raise ValueError(
+                    "physical_to_logical debe ser consistente con current_layout para los qubits mapeados."
+                )
+
+        for physical_qubit, logical_qubit in enumerate(inverse_layout):
+            if logical_qubit == -1:
+                continue
+            if layout[logical_qubit] != physical_qubit:
+                raise ValueError(
+                    "physical_to_logical debe ser consistente con current_layout en ambos sentidos."
+                )
+
+        return layout, inverse_layout
+
+    def build_observation(
+        self,
+        current_layout: np.ndarray,
+        remaining_gates: Any,
+        step_progress: float = 0.0,
+        *,
+        synthesis_state: CliffordSynthesisState,
+        physical_to_logical: np.ndarray,
+    ) -> Dict[str, np.ndarray]:
+        layout, inverse_layout = self._validate_synthesis_layout_inputs(
+            current_layout,
+            physical_to_logical,
+        )
+        residual_symplectic, residual_phase = clifford_to_observation_arrays(
+            synthesis_state.residual()
+        )
+        if residual_symplectic.shape != (4 * self.num_physical_qubits * self.num_physical_qubits,):
+            raise ValueError(
+                "residual_symplectic no coincide con el número de qubits físicos declarado por la estrategia."
+            )
+        if residual_phase.shape != (2 * self.num_physical_qubits,):
+            raise ValueError(
+                "residual_phase no coincide con el número de qubits físicos declarado por la estrategia."
+            )
+        return {
+            'layout': layout.copy(),
+            'physical_to_logical': inverse_layout.copy(),
+            'residual_symplectic': residual_symplectic,
+            'residual_phase': residual_phase,
+            'step_progress': np.array([step_progress], dtype=np.float32),
+        }
+
+    def decode_action(self, action: int) -> Dict[str, Any]:
+        if isinstance(action, np.ndarray):
+            if action.ndim != 0:
+                return {"type": "invalid"}
+            action = action.item()
+        elif isinstance(action, (list, tuple)):
             return {"type": "invalid"}
-        if pq1 < 0 or pq1 >= self.num_physical_qubits or pq2 < 0 or pq2 >= self.num_physical_qubits:
+        try:
+            action_index = int(action)
+        except (TypeError, ValueError):
             return {"type": "invalid"}
-
+        if action_index < 0 or action_index >= len(self.primitives):
+            return {"type": "invalid"}
+        primitive = self.primitives[action_index]
         return {
             "type": "gate",
-            "gate_name": self.basis_gates[gate_idx],
-            "physical_q1": pq1,
-            "physical_q2": pq2
+            "primitive_index": action_index,
+            "primitive": primitive,
+            "gate_name": primitive.gate_name,
+            "physical_qargs": primitive.physical_qargs,
         }

@@ -14,6 +14,7 @@ from typing import Optional, Tuple, Dict, Any, List
 from .env_strategies import RoutingStrategy, SynthesisStrategy
 from .frontier import DagFrontier, FrontierProvider, GateTuple, SequentialFrontier
 from .rewards import RoutingReward, SynthesisReward
+from .synthesis_clifford import CliffordSynthesisState
 from qiskit import QuantumCircuit
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class QuantumTranspilationEnv(gym.Env):
         lookahead_window: int = 10,
         max_steps: int = 1000,
         render_mode: Optional[str] = None,
+        basis_gates: Optional[List[str]] = None,
     ):
         super().__init__()
         
@@ -61,6 +63,8 @@ class QuantumTranspilationEnv(gym.Env):
         self.frontier_mode = frontier_mode
         self.lookahead_window = lookahead_window
         self.max_steps = max_steps
+        self.basis_gates = list(basis_gates) if basis_gates is not None else None
+        self._synthesis_state: Optional[CliffordSynthesisState] = None
         
         # Determinar el número de qubits físicos a partir del coupling map
         if self.coupling_map_list:
@@ -77,7 +81,15 @@ class QuantumTranspilationEnv(gym.Env):
             self.strategy = RoutingStrategy(self.num_qubits, self.num_physical_qubits, self.coupling_map_list, self.lookahead_window)
             self.reward_function = RoutingReward()
         elif self.mode == "synthesis":
-            self.strategy = SynthesisStrategy(self.num_qubits, self.num_physical_qubits, self.coupling_map_list, self.lookahead_window)
+            if not self.basis_gates:
+                raise ValueError("mode='synthesis' requiere basis_gates explícitas para construir primitivas hardware-aware.")
+            self.strategy = SynthesisStrategy(
+                self.num_qubits,
+                self.num_physical_qubits,
+                self.coupling_map_list,
+                self.lookahead_window,
+                basis_gates=self.basis_gates,
+            )
             self.reward_function = SynthesisReward()
         else:
             raise ValueError(f"Modo '{self.mode}' no soportado. Usa 'routing' o 'synthesis'.")
@@ -103,6 +115,12 @@ class QuantumTranspilationEnv(gym.Env):
 
     @property
     def remaining_gates(self) -> deque:
+        if (
+            self.mode == "synthesis"
+            and self._synthesis_state is not None
+            and self._synthesis_state.is_complete()
+        ):
+            return deque()
         remaining = self._frontier.remaining_gates
         if isinstance(remaining, deque):
             return remaining
@@ -139,6 +157,54 @@ class QuantumTranspilationEnv(gym.Env):
         if self.frontier_mode == "dag":
             return DagFrontier.from_circuit(self.target_circuit)
         return SequentialFrontier(extracted_gates)
+
+    def _reset_synthesis_state(self) -> None:
+        self._synthesis_state = CliffordSynthesisState.from_target_circuit(
+            target_circuit=self.target_circuit,
+            layout=self.current_layout,
+            num_physical_qubits=self.num_physical_qubits,
+        )
+
+    def _build_observation(self, step_progress: float) -> Dict[str, np.ndarray]:
+        if self.mode == "synthesis":
+            return self.strategy.build_observation(
+                self.current_layout,
+                self._frontier,
+                step_progress=step_progress,
+                synthesis_state=self._synthesis_state,
+                physical_to_logical=self._inverse_layout,
+            )
+        return self.strategy.build_observation(
+            self.current_layout,
+            self._frontier,
+            step_progress=step_progress,
+        )
+
+    def _is_valid_synthesis_primitive(self, primitive: Any) -> bool:
+        for physical_qubit in primitive.physical_qargs:
+            if int(self._inverse_layout[physical_qubit]) == -1:
+                return False
+        if len(primitive.physical_qargs) == 2:
+            pq1, pq2 = primitive.physical_qargs
+            return self._is_connected(pq1, pq2)
+        return True
+
+    def _apply_synthesis_primitive(self, primitive: Any, info: Dict[str, Any]) -> None:
+        before = self._synthesis_state.residual_distance()
+        info["primitive_name"] = primitive.gate_name
+        info["primitive_cost"] = float(primitive.cost)
+        info["residual_distance_before"] = before
+
+        if not self._is_valid_synthesis_primitive(primitive):
+            info["is_valid_action"] = False
+            info["residual_distance_after"] = before
+            info["residual_distance_delta"] = 0.0
+            return
+
+        self._synthesis_state.apply_primitive(primitive)
+        after = self._synthesis_state.residual_distance()
+        info["residual_distance_after"] = after
+        info["residual_distance_delta"] = float(before - after)
 
     def reset(
         self,
@@ -190,16 +256,15 @@ class QuantumTranspilationEnv(gym.Env):
         for lq in range(self.num_qubits):
             self._inverse_layout[self.current_layout[lq]] = lq
 
-        # Ejecutar puertas ya satisfechas por el layout inicial
-        initial_gates_executed = self._try_execute_front_layer()
+        if self.mode == "synthesis":
+            self._reset_synthesis_state()
+            self.was_completed_at_reset = self._synthesis_state.is_complete()
+        else:
+            self._synthesis_state = None
+            self._try_execute_front_layer()
+            self.was_completed_at_reset = self._frontier.remaining_gate_count == 0
 
-        # Guardar en info si ya estaba completado al iniciar
-        self.was_completed_at_reset = self._frontier.remaining_gate_count == 0
-
-        obs = self.strategy.build_observation(
-            self.current_layout, self._frontier,
-            step_progress=self.current_step / self.max_steps,
-        )
+        obs = self._build_observation(step_progress=0.0)
         info = {
             "initial_layout_loaded": (options is not None and "initial_layout" in options),
             "total_gates": len(extracted_gates),
@@ -251,14 +316,35 @@ class QuantumTranspilationEnv(gym.Env):
 
     def step(self, action: Any) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         self.current_step += 1
+
+        if self.mode == "synthesis" and getattr(self, "was_completed_at_reset", False):
+            prev_obs = self._build_observation(
+                step_progress=(self.current_step - 1) / self.max_steps,
+            )
+            obs = self._build_observation(step_progress=self.current_step / self.max_steps)
+            info = {
+                "action_type": "terminal_noop",
+                "is_valid_action": False,
+                "gates_executed": 0,
+                "is_completed": False,
+                "repeated_layout": False,
+                "undo_swap": False,
+                "routing_progress_delta": 0.0,
+                "primitive_cost": 0.0,
+                "residual_distance_before": 0,
+                "residual_distance_after": 0,
+                "residual_distance_delta": 0.0,
+                "is_truncated": self.current_step >= self.max_steps,
+            }
+            reward = self.reward_function.compute_reward(prev_obs, action, obs, info)
+            return obs, reward, True, info["is_truncated"], info
         
         # 1. Decodificar Acción usando la estrategia
         action_info = self.strategy.decode_action(action)
-        prev_obs = self.strategy.build_observation(
-            self.current_layout, self._frontier,
+        prev_obs = self._build_observation(
             step_progress=(self.current_step - 1) / self.max_steps,
         )
-        prev_routing_signal = self._routing_signal(prev_obs)
+        prev_routing_signal = self._routing_signal(prev_obs) if self.mode == "routing" else 0.0
         prev_layout_signature = self._layout_signature()
          
         info = {
@@ -323,22 +409,7 @@ class QuantumTranspilationEnv(gym.Env):
                 self._last_swap_edge = None
         
         elif action_info["type"] == "gate":
-            # ── PLACEHOLDER: Modo Synthesis ──────────────────────────
-            #  La lógica de síntesis aún no está implementada.
-            #  Consultar docs/synthesis_mode_status.md para el estado
-            #  actual y las opciones de diseño pendientes de decisión.
-            #
-            #  Cuando se implemente, este bloque debería:
-            #    - Aplicar la puerta al circuito sintetizado.
-            #    - Comparar con el circuito target (unitaria, tableau, etc.).
-            #    - Actualizar remaining_gates o un indicador de fidelidad.
-            #    - Fijar gate_matched_target según corresponda.
-            # ─────────────────────────────────────────────────────────
-            logger.debug(
-                "Synthesis gate action recibida (placeholder): %s",
-                action_info.get("gate_name"),
-            )
-            info["gate_matched_target"] = False
+            self._apply_synthesis_primitive(action_info["primitive"], info)
             self._last_swap_edge = None
             
         elif action_info["type"] == "invalid":
@@ -346,7 +417,10 @@ class QuantumTranspilationEnv(gym.Env):
              self._last_swap_edge = None
               
         # Evaluar estado final
-        terminated = self._frontier.remaining_gate_count == 0
+        if self.mode == "synthesis":
+            terminated = self._synthesis_state.is_complete()
+        else:
+            terminated = self._frontier.remaining_gate_count == 0
         truncated = self.current_step >= self.max_steps
 
         # Solo dar is_completed si acaba de terminar AHORA (y no lo estaba en el reset)
@@ -361,14 +435,17 @@ class QuantumTranspilationEnv(gym.Env):
         info["is_truncated"] = truncated
             
         # 4. Calcular Recompensa
-        obs = self.strategy.build_observation(
-            self.current_layout, self._frontier,
-            step_progress=self.current_step / self.max_steps,
-        )
-        routing_progress_delta = prev_routing_signal - self._routing_signal(obs)
-        if info["gates_executed"] > 0:
-            routing_progress_delta = max(routing_progress_delta, 0.0)
-        info["routing_progress_delta"] = routing_progress_delta
+        obs = self._build_observation(step_progress=self.current_step / self.max_steps)
+        if self.mode == "routing":
+            routing_progress_delta = prev_routing_signal - self._routing_signal(obs)
+            if info["gates_executed"] > 0:
+                routing_progress_delta = max(routing_progress_delta, 0.0)
+            info["routing_progress_delta"] = routing_progress_delta
+        else:
+            info.setdefault("primitive_cost", 0.0)
+            info.setdefault("residual_distance_before", 0)
+            info.setdefault("residual_distance_after", 0)
+            info.setdefault("residual_distance_delta", 0.0)
         reward = self.reward_function.compute_reward(prev_obs, action, obs, info)
         
         return obs, reward, terminated, truncated, info
