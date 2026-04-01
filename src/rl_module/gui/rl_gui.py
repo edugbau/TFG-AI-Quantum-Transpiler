@@ -36,6 +36,8 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.training import set_global_seeds
+from src.rl_module.gui.routing_view import RoutingView
+from src.rl_module.gui.synthesis_view import SynthesisView
 
 logger = logging.getLogger(__name__)
 
@@ -228,28 +230,34 @@ class RLBenchmarkGUI(ctk.CTk):
             row=row, column=0, padx=20, pady=(10, 0), sticky="w"
         )
         row += 1
-        self._mode_option = ctk.CTkOptionMenu(sidebar, values=["routing", "synthesis"])
+        self._mode_option = ctk.CTkOptionMenu(
+            sidebar,
+            values=["routing", "synthesis"],
+            command=self._on_mode_changed,
+        )
         self._mode_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
         row += 1
 
-        # --- Synthesis Basis Profile ---
-        ctk.CTkLabel(sidebar, text="Synthesis Basis:", anchor="w").grid(
-            row=row, column=0, padx=20, pady=(10, 0), sticky="w"
-        )
-        row += 1
-        self._basis_profile_option = ctk.CTkOptionMenu(
-            sidebar, values=list(SYNTHESIS_BASIS_PROFILES.keys())
-        )
-        self._basis_profile_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
-        row += 1
+        self._mode_view_container = ctk.CTkFrame(sidebar, fg_color="transparent")
+        self._mode_view_container.grid(row=row, column=0, padx=20, pady=0, sticky="ew")
+        self._mode_view_container.grid_columnconfigure(0, weight=1)
 
-        # --- Frontier Mode ---
-        ctk.CTkLabel(sidebar, text="Frontier:", anchor="w").grid(
-            row=row, column=0, padx=20, pady=(10, 0), sticky="w"
+        self._routing_view = RoutingView(
+            self._mode_view_container,
+            on_lookahead_change=self._update_lookahead_label,
         )
-        row += 1
-        self._frontier_option = ctk.CTkOptionMenu(sidebar, values=["sequential", "dag"])
-        self._frontier_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self._routing_view.grid(row=0, column=0, sticky="ew")
+        self._synthesis_view = SynthesisView(
+            self._mode_view_container,
+            basis_profiles=SYNTHESIS_BASIS_PROFILES.keys(),
+        )
+        self._synthesis_view.grid(row=0, column=0, sticky="ew")
+
+        self._frontier_option = self._routing_view.frontier_option
+        self._lookahead_label = self._routing_view.lookahead_label
+        self._lookahead_slider = self._routing_view.lookahead_slider
+        self._basis_profile_option = self._synthesis_view.basis_profile_option
+        self._lookahead_slider.set(10)
         row += 1
 
         # --- Algoritmo RL ---
@@ -289,20 +297,6 @@ class RLBenchmarkGUI(ctk.CTk):
         self._maxsteps_slider.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
         row += 1
 
-        # --- Lookahead ---
-        self._lookahead_label = ctk.CTkLabel(sidebar, text="Lookahead: 10", anchor="w")
-        self._lookahead_label.grid(row=row, column=0, padx=20, pady=(10, 0), sticky="w")
-        row += 1
-        self._lookahead_slider = ctk.CTkSlider(
-            sidebar, from_=3, to=20, number_of_steps=17,
-            command=lambda v: self._lookahead_label.configure(
-                text=f"Lookahead: {int(v)}"
-            ),
-        )
-        self._lookahead_slider.set(10)
-        self._lookahead_slider.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
-        row += 1
-
         # --- Seed ---
         self._seed_label = ctk.CTkLabel(sidebar, text="Seed: 42", anchor="w")
         self._seed_label.grid(row=row, column=0, padx=20, pady=(10, 0), sticky="w")
@@ -338,6 +332,20 @@ class RLBenchmarkGUI(ctk.CTk):
         )
         self._eval_button.grid(row=row, column=0, padx=20, pady=(5, 20), sticky="ew")
         row += 1
+
+        self._on_mode_changed(self._mode_option.get())
+
+    def _update_lookahead_label(self, value):
+        self._lookahead_label.configure(text=f"Lookahead: {int(value)}")
+
+    def _on_mode_changed(self, mode: str):
+        if mode == "synthesis":
+            self._routing_view.hide()
+            self._synthesis_view.show()
+            return
+
+        self._synthesis_view.hide()
+        self._routing_view.show()
 
     # -----------------------------------------------------------------------
     #  Main Frame
