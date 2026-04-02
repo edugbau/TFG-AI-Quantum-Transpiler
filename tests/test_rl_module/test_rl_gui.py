@@ -574,6 +574,33 @@ class TestRLEvaluationInspector:
         assert panel._step_selector.get() == "Paso 1"
         assert "Paso: 1" in panel._details.buffer
 
+    def test_episode_inspector_panel_limits_visible_selector_options_for_long_episodes(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        records = [
+            EvaluationStepRecord(
+                step=index,
+                reward=float(index),
+                action_type="gate",
+                is_valid_action=True,
+                layout_before=[0, 1],
+                layout_after=[0, 1],
+                primitive_name="cz",
+                primitive_physical_qargs=(0, 1),
+                primitive_cost=2.0,
+                residual_distance_before=float(index + 1),
+                residual_distance_after=float(index),
+                residual_distance_delta=1.0,
+            )
+            for index in range(1, 81)
+        ]
+
+        panel.set_records(records)
+
+        assert len(panel._step_selector.values) == 50
+        assert panel._step_selector.get() == "Paso 80"
+        assert panel._step_selector.values[0] == "Paso 31"
+        assert panel._step_selector.values[-1] == "Paso 80"
+
     def test_start_evaluation_clears_inspector_state_before_launching_thread(self):
         gui_module = _load_gui_module("test_rl_gui_start_eval_module", "rl_gui.py")
         app = gui_module.RLBenchmarkGUI()

@@ -6,6 +6,9 @@ from typing import Any, Iterable
 import customtkinter as ctk
 
 
+MAX_STEP_SELECTOR_OPTIONS = 50
+
+
 @dataclass(frozen=True)
 class EvaluationStepRecord:
     step: int
@@ -136,7 +139,6 @@ class EpisodeInspectorPanel(ctk.CTkFrame):
     def set_records(self, records: Iterable[EvaluationStepRecord]):
         previous_step = self.selected_record.step if self.selected_record is not None else None
         self.records = list(records)
-        self._record_labels = [f"Paso {record.step}" for record in self.records]
 
         if previous_step is not None:
             self.selected_record = next(
@@ -149,10 +151,34 @@ class EpisodeInspectorPanel(ctk.CTkFrame):
         if self.selected_record is None:
             self.selected_record = self.records[-1] if self.records else None
 
-        selector_values = self._record_labels or ["Paso actual"]
+        selector_values = self._selector_values_for_current_selection()
+        self._record_labels = selector_values
         self._step_selector.configure(values=selector_values)
         self._step_selector.set(self._label_for_selected_record())
         self._render_selected_record()
+
+    def _selector_values_for_current_selection(self) -> list[str]:
+        if not self.records:
+            return ["Paso actual"]
+
+        if len(self.records) <= MAX_STEP_SELECTOR_OPTIONS:
+            return [f"Paso {record.step}" for record in self.records]
+
+        selected_index = len(self.records) - 1
+        if self.selected_record is not None:
+            selected_index = next(
+                (
+                    index
+                    for index, record in enumerate(self.records)
+                    if record.step == self.selected_record.step
+                ),
+                len(self.records) - 1,
+            )
+
+        end_index = max(MAX_STEP_SELECTOR_OPTIONS, selected_index + 1)
+        start_index = max(0, end_index - MAX_STEP_SELECTOR_OPTIONS)
+        visible_records = self.records[start_index:end_index]
+        return [f"Paso {record.step}" for record in visible_records]
 
     def _label_for_selected_record(self) -> str:
         if self.selected_record is None:
