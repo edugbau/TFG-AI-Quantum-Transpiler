@@ -12,9 +12,11 @@ Proyecto de transpilación cuántica organizado en cuatro módulos: `qiskit_inte
 
 - **Optimización Multiobjetivo (MO)** — Algoritmos evolutivos (NSGA-II) para explorar layouts iniciales según múltiples métricas de calidad.
 - **Aprendizaje por Refuerzo (RL)** — Entorno y agentes para routing/síntesis, con soporte para consumir un `initial_layout` genérico sin acoplarse a un productor concreto.
-- **Integración** — `integration` posee el futuro handoff y la orquestación de escenarios entre módulos; su implementación actual sigue siendo un stub en `src/integration/`.
+- **Integración** — `integration` posee el handoff MO -> RL y la orquestación de escenarios de evaluación `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` en `src/integration/`.
 
-El objetivo es superar las limitaciones de heurísticas como SABRE. MO y RL evolucionan como módulos separados hasta que la integración coordine los flujos `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
+El objetivo es superar las limitaciones de heurísticas como SABRE. MO y RL evolucionan como módulos separados mientras la integración define y evalua los flujos `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
+
+En el estado actual de integration v1, los escenarios basados en RL devuelven `episode summaries`, not final circuits. Reconstructing/exporting the final circuit from RL is left for a future iteration, y QASM input is also deferred to a future iteration.
 
 ## Instalación
 
@@ -38,7 +40,7 @@ src/
 ├── qiskit_interface/   # Módulo 1: Interfaz con Qiskit
 ├── rl_module/          # Módulo 2: Aprendizaje por Refuerzo
 ├── mo_module/          # Módulo 3: Optimización Multiobjetivo
-└── integration/        # Módulo 4: Orquestación MO->RL y experimentación (stub actual)
+└── integration/        # Módulo 4: Orquestación MO->RL y evaluación de routing v1
 ```
 
 Para más detalles sobre la arquitectura y los contratos entre módulos, ver [agents.md](docs/agents.md).
