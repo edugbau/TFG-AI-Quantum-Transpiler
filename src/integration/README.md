@@ -13,6 +13,8 @@ Integration v1 covers these routing evaluation scenarios:
 
 The current implementation focuses on scenario orchestration and shared contracts for routing evaluation.
 
+Internal implementation details, contracts and pipelines are documented in `docs/internal_documentation.md`.
+
 ## Known RL limitation
 
 In this v1 scope, RL-based scenarios return episode summaries, not final circuits.
