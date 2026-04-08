@@ -90,6 +90,17 @@ def assert_mentions_supported_crossover_options(text: str) -> None:
     assert "prob_crossover" not in text
 
 
+def assert_integration_v1_doc_scope(text: str) -> None:
+    assert_contains_all(text, ("Baseline", "MO_Only", "RL_Only", "MO+RL"))
+
+    lowered = text.lower()
+    assert "routing" in lowered
+    assert "episode summaries" in lowered
+    assert "not final circuits" in lowered
+    assert "future iteration" in lowered
+    assert "qasm" in lowered
+
+
 def iter_python_files(relative_dir: str):
     return (ROOT / relative_dir).rglob("*.py")
 
@@ -290,22 +301,12 @@ def test_rl_docs_and_reset_contract_keep_initial_layout_generic() -> None:
     )
 
 
-def test_integration_stub_declares_handoff_ownership() -> None:
+def test_integration_docs_declare_routing_v1_scope_and_known_rl_limitations() -> None:
     integration_text = read_text("src/integration/__init__.py")
+    integration_readme_text = read_text("src/integration/README.md")
 
-    assert_contains_all(
-        integration_text,
-        (
-            '"""Módulo 4: Integración y experimentación.',
-            "único dueño del handoff MO -> RL",
-            "Baseline",
-            "MO_Only",
-            "RL_Only",
-            "MO+RL",
-            "Estado actual: stub.",
-            "__all__: list[str] = []",
-        ),
-    )
+    assert_contains_all(integration_text, ("routing-evaluation v1", "episode summaries, not final circuits"))
+    assert_integration_v1_doc_scope(integration_readme_text)
 
 
 def test_mo_module_has_no_direct_rl_imports() -> None:

@@ -1,10 +1,22 @@
-"""Módulo 4: Integración y experimentación.
+"""Module 4: integration and experimentation.
 
-Este paquete será el único dueño del handoff MO -> RL y de la
-orquestación de escenarios `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
+This package owns the MO -> RL handoff and the routing-evaluation v1
+scope for `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL` scenarios.
 
-Estado actual: stub. La implementación del pipeline todavía no forma
-parte de este cambio.
+RL outputs in this scope are episode summaries, not final circuits.
+The pipeline implementation is still outside this change.
 """
 
-__all__: list[str] = []
+from .contracts import (
+    LayoutSelectionPolicy,
+    RoutingEpisodeSummary,
+    ScenarioRequest,
+    ScenarioResult,
+)
+
+__all__ = [
+    "LayoutSelectionPolicy",
+    "RoutingEpisodeSummary",
+    "ScenarioRequest",
+    "ScenarioResult",
+]
