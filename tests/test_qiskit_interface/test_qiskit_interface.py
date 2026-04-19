@@ -34,6 +34,7 @@ from src.qiskit_interface.circuit_utils import (
     count_two_qubit_gates,
     export_circuit_to_qasm2,
     export_circuit_to_qasm3,
+    load_circuit,
     load_circuit_from_qasm2,
     load_circuit_from_qasm3,
     save_circuit_to_qasm2,
@@ -65,6 +66,8 @@ from src.qiskit_interface.transpiler import (
     transpile_with_custom_layout,
     print_transpilation_comparison,
     run_baseline,
+    list_available_baselines,
+    run_named_baseline,
 )
 import src.qiskit_interface as qiskit_interface
 
@@ -217,6 +220,195 @@ class TestCircuitMetrics:
 class TestCircuitIO:
     """Tests de importación/exportación QASM."""
 
+    def test_load_circuit_library_attaches_metadata(self):
+        """load_circuit desde biblioteca adjunta metadatos de procedencia."""
+        loaded = load_circuit(
+            "library",
+            circuit_name="ghz",
+            num_qubits=3,
+            seed=42,
+        )
+
+        assert loaded.num_qubits == 3
+        assert loaded.metadata is not None
+        assert loaded.metadata["source_kind"] == "library"
+        assert loaded.metadata["source_format"] == "library"
+        assert loaded.metadata["resolved_circuit_name"] == "ghz"
+
+    def test_load_circuit_qasm_file_auto_detects_qasm2_and_attaches_metadata(self, tmp_path):
+        """load_circuit detecta QASM2 automáticamente y adjunta metadatos."""
+        qasm_path = tmp_path / "simple_from_text.txt"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'qreg q[2];',
+                'h q[0];',
+                'cx q[0],q[1];',
+            ]),
+            encoding="utf-8",
+        )
+
+        loaded = load_circuit(
+            "qasm_file",
+            circuit_path=qasm_path,
+            circuit_format="auto",
+        )
+
+        assert loaded.num_qubits == 2
+        assert loaded.metadata is not None
+        assert loaded.metadata["source_kind"] == "qasm_file"
+        assert loaded.metadata["source_format"] == "qasm2"
+        assert loaded.metadata["source_path"] == str(qasm_path)
+        assert loaded.metadata["resolved_circuit_name"] == "simple_from_text"
+
+    def test_load_circuit_qasm_file_qasm2_preserves_relative_include_resolution(self, tmp_path):
+        """load_circuit debe preservar includes relativos en cargas desde fichero."""
+        include_path = tmp_path / "custom_defs.inc"
+        include_path.write_text(
+            "// sibling include resolved relative to the main file\n",
+            encoding="utf-8",
+        )
+        qasm_path = tmp_path / "with_relative_include.qasm"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'include "custom_defs.inc";',
+                'qreg q[1];',
+                'h q[0];',
+            ]),
+            encoding="utf-8",
+        )
+
+        loaded = load_circuit(
+            "qasm_file",
+            circuit_path=qasm_path,
+            circuit_format="qasm2",
+        )
+
+        assert loaded.num_qubits == 1
+        assert loaded.count_ops().get("h", 0) == 1
+        assert loaded.metadata is not None
+        assert loaded.metadata["source_path"] == str(qasm_path)
+
+    def test_load_circuit_qasm_file_auto_detects_qasm3_from_contents(self, tmp_path):
+        """load_circuit detecta QASM3 desde el contenido del fichero."""
+        qasm_path = tmp_path / "simple_qasm3.txt"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 3.0;',
+                'include "stdgates.inc";',
+                'qubit[2] q;',
+                'h q[0];',
+                'cx q[0], q[1];',
+            ]),
+            encoding="utf-8",
+        )
+
+        if find_spec("qiskit_qasm3_import") is None:
+            with pytest.raises(MissingOptionalLibraryError):
+                load_circuit(
+                    "qasm_file",
+                    circuit_path=qasm_path,
+                    circuit_format="auto",
+                )
+            return
+
+        loaded = load_circuit(
+            "qasm_file",
+            circuit_path=qasm_path,
+            circuit_format="auto",
+        )
+
+        assert loaded.num_qubits == 2
+        assert loaded.metadata is not None
+        assert loaded.metadata["source_kind"] == "qasm_file"
+        assert loaded.metadata["source_format"] == "qasm3"
+        assert loaded.metadata["source_path"] == str(qasm_path)
+        assert loaded.metadata["resolved_circuit_name"] == "simple_qasm3"
+
+    def test_load_circuit_library_requires_circuit_name(self):
+        """load_circuit exige circuit_name para circuitos de biblioteca."""
+        with pytest.raises(ValueError, match="circuit_name is required"):
+            load_circuit("library", num_qubits=3)
+
+    def test_load_circuit_library_requires_num_qubits(self):
+        """load_circuit exige num_qubits para circuitos de biblioteca."""
+        with pytest.raises(ValueError, match="num_qubits is required"):
+            load_circuit("library", circuit_name="ghz")
+
+    def test_load_circuit_library_selects_requested_generator_lazily(self):
+        """load_circuit no debe fallar por generadores no solicitados de la biblioteca."""
+        loaded = load_circuit(
+            "library",
+            circuit_name="qft",
+            num_qubits=1,
+            seed=42,
+        )
+
+        assert loaded.num_qubits == 1
+        assert loaded.metadata is not None
+        assert loaded.metadata["resolved_circuit_name"] == "qft"
+
+    def test_load_circuit_qasm_file_requires_circuit_path(self):
+        """load_circuit exige circuit_path para source_kind qasm_file."""
+        with pytest.raises(ValueError, match="circuit_path is required"):
+            load_circuit("qasm_file")
+
+    def test_load_circuit_qasm_file_rejects_invalid_format(self, tmp_path):
+        """load_circuit valida explícitamente circuit_format."""
+        qasm_path = tmp_path / "simple.qasm"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'qreg q[1];',
+            ]),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="circuit_format must be 'auto', 'qasm2', or 'qasm3'"):
+            load_circuit(
+                "qasm_file",
+                circuit_path=qasm_path,
+                circuit_format="invalid",
+            )
+
+    def test_load_circuit_qasm_file_auto_rejects_unknown_contents(self, tmp_path):
+        """load_circuit falla si no puede detectar el formato desde contenido."""
+        qasm_path = tmp_path / "unknown_format.txt"
+        qasm_path.write_text("not a qasm program", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="No se pudo detectar el formato QASM"):
+            load_circuit(
+                "qasm_file",
+                circuit_path=qasm_path,
+                circuit_format="auto",
+            )
+
+    def test_load_circuit_qasm_file_auto_detects_qasm2_with_utf8_bom(self, tmp_path):
+        """La autodetección de QASM tolera BOM UTF-8 al inicio del fichero."""
+        qasm_path = tmp_path / "bom_prefixed.txt"
+        qasm_path.write_text(
+            '\ufeff' + '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'qreg q[1];',
+            ]),
+            encoding="utf-8",
+        )
+
+        loaded = load_circuit(
+            "qasm_file",
+            circuit_path=qasm_path,
+            circuit_format="auto",
+        )
+
+        assert loaded.num_qubits == 1
+        assert loaded.metadata is not None
+        assert loaded.metadata["source_format"] == "qasm2"
+
     def test_qasm2_roundtrip(self, simple_circuit):
         """Exportar a QASM2 e importar de vuelta preserva la estructura."""
         qasm_str = export_circuit_to_qasm2(simple_circuit)
@@ -230,6 +422,23 @@ class TestCircuitIO:
         """Cargar un fichero QASM inexistente lanza FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             load_circuit_from_qasm2(Path("no_existe.qasm"))
+
+    def test_load_circuit_from_qasm2_reads_existing_non_qasm_file(self, tmp_path):
+        """El loader QASM2 trata cualquier ruta existente como fichero."""
+        qasm_path = tmp_path / "simple_qasm2.txt"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'qreg q[2];',
+                'h q[0];',
+            ]),
+            encoding="utf-8",
+        )
+
+        loaded = load_circuit_from_qasm2(qasm_path)
+
+        assert loaded.num_qubits == 2
 
     def test_export_qasm3_roundtrip_from_string(self, simple_circuit):
         """Exportar a QASM3 produce una cadena que puede recargarse."""
@@ -247,6 +456,28 @@ class TestCircuitIO:
         assert "OPENQASM 3" in qasm3_str
         assert loaded.num_qubits == simple_circuit.num_qubits
         assert loaded.depth() == simple_circuit.depth()
+
+    def test_load_circuit_from_qasm3_reads_existing_non_qasm_file(self, tmp_path):
+        """El loader QASM3 trata cualquier ruta existente como fichero."""
+        qasm_path = tmp_path / "simple_qasm3.txt"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 3.0;',
+                'include "stdgates.inc";',
+                'qubit[2] q;',
+                'h q[0];',
+            ]),
+            encoding="utf-8",
+        )
+
+        if find_spec("qiskit_qasm3_import") is None:
+            with pytest.raises(MissingOptionalLibraryError):
+                load_circuit_from_qasm3(qasm_path)
+            return
+
+        loaded = load_circuit_from_qasm3(qasm_path)
+
+        assert loaded.num_qubits == 2
 
     def test_save_qasm2_creates_file_that_can_be_loaded(self, simple_circuit, tmp_path):
         """Guardar a QASM2 crea un fichero reutilizable."""
@@ -367,6 +598,19 @@ class TestBackendInfo:
         s = backend_info_torino.summary()
         assert "Qubits" in s
         assert "cz" in s
+
+    def test_backend_info_to_summary_dict_exposes_stable_aggregates(self, backend_info_torino):
+        """El resumen serializable del backend expone agregados estables para artefactos."""
+        summary = backend_info_torino.to_summary_dict()
+
+        assert summary["backend_name"] == "fake_torino"
+        assert summary["num_qubits"] == 133
+        assert summary["two_qubit_gate"] == "cz"
+        assert "basis_gates" in summary
+        assert summary["coupling_edges_count"] == len(backend_info_torino.coupling_edges)
+        assert summary["min_error_2q"] <= summary["avg_error_2q"] <= summary["max_error_2q"]
+        assert summary["avg_t1"] > 0
+        assert summary["avg_t2"] > 0
 
 
 class TestBackendUtilities:
@@ -563,6 +807,66 @@ class TestTranspilationBatch:
             assert "trans_depth" in row
             assert "trans_two_qubit_gates" in row
 
+    def test_run_named_baseline_tags_result_with_baseline_name(self, simple_circuit):
+        """run_named_baseline propaga el nombre del baseline al resultado plano."""
+        rows = run_named_baseline(
+            "qiskit_level_2",
+            simple_circuit,
+            backend_names=["fake_torino"],
+            seed=42,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["baseline_name"] == "qiskit_level_2"
+        assert rows[0]["optimization_level"] == 2
+
+    def test_run_named_baseline_supports_custom_layout_baseline(self, simple_circuit):
+        """El baseline nombrado de layout reutiliza transpile_with_custom_layout."""
+        layout = [10, 11, 12]
+
+        rows = run_named_baseline(
+            "custom_layout_level_1",
+            simple_circuit,
+            backend_names=["fake_torino"],
+            layout=layout,
+            seed=42,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["baseline_name"] == "custom_layout_level_1"
+        assert rows[0]["optimization_level"] == 1
+        assert rows[0]["initial_layout"] == layout
+
+    def test_list_available_baselines_exposes_named_catalog(self):
+        """El catálogo público de baselines nombrados es pequeño y estable."""
+        baselines = list_available_baselines()
+
+        assert isinstance(baselines, list)
+        assert baselines == [
+            "qiskit_level_0",
+            "qiskit_level_1",
+            "qiskit_level_2",
+            "qiskit_level_3",
+            "custom_layout_level_1",
+        ]
+
+    def test_run_baseline_flat_rows_do_not_require_backend_info_extraction(self, simple_circuit, monkeypatch):
+        """Los resultados planos no deben forzar la extracción de hardware summary."""
+        def fail_extract(_backend):
+            raise AssertionError("extract_backend_info should not be called for flat rows")
+
+        monkeypatch.setattr("src.qiskit_interface.transpiler.extract_backend_info", fail_extract)
+
+        rows = run_baseline(
+            simple_circuit,
+            backend_names=["fake_torino"],
+            optimization_levels=[1],
+            seed=42,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["backend_name"] == "fake_torino"
+
     def test_compare_results(self, simple_circuit, backend_torino):
         """Comparación de resultados genera filas para DataFrame."""
         results = transpile_all_levels(simple_circuit, backend=backend_torino)
@@ -591,6 +895,33 @@ class TestTranspilationBatch:
 class TestPackageApi:
     """Cobertura mínima de la API pública reexportada en el paquete raíz."""
 
+    def test_package_root_load_circuit_reexports_qasm_file_auto_loader(self, tmp_path):
+        """El paquete raíz reexporta load_circuit con autodetección QASM."""
+        qasm_path = tmp_path / "package_root_loader.txt"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'qreg q[2];',
+                'h q[0];',
+                'cx q[0],q[1];',
+            ]),
+            encoding="utf-8",
+        )
+
+        loaded = qiskit_interface.load_circuit(
+            "qasm_file",
+            circuit_path=qasm_path,
+            circuit_format="auto",
+        )
+
+        assert loaded.num_qubits == 2
+        assert loaded.metadata is not None
+        assert loaded.metadata["source_kind"] == "qasm_file"
+        assert loaded.metadata["source_format"] == "qasm2"
+        assert loaded.metadata["source_path"] == str(qasm_path)
+        assert loaded.metadata["resolved_circuit_name"] == "package_root_loader"
+
     def test_package_root_reexports_new_public_apis(self, simple_circuit, tmp_path):
         """El paquete raíz expone las nuevas APIs públicas esperadas."""
         # Arrange
@@ -604,6 +935,8 @@ class TestPackageApi:
 
         # Assert
         assert callable(qiskit_interface.run_baseline)
+        assert callable(qiskit_interface.run_named_baseline)
+        assert callable(qiskit_interface.list_available_baselines)
         assert callable(qiskit_interface.print_transpilation_comparison)
         assert "OPENQASM 2.0" in qasm2_str
         assert "OPENQASM 3" in qasm3_str
@@ -668,6 +1001,57 @@ class TestTranspilationResult:
         assert "backend_name" in d
         assert "optimization_level" in d
         assert "trans_depth" in d
+
+    def test_to_artifact_dict_exposes_structured_transpilation_artifact(self, tmp_path):
+        """El artefacto estructurado incluye procedencia y métricas comparables."""
+        qasm_path = tmp_path / "artifact_input.qasm"
+        qasm_path.write_text(
+            '\n'.join([
+                'OPENQASM 2.0;',
+                'include "qelib1.inc";',
+                'qreg q[3];',
+                'h q[0];',
+                'cx q[0],q[1];',
+                'cx q[1],q[2];',
+            ]),
+            encoding="utf-8",
+        )
+        circuit = load_circuit("qasm_file", circuit_path=qasm_path, circuit_format="qasm2")
+        result = transpile_circuit(
+            circuit,
+            backend_name="fake_torino",
+            optimization_level=2,
+            seed=42,
+        )
+        result.baseline_name = "qiskit_level_2"
+
+        assert result.hardware_summary is None
+
+        artifact = result.to_artifact_dict()
+
+        assert artifact["artifact_version"] == "transpilation_result.v1"
+        assert artifact["baseline_name"] == "qiskit_level_2"
+        assert artifact["circuit"]["source_kind"] == "qasm_file"
+        assert artifact["circuit"]["source_path"] == str(qasm_path)
+        assert artifact["backend"]["backend_name"] == "fake_torino"
+        assert "coupling_edges_count" in artifact["backend"]
+        assert "avg_error_2q" in artifact["backend"]
+        assert "avg_t1" in artifact["backend"]
+        assert artifact["metrics"]["original"] == result.original_metrics.to_dict()
+        assert artifact["metrics"]["transpiled"] == result.transpiled_metrics.to_dict()
+
+    def test_to_artifact_dict_falls_back_when_backend_summary_cannot_be_extracted(self, simple_circuit, backend_torino, monkeypatch):
+        """El artefacto tolera backends sin extracción detallada previa."""
+        result = transpile_circuit(simple_circuit, backend=backend_torino, optimization_level=1, seed=42)
+
+        def fail_extract(_backend):
+            raise RuntimeError("backend info unavailable")
+
+        monkeypatch.setattr("src.qiskit_interface.transpiler.extract_backend_info", fail_extract)
+
+        artifact = result.to_artifact_dict()
+
+        assert artifact["backend"] == {"backend_name": "fake_torino"}
 
     def test_summary(self, simple_circuit, backend_torino):
         """summary() devuelve un string legible."""

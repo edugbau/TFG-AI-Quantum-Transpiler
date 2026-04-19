@@ -95,10 +95,14 @@ def assert_integration_v1_doc_scope(text: str) -> None:
 
     lowered = text.lower()
     assert "routing" in lowered
+    assert "qiskit-facing scenarios" in lowered
+    assert "qasm input is available" in lowered
     assert "episode summaries" in lowered
     assert "not final circuits" in lowered
     assert "future iteration" in lowered
     assert "qasm" in lowered
+    assert "backend catalog is intentionally limited" in lowered
+    assert "fake backends" in lowered
 
 
 def iter_python_files(relative_dir: str):
@@ -211,6 +215,23 @@ def test_qiskit_interface_docs_keep_initial_layout_generic() -> None:
 
     assert_mentions_initial_layout_from_caller(transpiler_text)
     assert "initial_layout" in qiskit_readme_text
+    assert_contains_all(
+        qiskit_readme_text,
+        (
+            "load_circuit(",
+            "`qasm3`",
+            "`auto`",
+            "fake_torino",
+            "fake_sherbrooke",
+            "fake_brisbane",
+            "Baseline",
+            "MO_Only",
+        ),
+    )
+    assert_any_contains(
+        qiskit_readme_text.lower(),
+        ("resúmenes de episodio", "resumenes de episodio"),
+    )
     assert "helper de evaluación local" in qiskit_readme_text
     assert "src/integration/" in transpiler_text
     assert "No implementa la integración MO -> RL" in transpiler_text

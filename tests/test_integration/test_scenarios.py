@@ -5,7 +5,12 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from src.integration.contracts import RoutingEpisodeSummary, ScenarioRequest
+from src.integration.contracts import (
+    CircuitFormat,
+    CircuitSource,
+    RoutingEpisodeSummary,
+    ScenarioRequest,
+)
 
 
 def _make_request(scenario_name: str, **overrides) -> ScenarioRequest:
@@ -35,8 +40,69 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
     from src.integration import scenarios
 
     circuit = QuantumCircuit(3)
-    resolve_calls = []
-    transpile_calls = []
+    circuit.name = "ghz_3"
+    circuit.metadata = {
+        "source_kind": "library",
+        "source_format": "library",
+        "resolved_circuit_name": "ghz_3",
+    }
+    baseline_calls = []
+    row = {
+        "backend_name": "fake_backend",
+        "baseline_name": "qiskit_level_1",
+        "optimization_level": 1,
+        "seed": 17,
+        "elapsed_time_s": 0.25,
+        "depth_reduction": 0.4,
+        "two_qubit_gate_overhead": 1.5,
+        "orig_num_qubits": 3,
+        "orig_depth": 5,
+        "orig_total_gates": 6,
+        "orig_two_qubit_gates": 2,
+        "trans_depth": 12,
+        "trans_num_qubits": 3,
+        "trans_total_gates": 9,
+        "trans_two_qubit_gates": 4,
+    }
+    artifact = {
+        "artifact_version": "transpilation_result.v1",
+        "baseline_name": "qiskit_level_1",
+        "circuit": {
+            "name": "ghz_3",
+            "num_qubits": 3,
+            "source_kind": "library",
+            "source_format": "library",
+            "source_path": None,
+            "resolved_circuit_name": "ghz_3",
+        },
+        "backend": {
+            "backend_name": "fake_backend",
+            "coupling_edges_count": 2,
+            "avg_error_2q": 0.01,
+        },
+        "transpilation": {
+            "optimization_level": 1,
+            "seed": 17,
+            "elapsed_time_s": 0.25,
+            "baseline_name": "qiskit_level_1",
+            "initial_layout": None,
+            "final_layout": [0, 1, 2],
+        },
+        "metrics": {
+            "original": {
+                "num_qubits": 3,
+                "depth": 5,
+                "total_gates": 6,
+                "two_qubit_gates": 2,
+            },
+            "transpiled": {
+                "num_qubits": 3,
+                "depth": 12,
+                "total_gates": 9,
+                "two_qubit_gates": 4,
+            },
+        },
+    }
 
     monkeypatch.setattr(
         scenarios,
@@ -44,15 +110,24 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
         lambda request: circuit,
     )
     monkeypatch.setattr(
-        scenarios,
-        "resolve_backend_bundle",
-        lambda backend_name: resolve_calls.append(backend_name)
-        or SimpleNamespace(backend_name=backend_name, backend="backend-object"),
+        scenarios.qiskit_interface,
+        "run_named_baseline",
+        lambda baseline_name, circuit, backend_names, seed, layout=None, include_artifact=False: baseline_calls.append(
+            {
+                "baseline_name": baseline_name,
+                "circuit": circuit,
+                "backend_names": backend_names,
+                "seed": seed,
+                "layout": layout,
+                "include_artifact": include_artifact,
+            }
+        )
+        or [(row, artifact)],
     )
     monkeypatch.setattr(
         scenarios.qiskit_interface,
         "transpile_circuit",
-        lambda **kwargs: transpile_calls.append(kwargs) or _make_transpilation_result(),
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected extra transpilation")),
     )
 
     result = scenarios.run_baseline_scenario(_make_request("Baseline"))
@@ -61,15 +136,32 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
     assert result.selected_layout is None
     assert result.routing_summary is None
     assert result.notes == []
-    assert result.transpilation_metrics is not None
-    assert "trans_depth" in result.transpilation_metrics
-    assert resolve_calls == ["fake_backend"]
-    assert transpile_calls == [
+    assert result.transpilation_metrics == {
+        "backend_name": "fake_backend",
+        "baseline_name": "qiskit_level_1",
+        "optimization_level": 1,
+        "seed": 17,
+        "elapsed_time_s": 0.25,
+        "depth_reduction": 0.4,
+        "two_qubit_gate_overhead": 1.5,
+        "orig_num_qubits": 3,
+        "orig_depth": 5,
+        "orig_total_gates": 6,
+        "orig_two_qubit_gates": 2,
+        "trans_depth": 12,
+        "trans_num_qubits": 3,
+        "trans_total_gates": 9,
+        "trans_two_qubit_gates": 4,
+    }
+    assert result.transpilation_artifact == artifact
+    assert baseline_calls == [
         {
+            "baseline_name": "qiskit_level_1",
             "circuit": circuit,
-            "backend": "backend-object",
-            "backend_name": "fake_backend",
+            "backend_names": ["fake_backend"],
             "seed": 17,
+            "layout": None,
+            "include_artifact": True,
         }
     ]
 
@@ -79,10 +171,73 @@ def test_run_mo_only_scenario_returns_selected_layout_and_transpilation_metrics(
 
     circuit = QuantumCircuit(3)
     request = _make_request("MO_Only")
+    circuit.name = "ghz_3"
+    circuit.metadata = {
+        "source_kind": "library",
+        "source_format": "library",
+        "resolved_circuit_name": "ghz_3",
+    }
     bundle = SimpleNamespace(backend_name="fake_backend", backend="backend-object")
     mo_calls = []
     select_calls = []
-    transpile_calls = []
+    baseline_calls = []
+    row = {
+        "backend_name": "fake_backend",
+        "baseline_name": "custom_layout_level_1",
+        "optimization_level": 1,
+        "seed": 17,
+        "elapsed_time_s": 0.5,
+        "depth_reduction": 0.2,
+        "two_qubit_gate_overhead": 1.1,
+        "orig_num_qubits": 3,
+        "orig_depth": 5,
+        "orig_total_gates": 6,
+        "orig_two_qubit_gates": 2,
+        "trans_depth": 12,
+        "trans_num_qubits": 3,
+        "trans_total_gates": 8,
+        "trans_two_qubit_gates": 4,
+        "initial_layout": [2, 0, 1],
+    }
+    artifact = {
+        "artifact_version": "transpilation_result.v1",
+        "baseline_name": "custom_layout_level_1",
+        "circuit": {
+            "name": "ghz_3",
+            "num_qubits": 3,
+            "source_kind": "library",
+            "source_format": "library",
+            "source_path": None,
+            "resolved_circuit_name": "ghz_3",
+        },
+        "backend": {
+            "backend_name": "fake_backend",
+            "coupling_edges_count": 2,
+            "avg_error_2q": 0.02,
+        },
+        "transpilation": {
+            "optimization_level": 1,
+            "seed": 17,
+            "elapsed_time_s": 0.5,
+            "baseline_name": "custom_layout_level_1",
+            "initial_layout": [2, 0, 1],
+            "final_layout": [1, 2, 0],
+        },
+        "metrics": {
+            "original": {
+                "num_qubits": 3,
+                "depth": 5,
+                "total_gates": 6,
+                "two_qubit_gates": 2,
+            },
+            "transpiled": {
+                "num_qubits": 3,
+                "depth": 12,
+                "total_gates": 8,
+                "two_qubit_gates": 4,
+            },
+        },
+    }
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
@@ -100,9 +255,23 @@ def test_run_mo_only_scenario_returns_selected_layout_and_transpilation_metrics(
     )
     monkeypatch.setattr(
         scenarios.qiskit_interface,
+        "run_named_baseline",
+        lambda baseline_name, circuit, backend_names, seed, layout=None, include_artifact=False: baseline_calls.append(
+            {
+                "baseline_name": baseline_name,
+                "circuit": circuit,
+                "backend_names": backend_names,
+                "seed": seed,
+                "layout": layout,
+                "include_artifact": include_artifact,
+            }
+        )
+        or [(row, artifact)],
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
         "transpile_with_custom_layout",
-        lambda **kwargs: transpile_calls.append(kwargs)
-        or _make_transpilation_result(initial_layout=[2, 0, 1]),
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected extra transpilation")),
     )
 
     result = scenarios.run_mo_only_scenario(request)
@@ -111,16 +280,35 @@ def test_run_mo_only_scenario_returns_selected_layout_and_transpilation_metrics(
     assert result.selected_layout == [2, 0, 1]
     assert result.routing_summary is None
     assert result.notes == []
-    assert result.transpilation_metrics is not None
+    assert result.transpilation_metrics == {
+        "backend_name": "fake_backend",
+        "baseline_name": "custom_layout_level_1",
+        "optimization_level": 1,
+        "seed": 17,
+        "elapsed_time_s": 0.5,
+        "depth_reduction": 0.2,
+        "two_qubit_gate_overhead": 1.1,
+        "orig_num_qubits": 3,
+        "orig_depth": 5,
+        "orig_total_gates": 6,
+        "orig_two_qubit_gates": 2,
+        "trans_depth": 12,
+        "trans_num_qubits": 3,
+        "trans_total_gates": 8,
+        "trans_two_qubit_gates": 4,
+        "initial_layout": [2, 0, 1],
+    }
+    assert result.transpilation_artifact == artifact
     assert mo_calls == [(circuit, "backend-object", 17)]
     assert select_calls == [("mo-result", request.layout_policy, request.mo_objective_index)]
-    assert transpile_calls == [
+    assert baseline_calls == [
         {
+            "baseline_name": "custom_layout_level_1",
             "circuit": circuit,
             "layout": [2, 0, 1],
-            "backend": "backend-object",
-            "backend_name": "fake_backend",
+            "backend_names": ["fake_backend"],
             "seed": 17,
+            "include_artifact": True,
         }
     ]
 
@@ -133,6 +321,7 @@ def test_run_mo_only_scenario_uses_non_quick_optimizer_when_requested(monkeypatc
     bundle = SimpleNamespace(backend_name="fake_backend", backend="backend-object")
     optimize_calls = []
     quick_calls = []
+    baseline_calls = []
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
@@ -153,8 +342,50 @@ def test_run_mo_only_scenario_uses_non_quick_optimizer_when_requested(monkeypatc
     )
     monkeypatch.setattr(
         scenarios.qiskit_interface,
+        "run_named_baseline",
+        lambda baseline_name, circuit, backend_names, seed, layout=None, include_artifact=False: baseline_calls.append(
+            {
+                "baseline_name": baseline_name,
+                "circuit": circuit,
+                "backend_names": backend_names,
+                "seed": seed,
+                "layout": layout,
+                "include_artifact": include_artifact,
+            }
+        )
+        or [
+            (
+                {
+                    "backend_name": "fake_backend",
+                    "baseline_name": "custom_layout_level_1",
+                    "optimization_level": 1,
+                    "seed": 17,
+                    "elapsed_time_s": 0.5,
+                    "depth_reduction": 0.2,
+                    "two_qubit_gate_overhead": 1.1,
+                    "orig_num_qubits": 3,
+                    "orig_depth": 5,
+                    "orig_total_gates": 6,
+                    "orig_two_qubit_gates": 2,
+                    "trans_depth": 12,
+                    "trans_num_qubits": 3,
+                    "trans_total_gates": 8,
+                    "trans_two_qubit_gates": 4,
+                    "initial_layout": [2, 0, 1],
+                },
+                {
+                    "artifact_version": "transpilation_result.v1",
+                    "baseline_name": "custom_layout_level_1",
+                    "backend": {"backend_name": "fake_backend"},
+                    "transpilation": {"initial_layout": [2, 0, 1]},
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
         "transpile_with_custom_layout",
-        lambda **kwargs: _make_transpilation_result(),
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected extra transpilation")),
     )
 
     scenarios.run_mo_only_scenario(request)
@@ -167,6 +398,96 @@ def test_run_mo_only_scenario_uses_non_quick_optimizer_when_requested(monkeypatc
             "backend_name": "fake_backend",
         }
     ]
+    assert baseline_calls == [
+        {
+            "baseline_name": "custom_layout_level_1",
+            "circuit": circuit,
+            "backend_names": ["fake_backend"],
+            "seed": 17,
+            "layout": [2, 0, 1],
+            "include_artifact": True,
+        }
+    ]
+
+
+def test_run_baseline_scenario_rejects_row_artifact_baseline_drift(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    circuit.name = "ghz_3"
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "run_named_baseline",
+        lambda baseline_name, circuit, backend_names, seed, layout=None, include_artifact=False: [
+            (
+                {
+                    "backend_name": "fake_backend",
+                    "baseline_name": "qiskit_level_2",
+                    "optimization_level": 1,
+                    "seed": 17,
+                    "trans_depth": 12,
+                },
+                {
+                    "artifact_version": "transpilation_result.v1",
+                    "baseline_name": "qiskit_level_2",
+                    "backend": {"backend_name": "fake_backend"},
+                    "transpilation": {"initial_layout": None},
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="baseline_name"):
+        scenarios.run_baseline_scenario(_make_request("Baseline"))
+
+
+def test_run_mo_only_scenario_rejects_row_artifact_layout_drift(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    circuit.name = "ghz_3"
+    request = _make_request("MO_Only")
+    bundle = SimpleNamespace(backend_name="fake_backend", backend="backend-object")
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "run_named_baseline",
+        lambda baseline_name, circuit, backend_names, seed, layout=None, include_artifact=False: [
+            (
+                {
+                    "backend_name": "fake_backend",
+                    "baseline_name": "custom_layout_level_1",
+                    "optimization_level": 1,
+                    "seed": 17,
+                    "trans_depth": 12,
+                    "initial_layout": [0, 1, 2],
+                },
+                {
+                    "artifact_version": "transpilation_result.v1",
+                    "baseline_name": "custom_layout_level_1",
+                    "backend": {"backend_name": "fake_backend"},
+                    "transpilation": {"initial_layout": [0, 1, 2]},
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="initial_layout"):
+        scenarios.run_mo_only_scenario(request)
 
 
 def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> None:
@@ -397,8 +718,8 @@ def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypa
 
     monkeypatch.setattr(
         scenarios.qiskit_interface,
-        "circuits_from_library",
-        lambda *, num_qubits, seed: {"ghz_3": circuit},
+        "load_circuit",
+        lambda source_kind, **kwargs: circuit,
     )
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
     monkeypatch.setattr(
@@ -547,9 +868,95 @@ def test_load_circuit_raises_value_error_for_unknown_library_circuit(monkeypatch
 
     monkeypatch.setattr(
         scenarios.qiskit_interface,
-        "circuits_from_library",
-        lambda *, num_qubits, seed: {"other": QuantumCircuit(num_qubits)},
+        "load_circuit",
+        lambda source_kind, **kwargs: (_ for _ in ()).throw(ValueError("Unknown circuit name: ghz_3")),
     )
 
     with pytest.raises(ValueError, match="Unknown circuit name"):
         scenarios._load_circuit(_make_request("Baseline"))
+
+
+def test_load_circuit_uses_qiskit_interface_for_library_requests(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    calls = []
+
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "load_circuit",
+        lambda source_kind, **kwargs: calls.append((source_kind, kwargs)) or circuit,
+    )
+
+    loaded = scenarios._load_circuit(_make_request("Baseline"))
+
+    assert loaded is circuit
+    assert calls == [
+        (
+            "library",
+            {
+                "circuit_name": "ghz",
+                "num_qubits": 3,
+                "circuit_path": None,
+                "circuit_format": "auto",
+                "seed": 17,
+            },
+        )
+    ]
+
+
+def test_load_circuit_normalizes_library_request_name_before_qiskit_interface(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    calls = []
+
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "load_circuit",
+        lambda source_kind, **kwargs: calls.append((source_kind, kwargs)) or circuit,
+    )
+
+    loaded = scenarios._load_circuit(_make_request("Baseline"))
+
+    assert loaded is circuit
+    assert calls[0][1]["circuit_name"] == "ghz"
+    assert calls[0][1]["num_qubits"] == 3
+
+
+def test_load_circuit_uses_qiskit_interface_for_qasm_requests(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    calls = []
+
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "load_circuit",
+        lambda source_kind, **kwargs: calls.append((source_kind, kwargs)) or circuit,
+    )
+
+    loaded = scenarios._load_circuit(
+        ScenarioRequest(
+            scenario_name="Baseline",
+            backend_name="fake_backend",
+            seed=17,
+            circuit_source=CircuitSource.QASM_FILE,
+            circuit_path="circuits/example.qasm",
+            circuit_format=CircuitFormat.QASM3,
+        )
+    )
+
+    assert loaded is circuit
+    assert calls == [
+        (
+            "qasm_file",
+            {
+                "circuit_name": None,
+                "num_qubits": None,
+                "circuit_path": "circuits/example.qasm",
+                "circuit_format": "qasm3",
+                "seed": 17,
+            },
+        )
+    ]

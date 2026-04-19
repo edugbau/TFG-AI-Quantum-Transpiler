@@ -2,7 +2,7 @@ import argparse
 import json
 from dataclasses import asdict
 
-from src.integration.contracts import ScenarioRequest, ScenarioResult
+from src.integration.contracts import CircuitFormat, CircuitSource, ScenarioRequest, ScenarioResult
 from src.integration.scenarios import (
     run_baseline_scenario,
     run_mo_only_scenario,
@@ -17,11 +17,22 @@ _SCENARIO_CHOICES = ("Baseline", "MO_Only", "RL_Only", "MO+RL")
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", choices=_SCENARIO_CHOICES, required=True)
-    parser.add_argument("--circuit", required=True)
-    parser.add_argument("--num-qubits", type=int, required=True)
+    parser.add_argument("--circuit")
+    parser.add_argument("--num-qubits", type=int)
     parser.add_argument("--backend", required=True)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--rl-model-path")
+    parser.add_argument(
+        "--circuit-source",
+        choices=[source.value for source in CircuitSource],
+        default=CircuitSource.LIBRARY.value,
+    )
+    parser.add_argument("--circuit-path")
+    parser.add_argument(
+        "--circuit-format",
+        choices=[circuit_format.value for circuit_format in CircuitFormat],
+        default=CircuitFormat.AUTO.value,
+    )
     return parser
 
 
@@ -51,6 +62,9 @@ def run_from_args(argv: list[str] | None = None) -> dict:
         "num_qubits": args.num_qubits,
         "backend_name": args.backend,
         "rl_model_path": args.rl_model_path,
+        "circuit_source": CircuitSource(args.circuit_source),
+        "circuit_path": args.circuit_path,
+        "circuit_format": CircuitFormat(args.circuit_format),
     }
     if args.seed is not None:
         request_kwargs["seed"] = args.seed

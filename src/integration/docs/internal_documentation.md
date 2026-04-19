@@ -13,6 +13,10 @@ La versión actual de `integration` implementa únicamente escenarios de evaluac
 
 El módulo no implementa entrenamiento RL, no cubre `synthesis` y no reconstruye todavía circuitos finales a partir de la salida del entorno RL. En esta versión, los escenarios basados en RL devuelven resúmenes de episodio (*episode summaries*), no artefactos `QuantumCircuit` finales.
 
+QASM input is available for the Qiskit-facing scenarios of this v1, es decir, para `Baseline` y `MO_Only` cuando la petición usa `circuit_source="qasm_file"`. Los escenarios `RL_Only` y `MO+RL` siguen consumiendo la representación de circuito usada por el evaluador de routing y, como todavía no materializan circuitos finales, no exponen una entrada QASM equivalente en la superficie pública actual.
+
+El backend catalog is intentionally limited a los fake backends actuales (`fake_torino`, `fake_sherbrooke`, `fake_brisbane`). Esta restricción mantiene la evaluación reproducible, evita dependencias de credenciales y refleja el catálogo controlado que publica `qiskit_interface` en esta etapa del proyecto.
+
 ## Estructura del Módulo
 
 ```
@@ -92,7 +96,7 @@ Ubicación: `scenarios.py`
 
 Contiene la lógica de composición de los cuatro escenarios soportados.
 
-- **`_load_circuit()`**: carga circuitos desde `qiskit_interface.circuits_from_library(...)`.
+- **`_load_circuit()`**: carga circuitos mediante `qiskit_interface.load_circuit(...)`, resolviendo tanto `library` como `qasm_file` y propagando la metadata normalizada de entrada.
 - **`_load_agent()`**: carga el modelo RL usando `QuantumRLAgent.load(...)`, con importación perezosa.
 - **`_require_scenario()`**: evita ejecutar el runner equivocado para un `ScenarioRequest` dado.
 - **`_validate_selected_layout()`**: valida ancho, duplicados, negatividad y rango físico del layout seleccionado por MO antes de entregarlo a Qiskit o RL.
@@ -101,13 +105,13 @@ Contiene la lógica de composición de los cuatro escenarios soportados.
 Funciones principales:
 
 - **`run_baseline_scenario()`**
-  - transpila con `qiskit_interface` sin layout externo;
-  - devuelve solo `transpilation_metrics`.
+  - ejecuta `run_named_baseline(..., "qiskit_level_1")` sin layout externo;
+  - devuelve `transpilation_metrics` y `transpilation_artifact`.
 - **`run_mo_only_scenario()`**
   - ejecuta MO;
   - selecciona un layout;
-  - evalúa ese layout con `transpile_with_custom_layout()`;
-  - devuelve `selected_layout` y `transpilation_metrics`.
+  - evalúa ese layout con `run_named_baseline(..., "custom_layout_level_1", layout=...)`;
+  - devuelve `selected_layout`, `transpilation_metrics` y `transpilation_artifact`.
 - **`run_rl_only_scenario()`**
   - carga modelo RL;
   - evalúa el episodio con el layout inicial proporcionado por el llamador o el layout trivial del entorno;
@@ -124,20 +128,20 @@ Funciones principales:
 
 1. Crear `ScenarioRequest` desde la CLI o desde código.
 2. Resolver backend con `resolve_backend_bundle()`.
-3. Cargar circuito desde la librería interna.
-4. Ejecutar `qiskit_interface.transpile_circuit()`.
-5. Devolver `ScenarioResult` con `transpilation_metrics`.
+3. Cargar circuito mediante `_load_circuit()`, resolviendo `library` o `qasm_file` vía `qiskit_interface.load_circuit(...)`.
+4. Ejecutar `qiskit_interface.run_named_baseline(..., baseline_name="qiskit_level_1")`.
+5. Devolver `ScenarioResult` con `transpilation_metrics` y `transpilation_artifact`.
 
 ### B. Pipeline `MO_Only`
 
 1. Crear `ScenarioRequest`.
 2. Resolver backend.
-3. Cargar circuito.
+3. Cargar circuito mediante `_load_circuit()`.
 4. Ejecutar MO (`optimize_layout_quick()` o `optimize_layout()`).
 5. Seleccionar un layout mediante `layout_policy`.
 6. Validar el layout antes de entregarlo a dependencias externas.
-7. Ejecutar `transpile_with_custom_layout()`.
-8. Devolver `ScenarioResult` con métricas Qiskit y `selected_layout`.
+7. Ejecutar `qiskit_interface.run_named_baseline(..., baseline_name="custom_layout_level_1", layout=selected_layout)`.
+8. Devolver `ScenarioResult` con `selected_layout`, métricas Qiskit y `transpilation_artifact`.
 
 ### C. Pipeline `RL_Only`
 
@@ -164,11 +168,15 @@ La entrada visible del módulo es `runner.py`.
 
 - **`build_parser()`** define la superficie CLI de la v1:
   - `--scenario`
+  - `--circuit-source`
   - `--circuit`
+  - `--circuit-path`
+  - `--circuit-format`
   - `--num-qubits`
   - `--backend`
   - `--seed`
   - `--rl-model-path`
+- `--circuit` y `--num-qubits` siguen siendo la entrada principal para `library`; `--circuit-path` y `--circuit-format` habilitan `qasm_file` para los escenarios Qiskit-facing.
 - **`run_from_args()`** construye un `ScenarioRequest`, despacha al escenario correcto y serializa el `ScenarioResult`.
 - **`main()`** imprime el payload en JSON y devuelve código de salida `0` cuando la ejecución tiene éxito.
 
@@ -208,9 +216,8 @@ Dos decisiones de desacoplamiento importantes:
 ### Dependencias de `qiskit_interface`
 
 - `get_backend()`, `get_coupling_edges()`, `get_basis_gates()` para resolver `BackendBundle`.
-- `circuits_from_library()` para construir la entrada visible de la v1.
-- `transpile_circuit()` para `Baseline`.
-- `transpile_with_custom_layout()` para `MO_Only`.
+- `load_circuit()` para construir la entrada visible de la v1 desde `library` o `qasm_file`.
+- `run_named_baseline()` para `Baseline` y para la evaluación Qiskit de `MO_Only`.
 
 ### Dependencias de `mo_module`
 
@@ -237,8 +244,8 @@ Consecuencia:
 ### 2. Alcance limitado a `routing`
 La v1 no orquesta todavía `synthesis`.
 
-### 3. Entrada visible limitada a librería interna de circuitos
-La CLI actual no acepta QASM. Ese soporte queda explícitamente diferido.
+### 3. Entrada QASM limitada a escenarios Qiskit-facing
+La v1 ya acepta `qasm_file` para `Baseline` y `MO_Only`. Ese soporte no se extiende todavía a `RL_Only` ni `MO+RL`, porque esos flujos siguen devolviendo `RoutingEpisodeSummary` y no un circuito final materializado.
 
 ### 4. Sin entrenamiento RL desde `integration`
 `integration` consume modelos ya entrenados, pero no invoca el pipeline de entrenamiento.
@@ -248,7 +255,7 @@ La CLI actual no acepta QASM. Ese soporte queda explícitamente diferido.
 Líneas naturales de evolución del módulo:
 
 1. Soporte de `synthesis` como nuevo conjunto de escenarios.
-2. Entrada de circuitos desde QASM.
+2. Entrada de circuitos desde QASM para escenarios RL cuando exista una representación final de circuito consistente.
 3. Reconstrucción/exportación de circuitos finales desde RL.
 4. Comparabilidad homogénea entre escenarios Qiskit y RL.
 5. Posible capa visual encima del runner y de los DTOs ya existentes.

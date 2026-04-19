@@ -67,6 +67,63 @@ from qiskit.quantum_info import (            # Operadores cuánticos
 logger = logging.getLogger(__name__)
 
 
+def _attach_circuit_metadata(circuit: QuantumCircuit, **metadata: str) -> QuantumCircuit:
+    """Adjunta metadatos de procedencia preservando los existentes."""
+    current_metadata = dict(circuit.metadata or {})
+    current_metadata.update(metadata)
+    circuit.metadata = current_metadata
+    return circuit
+
+
+def _normalize_qasm_text(source: str) -> str:
+    """Elimina BOM y espacio inicial irrelevante de una cadena QASM."""
+    return source.lstrip("\ufeff\n\r\t ")
+
+
+def _detect_qasm_file_format(circuit_path: Path) -> str:
+    """Detecta si un fichero contiene OpenQASM 2 o 3."""
+    qasm_header = _normalize_qasm_text(circuit_path.read_text(encoding="utf-8"))
+
+    if qasm_header.startswith("OPENQASM 2"):
+        return "qasm2"
+    if qasm_header.startswith("OPENQASM 3"):
+        return "qasm3"
+
+    raise ValueError(f"No se pudo detectar el formato QASM de: {circuit_path}")
+
+
+def _read_qasm_file_contents(circuit_path: Path) -> str:
+    """Lee el contenido de un fichero QASM como texto UTF-8."""
+    return circuit_path.read_text(encoding="utf-8")
+
+
+def _has_utf8_bom(source: str) -> bool:
+    """Indica si una cadena empieza con un BOM UTF-8."""
+    return source.startswith("\ufeff")
+
+
+def _create_library_circuit(
+    circuit_name: str,
+    *,
+    num_qubits: int,
+    seed: Optional[int] = None,
+) -> QuantumCircuit:
+    """Crea solo el circuito solicitado de la biblioteca interna."""
+    builders = {
+        "ghz": lambda: create_ghz_circuit(num_qubits),
+        "qft": lambda: create_qft_circuit(num_qubits),
+        "qft_inv": lambda: create_qft_circuit(num_qubits, inverse=True),
+        "random_shallow": lambda: create_random_circuit(num_qubits, depth=3, seed=seed),
+        "random_deep": lambda: create_random_circuit(num_qubits, depth=10, seed=seed),
+        "clifford": lambda: create_clifford_circuit(num_qubits, seed=seed),
+    }
+
+    if circuit_name not in builders:
+        raise ValueError(f"Unknown library circuit: {circuit_name}")
+
+    return builders[circuit_name]()
+
+
 # ===========================================================================
 #  Dataclass para métricas de circuito
 # ===========================================================================
@@ -144,6 +201,65 @@ class CircuitMetrics:
 #  Funciones de carga / exportación de circuitos
 # ===========================================================================
 
+def load_circuit(
+    source_kind: str,
+    *,
+    circuit_name: Optional[str] = None,
+    num_qubits: Optional[int] = None,
+    circuit_path: Optional[Union[str, Path]] = None,
+    circuit_format: str = "auto",
+    seed: Optional[int] = None,
+) -> QuantumCircuit:
+    """Carga un circuito desde la biblioteca interna o desde un fichero QASM."""
+    if source_kind == "library":
+        if circuit_name is None:
+            raise ValueError("circuit_name is required when source_kind='library'")
+        if num_qubits is None:
+            raise ValueError("num_qubits is required when source_kind='library'")
+
+        library_circuit_name = circuit_name.lower()
+        circuit = _create_library_circuit(
+            library_circuit_name,
+            num_qubits=num_qubits,
+            seed=seed,
+        )
+
+        return _attach_circuit_metadata(
+            circuit,
+            source_kind="library",
+            source_format="library",
+            resolved_circuit_name=library_circuit_name,
+        )
+
+    if source_kind == "qasm_file":
+        if circuit_path is None:
+            raise ValueError("circuit_path is required when source_kind='qasm_file'")
+
+        resolved_path = Path(circuit_path)
+        if not resolved_path.is_file():
+            raise FileNotFoundError(f"No se encontró el fichero QASM: {resolved_path}")
+
+        resolved_format = circuit_format.lower()
+        if resolved_format == "auto":
+            resolved_format = _detect_qasm_file_format(resolved_path)
+        elif resolved_format not in {"qasm2", "qasm3"}:
+            raise ValueError("circuit_format must be 'auto', 'qasm2', or 'qasm3'")
+
+        if resolved_format == "qasm2":
+            circuit = load_circuit_from_qasm2(resolved_path)
+        else:
+            circuit = load_circuit_from_qasm3(resolved_path)
+
+        return _attach_circuit_metadata(
+            circuit,
+            source_kind="qasm_file",
+            source_format=resolved_format,
+            source_path=str(resolved_path),
+            resolved_circuit_name=resolved_path.stem,
+        )
+
+    raise ValueError("source_kind must be 'library' or 'qasm_file'")
+
 def load_circuit_from_qasm2(source: Union[str, Path]) -> QuantumCircuit:
     """Carga un circuito desde una cadena o fichero en formato OpenQASM 2.0.
 
@@ -165,17 +281,25 @@ def load_circuit_from_qasm2(source: Union[str, Path]) -> QuantumCircuit:
     path = Path(source) if not isinstance(source, Path) else source
 
     # ¿Es un fichero que existe en disco?
-    if path.suffix == ".qasm" and path.is_file():
+    if path.is_file():
         logger.info("Cargando circuito QASM2 desde fichero: %s", path)
+
+        qasm_source = _read_qasm_file_contents(path)
+        if _has_utf8_bom(qasm_source):
+            return qasm2.loads(
+                _normalize_qasm_text(qasm_source),
+                include_path=(str(path.parent),),
+            )
+
         return qasm2.load(str(path))
 
     # En caso contrario se asume que es una cadena QASM literal
-    if isinstance(source, str) and source.strip().startswith("OPENQASM"):
+    if isinstance(source, str) and _normalize_qasm_text(source).startswith("OPENQASM"):
         logger.info("Cargando circuito QASM2 desde cadena (longitud=%d)", len(source))
-        return qasm2.loads(source)
+        return qasm2.loads(_normalize_qasm_text(source))
 
-    # Si es un path que no existe, informar al usuario
-    if path.suffix == ".qasm":
+    # Si es un path que parece ruta pero no existe, informar al usuario
+    if isinstance(source, Path) or path.suffix:
         raise FileNotFoundError(f"No se encontró el fichero QASM: {path}")
 
     # Último intento: interpretar como cadena QASM
@@ -197,12 +321,19 @@ def load_circuit_from_qasm3(source: Union[str, Path]) -> QuantumCircuit:
     """
     path = Path(source) if not isinstance(source, Path) else source
 
-    if path.suffix == ".qasm" and path.is_file():
+    if path.is_file():
         logger.info("Cargando circuito QASM3 desde fichero: %s", path)
         return qasm3.load(str(path))
 
+    if isinstance(source, str) and _normalize_qasm_text(source).startswith("OPENQASM"):
+        logger.info("Cargando circuito QASM3 desde cadena")
+        return qasm3.loads(_normalize_qasm_text(source))
+
+    if isinstance(source, Path) or path.suffix:
+        raise FileNotFoundError(f"No se encontró el fichero QASM: {path}")
+
     logger.info("Cargando circuito QASM3 desde cadena")
-    return qasm3.loads(str(source))
+    return qasm3.loads(_normalize_qasm_text(str(source)))
 
 
 def export_circuit_to_qasm2(circuit: QuantumCircuit) -> str:

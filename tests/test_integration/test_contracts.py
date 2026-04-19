@@ -7,6 +7,7 @@ from src.integration import (
     ScenarioRequest,
     ScenarioResult,
 )
+from src.integration.contracts import CircuitFormat, CircuitSource
 
 
 def test_scenario_request_defaults_for_routing_v1() -> None:
@@ -24,18 +25,24 @@ def test_scenario_request_defaults_for_routing_v1() -> None:
     assert request.initial_layout is None
     assert request.rl_model_path is None
     assert request.mo_objective_index == 0
+    assert request.circuit_source is CircuitSource.LIBRARY
+    assert request.circuit_path is None
+    assert request.circuit_format is CircuitFormat.AUTO
     assert fields(ScenarioRequest)[0].type is str
     assert [field.name for field in fields(ScenarioRequest)] == [
         "scenario_name",
+        "backend_name",
         "circuit_name",
         "num_qubits",
-        "backend_name",
         "seed",
         "layout_policy",
         "mo_use_quick",
         "initial_layout",
         "rl_model_path",
         "mo_objective_index",
+        "circuit_source",
+        "circuit_path",
+        "circuit_format",
     ]
 
 
@@ -259,6 +266,121 @@ def test_mo_rl_request_rejects_caller_supplied_initial_layout() -> None:
         raise AssertionError("Expected ValueError for MO+RL initial_layout")
 
 
+def test_qasm_request_requires_circuit_path() -> None:
+    try:
+        ScenarioRequest(
+            scenario_name="Baseline",
+            backend_name="fake_torino",
+            circuit_source=CircuitSource.QASM_FILE,
+        )
+    except ValueError as exc:
+        assert "circuit_path" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when qasm_file has no circuit_path")
+
+
+def test_qasm_request_does_not_require_library_only_fields() -> None:
+    request = ScenarioRequest(
+        scenario_name="Baseline",
+        backend_name="fake_torino",
+        circuit_source=CircuitSource.QASM_FILE,
+        circuit_path="circuits/bell.qasm",
+        circuit_format=CircuitFormat.QASM2,
+    )
+
+    assert request.circuit_name is None
+    assert request.num_qubits is None
+    assert request.circuit_source is CircuitSource.QASM_FILE
+    assert request.circuit_path == "circuits/bell.qasm"
+    assert request.circuit_format is CircuitFormat.QASM2
+
+
+def test_rl_scenarios_reject_qasm_requests() -> None:
+    for scenario_name in ("RL_Only", "MO+RL"):
+        try:
+            ScenarioRequest(
+                scenario_name=scenario_name,
+                backend_name="fake_torino",
+                rl_model_path="models/policy.zip",
+                circuit_source=CircuitSource.QASM_FILE,
+                circuit_path="circuits/bell.qasm",
+            )
+        except ValueError as exc:
+            assert scenario_name in str(exc)
+            assert "qasm_file" in str(exc)
+        else:
+            raise AssertionError(f"Expected ValueError when {scenario_name} receives qasm_file")
+
+
+def test_scenario_request_accepts_string_enums_for_qasm_inputs() -> None:
+    request = ScenarioRequest(
+        scenario_name="Baseline",
+        backend_name="fake_torino",
+        circuit_source="qasm_file",
+        circuit_path="circuits/bell.qasm",
+        circuit_format="qasm3",
+    )
+
+    assert request.circuit_source is CircuitSource.QASM_FILE
+    assert request.circuit_format is CircuitFormat.QASM3
+
+
+def test_qasm_request_rejects_library_only_fields() -> None:
+    for kwargs, expected_field in (
+        ({"circuit_name": "bell"}, "circuit_name"),
+        ({"num_qubits": 2}, "num_qubits"),
+    ):
+        try:
+            ScenarioRequest(
+                scenario_name="Baseline",
+                backend_name="fake_torino",
+                circuit_source=CircuitSource.QASM_FILE,
+                circuit_path="circuits/bell.qasm",
+                **kwargs,
+            )
+        except ValueError as exc:
+            assert expected_field in str(exc)
+            assert "qasm_file" in str(exc)
+        else:
+            raise AssertionError(f"Expected ValueError for qasm kwargs: {kwargs}")
+
+
+def test_library_request_requires_circuit_name_and_num_qubits() -> None:
+    for kwargs, expected_field in (
+        ({"num_qubits": 2}, "circuit_name"),
+        ({"circuit_name": "bell"}, "num_qubits"),
+    ):
+        try:
+            ScenarioRequest(
+                scenario_name="Baseline",
+                backend_name="fake_torino",
+                **kwargs,
+            )
+        except ValueError as exc:
+            assert expected_field in str(exc)
+        else:
+            raise AssertionError(f"Expected ValueError for missing {expected_field}")
+
+
+def test_library_request_rejects_qasm_specific_inputs() -> None:
+    for kwargs in (
+        {"circuit_path": "circuits/bell.qasm"},
+        {"circuit_format": CircuitFormat.QASM2},
+    ):
+        try:
+            ScenarioRequest(
+                scenario_name="Baseline",
+                circuit_name="bell",
+                num_qubits=2,
+                backend_name="fake_torino",
+                **kwargs,
+            )
+        except ValueError as exc:
+            assert "library" in str(exc)
+        else:
+            raise AssertionError(f"Expected ValueError for library kwargs: {kwargs}")
+
+
 def test_routing_episode_summary_captures_episode_level_outputs() -> None:
     summary = RoutingEpisodeSummary(
         initial_layout=[0, 2, 1],
@@ -392,10 +514,18 @@ def test_scenario_result_keeps_transpilation_and_routing_results_separate() -> N
         success=True,
         selected_layout=[1, 0],
         transpilation_metrics={"backend_name": "fake_backend", "trans_depth": 12},
+        transpilation_artifact={
+            "artifact_version": "transpilation_result.v1",
+            "transpilation": {"baseline_name": "qiskit_level_1"},
+        },
         routing_summary=routing_summary,
     )
 
     assert result.transpilation_metrics == {"backend_name": "fake_backend", "trans_depth": 12}
+    assert result.transpilation_artifact == {
+        "artifact_version": "transpilation_result.v1",
+        "transpilation": {"baseline_name": "qiskit_level_1"},
+    }
     assert result.routing_summary is routing_summary
     assert result.errors == []
     assert result.notes == []

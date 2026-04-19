@@ -70,7 +70,6 @@ from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 # ---------------------------------------------------------------------------
 from .circuit_utils import CircuitMetrics, extract_metrics
 from .backend_info import (
-    BackendInfo,
     extract_backend_info,
     get_backend,
 )
@@ -96,6 +95,14 @@ OPTIMIZATION_LEVELS: dict[int, str] = {
 
 # Seed por defecto para reproducibilidad.
 DEFAULT_SEED = 42
+
+NAMED_BASELINES: dict[str, dict[str, object]] = {
+    "qiskit_level_0": {"kind": "standard", "optimization_level": 0},
+    "qiskit_level_1": {"kind": "standard", "optimization_level": 1},
+    "qiskit_level_2": {"kind": "standard", "optimization_level": 2},
+    "qiskit_level_3": {"kind": "standard", "optimization_level": 3},
+    "custom_layout_level_1": {"kind": "custom_layout", "optimization_level": 1},
+}
 
 
 # ===========================================================================
@@ -142,6 +149,9 @@ class TranspilationResult:
     final_layout: Optional[list[int]] = None
     elapsed_time_s: float = 0.0
     seed: int = DEFAULT_SEED
+    baseline_name: Optional[str] = None
+    hardware_summary: Optional[dict[str, object]] = None
+    _backend: object = field(default=None, repr=False, compare=False)
 
     # ----- Propiedades derivadas -----
 
@@ -223,6 +233,8 @@ class TranspilationResult:
             "depth_reduction": self.depth_reduction,
             "two_qubit_gate_overhead": self.two_qubit_gate_overhead,
         }
+        if self.baseline_name is not None:
+            result["baseline_name"] = self.baseline_name
         if self.original_metrics:
             for key, val in self.original_metrics.to_dict().items():
                 result[f"orig_{key}"] = val
@@ -232,6 +244,44 @@ class TranspilationResult:
         if self.initial_layout is not None:
             result["initial_layout"] = self.initial_layout
         return result
+
+    def to_artifact_dict(self) -> dict[str, object]:
+        """Convierte el resultado a un artefacto estructurado y versionado."""
+        circuit_metadata = dict(self.original_circuit.metadata or {}) if self.original_circuit else {}
+        hardware_summary = self.hardware_summary
+        if hardware_summary is None and self._backend is not None:
+            try:
+                hardware_summary = extract_backend_info(self._backend).to_summary_dict()
+            except Exception as exc:
+                logger.debug("No se pudo extraer el resumen hardware para el artefacto: %s", exc)
+                hardware_summary = None
+
+        artifact = {
+            "artifact_version": "transpilation_result.v1",
+            "baseline_name": self.baseline_name,
+            "circuit": {
+                "name": self.original_circuit.name if self.original_circuit else None,
+                "num_qubits": self.original_circuit.num_qubits if self.original_circuit else None,
+                "source_kind": circuit_metadata.get("source_kind"),
+                "source_format": circuit_metadata.get("source_format"),
+                "source_path": circuit_metadata.get("source_path"),
+                "resolved_circuit_name": circuit_metadata.get("resolved_circuit_name"),
+            },
+            "backend": dict(hardware_summary or {"backend_name": self.backend_name}),
+            "transpilation": {
+                "optimization_level": self.optimization_level,
+                "seed": self.seed,
+                "elapsed_time_s": self.elapsed_time_s,
+                "baseline_name": self.baseline_name,
+                "initial_layout": self.initial_layout,
+                "final_layout": self.final_layout,
+            },
+            "metrics": {
+                "original": self.original_metrics.to_dict() if self.original_metrics else None,
+                "transpiled": self.transpiled_metrics.to_dict() if self.transpiled_metrics else None,
+            },
+        }
+        return artifact
 
 
 # ===========================================================================
@@ -357,6 +407,7 @@ def transpile_circuit(
         final_layout=final_layout,
         elapsed_time_s=elapsed,
         seed=seed,
+        _backend=backend,
     )
 
     logger.info(
@@ -667,3 +718,61 @@ def run_baseline(
     )
 
     return all_rows
+
+
+def list_available_baselines() -> list[str]:
+    """Devuelve el catálogo de baselines nombrados soportados."""
+    return list(NAMED_BASELINES)
+
+
+def run_named_baseline(
+    baseline_name: str,
+    circuit: QuantumCircuit,
+    backend_names: Optional[list[str]] = None,
+    layout: Optional[list[int]] = None,
+    seed: int = DEFAULT_SEED,
+    include_artifact: bool = False,
+) -> list[dict]:
+    """Ejecuta un baseline nombrado sobre uno o varios backends."""
+    if baseline_name not in NAMED_BASELINES:
+        available = ", ".join(NAMED_BASELINES)
+        raise ValueError(
+            f"Baseline '{baseline_name}' no reconocido. Baselines disponibles: {available}"
+        )
+
+    if backend_names is None:
+        backend_names = ["fake_torino", "fake_sherbrooke", "fake_brisbane"]
+
+    baseline_config = NAMED_BASELINES[baseline_name]
+    optimization_level = int(baseline_config["optimization_level"])
+    rows: list[dict] = []
+
+    for backend_name in backend_names:
+        backend = get_backend(backend_name)
+        if baseline_config["kind"] == "custom_layout":
+            if layout is None:
+                raise ValueError(f"Baseline '{baseline_name}' requires a layout")
+            result = transpile_with_custom_layout(
+                circuit=circuit,
+                layout=layout,
+                backend=backend,
+                optimization_level=optimization_level,
+                seed=seed,
+            )
+        else:
+            result = transpile_circuit(
+                circuit=circuit,
+                backend=backend,
+                optimization_level=optimization_level,
+                seed=seed,
+            )
+        result.baseline_name = baseline_name
+
+        row = {"circuit_name": circuit.name or "unnamed"}
+        row.update(result.to_dict())
+        if include_artifact:
+            rows.append((row, result.to_artifact_dict()))
+        else:
+            rows.append(row)
+
+    return rows

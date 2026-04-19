@@ -11,15 +11,123 @@ _DEFAULT_RL_MAX_STEPS = 256
 _DEFAULT_RL_LOOKAHEAD_WINDOW = 4
 
 
+def _normalize_library_request_name(circuit_name: str | None) -> str | None:
+    if circuit_name is None:
+        return None
+    normalized_name, _, maybe_qubits = circuit_name.rpartition("_")
+    if normalized_name and maybe_qubits.isdigit():
+        return normalized_name
+    return circuit_name
+
+
+def _get_result_circuit_name(request: ScenarioRequest, circuit) -> str:
+    if request.circuit_name is not None:
+        return request.circuit_name
+    metadata = getattr(circuit, "metadata", None) or {}
+    resolved_circuit_name = metadata.get("resolved_circuit_name")
+    if isinstance(resolved_circuit_name, str) and resolved_circuit_name:
+        return resolved_circuit_name
+    circuit_name = getattr(circuit, "name", None)
+    if isinstance(circuit_name, str) and circuit_name:
+        return circuit_name
+    if request.circuit_path is not None:
+        return request.circuit_path
+    raise ValueError("Unable to resolve circuit name for scenario result")
+
+
+def _get_request_num_qubits(request: ScenarioRequest, circuit) -> int:
+    if request.num_qubits is not None:
+        return request.num_qubits
+    return int(circuit.num_qubits)
+
+
+def _build_metric_summary(row: dict, prefix: str) -> dict[str, int | float]:
+    summary: dict[str, int | float] = {}
+    for key, value in row.items():
+        if key.startswith(prefix):
+            summary[key.removeprefix(prefix)] = value
+    return summary
+
+
+def _validate_named_baseline_result(
+    row: dict,
+    artifact: dict[str, object] | None,
+    *,
+    expected_baseline_name: str,
+    expected_initial_layout: list[int] | None,
+) -> None:
+    row_baseline_name = row.get("baseline_name")
+    if row_baseline_name != expected_baseline_name:
+        raise ValueError("baseline_name in named baseline row does not match expected baseline")
+
+    row_initial_layout = row.get("initial_layout")
+    if row_initial_layout != expected_initial_layout:
+        raise ValueError("initial_layout in named baseline row does not match expected initial_layout")
+
+    if artifact is None:
+        raise ValueError("named baseline result did not include transpilation artifact")
+
+    artifact_baseline_name = artifact.get("baseline_name")
+    if artifact_baseline_name != expected_baseline_name:
+        raise ValueError("baseline_name in named baseline artifact does not match expected baseline")
+
+    transpilation = artifact.get("transpilation")
+    if not isinstance(transpilation, dict):
+        raise ValueError("named baseline artifact must include transpilation details")
+
+    artifact_initial_layout = transpilation.get("initial_layout")
+    if artifact_initial_layout != expected_initial_layout:
+        raise ValueError(
+            "initial_layout in named baseline artifact does not match expected initial_layout"
+        )
+
+
+def _run_named_baseline_with_artifact(
+    request: ScenarioRequest,
+    circuit,
+    baseline_name: str,
+    *,
+    layout: list[int] | None = None,
+):
+    transpilation_rows = qiskit_interface.run_named_baseline(
+        baseline_name,
+        circuit=circuit,
+        layout=layout,
+        backend_names=[request.backend_name],
+        seed=request.seed,
+        include_artifact=True,
+    )
+    row, artifact = transpilation_rows[0]
+    row = dict(row)
+    artifact = dict(artifact)
+    _validate_named_baseline_result(
+        row,
+        artifact,
+        expected_baseline_name=baseline_name,
+        expected_initial_layout=layout,
+    )
+    return row, artifact
+
+
+def _validate_request_initial_layout(request: ScenarioRequest, circuit) -> None:
+    if request.initial_layout is None:
+        return
+    if len(request.initial_layout) != circuit.num_qubits:
+        raise ValueError("initial_layout length must match num_qubits")
+
+
 def _load_circuit(request: ScenarioRequest):
-    circuits = qiskit_interface.circuits_from_library(
+    circuit_name = request.circuit_name
+    if request.circuit_source.value == "library":
+        circuit_name = _normalize_library_request_name(circuit_name)
+    return qiskit_interface.load_circuit(
+        request.circuit_source.value,
+        circuit_name=circuit_name,
         num_qubits=request.num_qubits,
+        circuit_path=request.circuit_path,
+        circuit_format=request.circuit_format.value,
         seed=request.seed,
     )
-    try:
-        return circuits[request.circuit_name]
-    except KeyError as exc:
-        raise ValueError(f"Unknown circuit name: {request.circuit_name}") from exc
 
 
 def _load_agent(request: ScenarioRequest):
@@ -67,21 +175,20 @@ def _run_mo(request: ScenarioRequest, circuit, backend_bundle):
 def run_baseline_scenario(request: ScenarioRequest) -> ScenarioResult:
     _require_scenario(request, "Baseline")
     circuit = _load_circuit(request)
-    backend_bundle = resolve_backend_bundle(request.backend_name)
-    transpilation = qiskit_interface.transpile_circuit(
-        circuit=circuit,
-        backend=backend_bundle.backend,
-        backend_name=backend_bundle.backend_name,
-        seed=request.seed,
+    transpilation_metrics, transpilation_artifact = _run_named_baseline_with_artifact(
+        request,
+        circuit,
+        "qiskit_level_1",
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
-        circuit_name=request.circuit_name,
+        circuit_name=_get_result_circuit_name(request, circuit),
         backend_name=request.backend_name,
         seed=request.seed,
         success=True,
         selected_layout=None,
-        transpilation_metrics=transpilation.to_dict(),
+        transpilation_metrics=transpilation_metrics,
+        transpilation_artifact=transpilation_artifact,
         routing_summary=None,
     )
 
@@ -97,24 +204,24 @@ def run_mo_only_scenario(request: ScenarioRequest) -> ScenarioResult:
             policy=request.layout_policy,
             objective_index=request.mo_objective_index,
         ),
-        request.num_qubits,
+        _get_request_num_qubits(request, circuit),
         backend_bundle.backend,
     )
-    transpilation = qiskit_interface.transpile_with_custom_layout(
-        circuit=circuit,
+    transpilation_metrics, transpilation_artifact = _run_named_baseline_with_artifact(
+        request,
+        circuit,
+        "custom_layout_level_1",
         layout=selected_layout,
-        backend=backend_bundle.backend,
-        backend_name=backend_bundle.backend_name,
-        seed=request.seed,
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
-        circuit_name=request.circuit_name,
+        circuit_name=_get_result_circuit_name(request, circuit),
         backend_name=request.backend_name,
         seed=request.seed,
         success=True,
         selected_layout=selected_layout,
-        transpilation_metrics=transpilation.to_dict(),
+        transpilation_metrics=transpilation_metrics,
+        transpilation_artifact=transpilation_artifact,
         routing_summary=None,
     )
 
@@ -122,6 +229,7 @@ def run_mo_only_scenario(request: ScenarioRequest) -> ScenarioResult:
 def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     _require_scenario(request, "RL_Only")
     circuit = _load_circuit(request)
+    _validate_request_initial_layout(request, circuit)
     backend_bundle = resolve_backend_bundle(request.backend_name)
     agent = _load_agent(request)
     routing_summary = evaluate_routing_episode(
@@ -135,12 +243,13 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
-        circuit_name=request.circuit_name,
+        circuit_name=_get_result_circuit_name(request, circuit),
         backend_name=request.backend_name,
         seed=request.seed,
         success=True,
         selected_layout=None,
         transpilation_metrics=None,
+        transpilation_artifact=None,
         routing_summary=routing_summary,
         notes=[_RL_NOTE],
     )
@@ -157,7 +266,7 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
             policy=request.layout_policy,
             objective_index=request.mo_objective_index,
         ),
-        request.num_qubits,
+        _get_request_num_qubits(request, circuit),
         backend_bundle.backend,
     )
     agent = _load_agent(request)
@@ -172,12 +281,13 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
-        circuit_name=request.circuit_name,
+        circuit_name=_get_result_circuit_name(request, circuit),
         backend_name=request.backend_name,
         seed=request.seed,
         success=True,
         selected_layout=selected_layout,
         transpilation_metrics=None,
+        transpilation_artifact=None,
         routing_summary=routing_summary,
         notes=[_RL_NOTE],
     )

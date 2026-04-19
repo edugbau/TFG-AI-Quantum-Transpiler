@@ -52,6 +52,7 @@ Uso típico::
 # --- circuit_utils ---
 from .circuit_utils import (
     CircuitMetrics,
+    load_circuit,
     load_circuit_from_qasm2,
     load_circuit_from_qasm3,
     export_circuit_to_qasm2,
@@ -100,6 +101,8 @@ from .transpiler import (
     print_transpilation_comparison,
     transpile_with_custom_layout,
     run_baseline,
+    list_available_baselines,
+    run_named_baseline,
 )
 
 # ===================================================================
@@ -108,6 +111,7 @@ from .transpiler import (
 __all__ = [
     # circuit_utils
     "CircuitMetrics",
+    "load_circuit",
     "load_circuit_from_qasm2",
     "load_circuit_from_qasm3",
     "export_circuit_to_qasm2",
@@ -150,4 +154,6 @@ __all__ = [
     "print_transpilation_comparison",
     "transpile_with_custom_layout",
     "run_baseline",
+    "list_available_baselines",
+    "run_named_baseline",
 ]

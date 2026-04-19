@@ -1,6 +1,6 @@
 from dataclasses import asdict
 
-from src.integration.contracts import RoutingEpisodeSummary, ScenarioResult
+from src.integration.contracts import CircuitFormat, CircuitSource, RoutingEpisodeSummary, ScenarioResult
 
 
 def _make_result(scenario_name: str, *, with_routing_summary: bool = False) -> ScenarioResult:
@@ -12,6 +12,12 @@ def _make_result(scenario_name: str, *, with_routing_summary: bool = False) -> S
         success=True,
         selected_layout=[0, 1, 2] if scenario_name == "MO+RL" else None,
         transpilation_metrics={"trans_depth": 7} if scenario_name == "Baseline" else None,
+        transpilation_artifact={
+            "artifact_version": "transpilation_result.v1",
+            "transpilation": {"baseline_name": "qiskit_level_1"},
+        }
+        if scenario_name in {"Baseline", "MO_Only"}
+        else None,
         routing_summary=(
             RoutingEpisodeSummary(
                 initial_layout=[0, 1, 2],
@@ -54,6 +60,36 @@ def test_build_parser_accepts_supported_scenarios_and_required_args() -> None:
     assert args.backend == "fake_backend"
     assert args.seed is None
     assert args.rl_model_path is None
+    assert args.circuit_source == "library"
+    assert args.circuit_path is None
+    assert args.circuit_format == "auto"
+
+
+def test_build_parser_accepts_qasm_inputs_without_library_flags() -> None:
+    from src.integration.runner import build_parser
+
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "--scenario",
+            "Baseline",
+            "--backend",
+            "fake_backend",
+            "--circuit-source",
+            "qasm_file",
+            "--circuit-path",
+            "circuits/bell.qasm",
+        ]
+    )
+
+    assert args.scenario == "Baseline"
+    assert args.circuit is None
+    assert args.num_qubits is None
+    assert args.backend == "fake_backend"
+    assert args.circuit_source == "qasm_file"
+    assert args.circuit_path == "circuits/bell.qasm"
+    assert args.circuit_format == "auto"
 
 
 def test_run_from_args_dispatches_baseline_and_returns_serializable_dict(monkeypatch) -> None:
@@ -90,6 +126,9 @@ def test_run_from_args_dispatches_baseline_and_returns_serializable_dict(monkeyp
     assert calls[0].num_qubits == 3
     assert calls[0].backend_name == "fake_backend"
     assert calls[0].seed == 17
+    assert calls[0].circuit_source is CircuitSource.LIBRARY
+    assert calls[0].circuit_path is None
+    assert calls[0].circuit_format is CircuitFormat.AUTO
 
 
 def test_run_from_args_dispatches_mo_rl_with_rl_model_path(monkeypatch) -> None:
@@ -125,6 +164,73 @@ def test_run_from_args_dispatches_mo_rl_with_rl_model_path(monkeypatch) -> None:
     assert len(calls) == 1
     assert calls[0].scenario_name == "MO+RL"
     assert calls[0].rl_model_path == "models/policy.zip"
+
+
+def test_run_from_args_dispatches_qasm_inputs(monkeypatch) -> None:
+    from src.integration import runner
+
+    calls = []
+    expected = _make_result("Baseline")
+
+    monkeypatch.setattr(
+        runner,
+        "run_baseline_scenario",
+        lambda request: calls.append(request) or expected,
+    )
+
+    payload = runner.run_from_args(
+        [
+            "--scenario",
+            "Baseline",
+            "--backend",
+            "fake_backend",
+            "--circuit-source",
+            "qasm_file",
+            "--circuit-path",
+            "circuits/bell.qasm",
+            "--circuit-format",
+            "qasm2",
+        ]
+    )
+
+    assert payload == asdict(expected)
+    assert len(calls) == 1
+    assert calls[0].circuit_name is None
+    assert calls[0].num_qubits is None
+    assert calls[0].circuit_source is CircuitSource.QASM_FILE
+    assert calls[0].circuit_path == "circuits/bell.qasm"
+    assert calls[0].circuit_format is CircuitFormat.QASM2
+
+
+def test_run_from_args_rejects_qasm_inputs_with_library_flags(monkeypatch) -> None:
+    from src.integration import runner
+
+    monkeypatch.setattr(
+        runner,
+        "run_baseline_scenario",
+        lambda request: _make_result("Baseline"),
+    )
+
+    try:
+        runner.run_from_args(
+            [
+                "--scenario",
+                "Baseline",
+                "--backend",
+                "fake_backend",
+                "--circuit-source",
+                "qasm_file",
+                "--circuit-path",
+                "circuits/bell.qasm",
+                "--circuit",
+                "bell",
+            ]
+        )
+    except ValueError as exc:
+        assert "circuit_name" in str(exc)
+        assert "qasm_file" in str(exc)
+    else:
+        raise AssertionError("expected ValueError when qasm_file mixes library flags")
 
 
 def test_run_from_args_rejects_rl_only_without_rl_model_path(monkeypatch) -> None:

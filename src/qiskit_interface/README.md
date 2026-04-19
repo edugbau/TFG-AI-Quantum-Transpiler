@@ -37,7 +37,9 @@ Extrae características cuantitativas del circuito.
     - `nonlocal_gates`: Puertas que generan entrelazamiento.
 
 #### IO QASM
+- **`load_circuit(source_kind, *, circuit_name=None, num_qubits=None, seed=42, circuit_path=None, circuit_format="auto")`**: cargador normalizado para `library` y `qasm_file`; soporta `qasm2`, `qasm3` y `auto`, y adjunta metadata de procedencia al circuito.
 - **`load_circuit_from_qasm2(source)`**: Carga desde archivo o string QASM 2.0.
+- **`load_circuit_from_qasm3(source)`**: Carga desde archivo o string QASM 3.0.
 - **`export_circuit_to_qasm2(circuit)`**: Exporta a texto QASM 2.0.
 
 ---
@@ -51,6 +53,7 @@ Abstracción para consultar propiedades de dispositivos simulados (Fake Backends
 #### `get_backend(name: str) -> Backend`
 Obtiene una instancia de backend simulado.
 - **Backends soportados**: `"fake_torino"` (133q, CZ), `"fake_sherbrooke"` (127q, ECR), `"fake_brisbane"` (127q, ECR).
+- **Alcance intencional**: el catálogo se limita deliberadamente a estos fake backends para mantener la evaluación reproducible, sin credenciales y alineada con los escenarios actuales de `src/integration/`.
 
 #### `extract_backend_info(backend) -> BackendInfo`
 Recopila toda la información relevante para la optimización en una sola estructura.
@@ -81,9 +84,22 @@ Transpila un circuito individual con control total de parámetros.
     - `seed`: Semilla para reproducibilidad.
 - **Salida**: `TranspilationResult` con métricas pre/post transpilación, tiempos y reducción de profundidad.
 
+`TranspilationResult` mantiene la salida plana `to_dict()` y añade `to_artifact_dict()` para exponer un artefacto estructurado con metadata del circuito, resumen hardware-aware y datos de transpilación serializables.
+
 #### `run_baseline(circuit, ...)`
 Ejecuta transpilaciones masivas en varios backends y niveles de optimización.
 - **Uso**: Generar datos tabulados para comparar con el enfoque híbrido.
+
+#### Baselines explícitos
+El catálogo público de baselines queda acotado a:
+
+- `qiskit_level_0`
+- `qiskit_level_1`
+- `qiskit_level_2`
+- `qiskit_level_3`
+- `custom_layout_level_1`
+
+`list_available_baselines()` devuelve esos nombres y `run_named_baseline(...)` ejecuta el baseline seleccionado etiquetando el resultado con `baseline_name`.
 
 #### `transpile_with_custom_layout(circuit, layout, ...)`
 helper de evaluación local para layouts suministrados externamente. Reutiliza el mismo contrato de `initial_layout` y el mismo pipeline de transpilación bajo las restricciones del backend.
@@ -99,8 +115,12 @@ Este módulo cumple estrictamente con la API moderna de Qiskit:
 - **Detección de Puertas**: No asume que la puerta de dos qubits se llama "cx". Inspecciona el backend para encontrar "cz", "ecr", etc.
 
 ### Política de Excepciones
-- **QASM**: `load_circuit_from_qasm2` distingue inteligentemente entre rutas de archivo y contenido de texto.
+- **QASM**: `load_circuit` autodetecta `qasm2`/`qasm3` cuando `circuit_format="auto"`, y los loaders específicos distinguen entre rutas de archivo y contenido de texto.
 - **Validación**: Las funciones de creación lanzan `ValueError` si los parámetros (como qubits < 2) son inválidos.
+
+### Relación con `src/integration/`
+- Los escenarios Qiskit-facing de `src/integration/` (`Baseline` y `MO_Only`) pueden cargar circuitos desde `qasm_file` usando estas utilidades.
+- Los escenarios basados en RL siguen devolviendo resúmenes de episodio y no circuitos finales, por lo que la entrada QASM no se expone allí todavía.
 
 ## Guía de Uso Rápida
 

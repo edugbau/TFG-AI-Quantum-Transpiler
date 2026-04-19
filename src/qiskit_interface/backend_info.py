@@ -138,6 +138,25 @@ class BackendInfo:
     gate_errors_2q: dict[tuple[int, int], float] = field(default_factory=dict)
     dt: Optional[float] = None
 
+    def to_summary_dict(self) -> dict[str, object]:
+        """Devuelve un resumen serializable del backend para artefactos."""
+        errors_2q = list(self.gate_errors_2q.values())
+        t1_vals = list(self.qubit_t1.values())
+        t2_vals = list(self.qubit_t2.values())
+
+        return {
+            "backend_name": self.name,
+            "num_qubits": self.num_qubits,
+            "two_qubit_gate": self.two_qubit_gate,
+            "basis_gates": list(self.basis_gates),
+            "coupling_edges_count": len(self.coupling_edges),
+            "min_error_2q": min(errors_2q) if errors_2q else 0.0,
+            "avg_error_2q": sum(errors_2q) / len(errors_2q) if errors_2q else 0.0,
+            "max_error_2q": max(errors_2q) if errors_2q else 0.0,
+            "avg_t1": sum(t1_vals) / len(t1_vals) if t1_vals else 0.0,
+            "avg_t2": sum(t2_vals) / len(t2_vals) if t2_vals else 0.0,
+        }
+
     def summary(self) -> str:
         """Devuelve un resumen legible de la información del backend."""
         # Estadísticas de errores de puertas 2Q
