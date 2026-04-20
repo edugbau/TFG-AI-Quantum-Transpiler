@@ -1069,6 +1069,27 @@ class TestReportingUtilities:
         assert "7" in captured.out
         assert "Err 2Q" in captured.out
 
+    def test_print_layout_comparison_renders_none_metrics_as_dash(self, capsys):
+        """Las métricas None se muestran como '-' en vez de 'None'."""
+        rows = [
+            {
+                "layout_name": "layout_none",
+                "depth": None,
+                "two_qubit_gates": None,
+                "cnot_equivalent": None,
+                "total_gates": None,
+                "avg_error_2q": None,
+                "num_edges": None,
+            }
+        ]
+
+        print_layout_comparison(rows)
+        captured = capsys.readouterr()
+
+        assert "layout_none" in captured.out
+        assert "None" not in captured.out
+        assert "-" in captured.out
+
 
 class TestParetoPlots:
     """Tests smoke/contract de visualización pública."""

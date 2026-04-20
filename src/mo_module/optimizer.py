@@ -874,15 +874,22 @@ def print_layout_comparison(rows: list[dict]) -> None:
     )
     print(f"  {'-' * 88}")
 
+    def display(value, *, float_precision: Optional[int] = None):
+        if value is None:
+            return "-"
+        if float_precision is not None:
+            return f"{value:.{float_precision}f}"
+        return str(value)
+
     for row in rows:
         print(
             f"  {row['layout_name']:<20} "
-            f"{row.get('depth', '-'):>8} "
-            f"{row.get('two_qubit_gates', '-'):>10} "
-            f"{row.get('cnot_equivalent', '-'):>10} "
-            f"{row.get('total_gates', '-'):>8} "
-            f"{row.get('avg_error_2q', 0):>12.6f} "
-            f"{row.get('num_edges', 0):>8}"
+            f"{display(row.get('depth')):>8} "
+            f"{display(row.get('two_qubit_gates')):>10} "
+            f"{display(row.get('cnot_equivalent')):>10} "
+            f"{display(row.get('total_gates')):>8} "
+            f"{display(row.get('avg_error_2q'), float_precision=6):>12} "
+            f"{display(row.get('num_edges')):>8}"
         )
 
     print(f"{'=' * 108}\n")
