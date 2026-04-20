@@ -1115,6 +1115,40 @@ class TestParetoPlots:
         # Assert
         assert fig is None
 
+    def test_plot_pareto_front_2d_highlights_actual_compromise_row_with_duplicates(self):
+        """El resaltado de compromiso usa la fila ganadora aunque el layout se repita."""
+        result = OptimizationResult(
+            pareto_layouts=[[7, 8], [9, 10], [7, 8]],
+            pareto_fitness=np.array([
+                [1.0, 9.0],
+                [9.0, 1.0],
+                [5.0, 5.0],
+            ]),
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="dup_front",
+        )
+
+        fig = plot_pareto_front_2d(
+            result,
+            highlight_knee=False,
+            highlight_compromise=True,
+        )
+
+        assert isinstance(fig, Figure)
+
+        compromise_collection = next(
+            collection
+            for collection in fig.axes[0].collections
+            if collection.get_label() == "Compromiso"
+        )
+        compromise_offsets = compromise_collection.get_offsets()
+
+        assert compromise_offsets.shape == (1, 2)
+        np.testing.assert_allclose(compromise_offsets[0], [5.0, 5.0])
+        fig.clf()
+
     def test_plot_pareto_front_3d_returns_figure_and_saves_file(
         self, pareto_result_3d, tmp_path
     ):

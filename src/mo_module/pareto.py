@@ -553,8 +553,7 @@ def plot_pareto_front_2d(
 
     # Compromiso
     if highlight_compromise:
-        comp_layout = opt_result.get_compromise_layout()
-        comp_idx = opt_result.pareto_layouts.index(comp_layout)
+        comp_idx = int(np.argmin(np.linalg.norm(_normalize_front(F), axis=1)))
         ax.scatter(
             F[comp_idx, objective_x],
             F[comp_idx, objective_y],
