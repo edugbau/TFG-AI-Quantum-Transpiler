@@ -92,6 +92,12 @@ from .analysis import (
     analyze_results,
 )
 
+# --- layout_campaigns ---
+from .layout_campaigns import (
+    run_layout_selection_campaign,
+    summarize_layout_campaign,
+)
+
 
 # ===========================================================================
 #  Función de conveniencia
@@ -163,6 +169,9 @@ __all__ = [
     "BenchmarkReport",
     "compute_objective_stats",
     "analyze_results",
+    # layout campaigns
+    "run_layout_selection_campaign",
+    "summarize_layout_campaign",
     # conveniencia
     "run_benchmark",
 ]
