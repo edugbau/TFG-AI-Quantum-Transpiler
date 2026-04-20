@@ -7,6 +7,7 @@ externas usando la infraestructura existente del módulo MO.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 
 import numpy as np
 
@@ -19,18 +20,7 @@ from .circuits import BenchmarkCircuit
 
 def _copy_config_with_seed(config: OptimizerConfig, seed: int) -> OptimizerConfig:
     """Crea una copia de la configuración cambiando solo la semilla."""
-    return OptimizerConfig(
-        algorithm=config.algorithm,
-        population_size=config.population_size,
-        n_generations=config.n_generations,
-        objectives=list(config.objectives),
-        optimization_level=config.optimization_level,
-        crossover_operator=config.crossover_operator,
-        prob_swap_mutation=config.prob_swap_mutation,
-        prob_replace_mutation=config.prob_replace_mutation,
-        seed=seed,
-        verbose=False,
-    )
+    return replace(config, seed=seed)
 
 
 def _build_reference_layouts(circuit_qubits: int, backend) -> dict[str, list[int]]:

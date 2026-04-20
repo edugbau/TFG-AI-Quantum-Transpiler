@@ -1088,6 +1088,95 @@ class TestLayoutCampaigns:
             "best_error_rate",
         }
 
+    def test_run_layout_selection_campaign_preserves_config_fields_except_seed(
+        self, monkeypatch, single_circuit
+    ):
+        """La campaña conserva la config del llamador salvo la semilla por run."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        supplied_config = OptimizerConfig(
+            algorithm="nsga2",
+            population_size=8,
+            n_generations=5,
+            objectives=["depth", "cnot_count"],
+            optimization_level=3,
+            crossover_operator="ox",
+            prob_swap_mutation=0.5,
+            prob_replace_mutation=0.9,
+            seed=123,
+            verbose=True,
+        )
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        optimize_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+
+        def fake_optimize_layout(*, circuit, backend, config):
+            optimize_calls.append(config)
+            return _make_campaign_opt_result()
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            lambda *, layouts, **kwargs: [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 100 + idx,
+                    "cnot_equivalent": 10.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ],
+            raising=False,
+        )
+
+        campaign_fn(
+            circuits=single_circuit,
+            seeds=[91],
+            backend_name="fake_torino",
+            config=supplied_config,
+        )
+
+        assert len(optimize_calls) == 1
+        run_config = optimize_calls[0]
+        assert run_config is not supplied_config
+        assert run_config.algorithm == supplied_config.algorithm
+        assert run_config.population_size == supplied_config.population_size
+        assert run_config.n_generations == supplied_config.n_generations
+        assert run_config.objectives == supplied_config.objectives
+        assert run_config.optimization_level == supplied_config.optimization_level
+        assert run_config.crossover_operator == supplied_config.crossover_operator
+        assert run_config.prob_swap_mutation == supplied_config.prob_swap_mutation
+        assert run_config.prob_replace_mutation == supplied_config.prob_replace_mutation
+        assert run_config.verbose == supplied_config.verbose
+        assert run_config.seed == 91
+
 
 def _make_bell() -> QuantumCircuit:
     """Crea un circuito Bell de 2 qubits (helper para tests)."""
