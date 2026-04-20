@@ -832,6 +832,10 @@ def compare_layouts(
                 result.transpiled_metrics.two_qubit_gates
                 if result.transpiled_metrics else None
             ),
+            "cnot_equivalent": (
+                result.transpiled_metrics.cnot_equivalent
+                if result.transpiled_metrics else None
+            ),
             "total_gates": (
                 result.transpiled_metrics.total_gates
                 if result.transpiled_metrics else None

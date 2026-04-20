@@ -351,6 +351,21 @@ def select_min_objective(
     return int(np.argmin(pareto_fitness[:, objective_index]))
 
 
+def _build_candidate_entry(
+    index: int,
+    layout: list[int],
+    distance_to_ideal: float,
+    reason: str,
+) -> dict:
+    """Construye un payload homogéneo para candidatos de selección."""
+    return {
+        "index": index,
+        "layout": layout,
+        "distance_to_ideal": distance_to_ideal,
+        "reason": reason,
+    }
+
+
 # ===========================================================================
 #  Análisis del frente de Pareto
 # ===========================================================================
@@ -386,6 +401,8 @@ def analyze_pareto_front(
         }
 
     F = opt_result.pareto_fitness
+    F_norm = _normalize_front(F)
+    distances_to_ideal = np.linalg.norm(F_norm, axis=1)
 
     # Métricas de calidad
     metrics = compute_pareto_metrics(F, reference_point)
@@ -406,6 +423,48 @@ def analyze_pareto_front(
 
     # Compromiso
     compromise_layout = opt_result.get_compromise_layout()
+    compromise_idx = opt_result.pareto_layouts.index(compromise_layout)
+
+    selection_candidates = {
+        "compromise": _build_candidate_entry(
+            index=compromise_idx,
+            layout=compromise_layout,
+            distance_to_ideal=float(distances_to_ideal[compromise_idx]),
+            reason="Closest solution to the normalized ideal point.",
+        ),
+        "knee": _build_candidate_entry(
+            index=knee_idx,
+            layout=knee_layout,
+            distance_to_ideal=float(distances_to_ideal[knee_idx]),
+            reason="Knee point with the strongest marginal trade-off.",
+        ),
+    }
+
+    for name, best_info in best_per_obj.items():
+        selection_candidates[f"best_{name}"] = _build_candidate_entry(
+            index=best_info["index"],
+            layout=best_info["layout"],
+            distance_to_ideal=float(distances_to_ideal[best_info["index"]]),
+            reason=f"Lowest value found for objective '{name}'.",
+        )
+
+    tradeoff_table = []
+    for idx, layout in enumerate(opt_result.pareto_layouts):
+        tradeoff_table.append(
+            {
+                "index": idx,
+                "layout": layout,
+                "raw_objectives": {
+                    name: float(F[idx, objective_idx])
+                    for objective_idx, name in enumerate(opt_result.objective_names)
+                },
+                "normalized_objectives": {
+                    name: float(F_norm[idx, objective_idx])
+                    for objective_idx, name in enumerate(opt_result.objective_names)
+                },
+                "distance_to_ideal": float(distances_to_ideal[idx]),
+            }
+        )
 
     result = {
         "metrics": metrics,
@@ -413,6 +472,8 @@ def analyze_pareto_front(
         "knee_point_layout": knee_layout,
         "best_per_objective": best_per_obj,
         "compromise_layout": compromise_layout,
+        "selection_candidates": selection_candidates,
+        "tradeoff_table": tradeoff_table,
     }
 
     logger.info(
