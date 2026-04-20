@@ -183,4 +183,5 @@ print(results.summary())
 
 - **Entrada desde `optimizer.py`**: `BenchmarkRunner` llama a `optimize_layout()` y consume `OptimizationResult` (layouts, `pareto_fitness`, `elapsed_time_s`, `objective_names`).
 - **Entrada desde `qiskit_interface`**: Los circuitos de la suite usan `create_ghz_circuit`, `create_qft_circuit`, `create_random_circuit` y `create_clifford_circuit` de `circuit_utils.py`.
-- **Sin salida directa hacia otros módulos**: El submódulo es una herramienta de evaluación horizontal; sus resultados se consumen externamente (notebooks, scripts de análisis, módulo de integración).
+- **Sin salida directa hacia otros módulos**: El submódulo es tooling experimental local al módulo MO; sus resultados se consumen externamente (notebooks, scripts de análisis, módulo de integración).
+- **Límite con RL**: Las layout campaigns no actúan como puente de orquestación hacia `rl_module`; cualquier handoff MO -> RL pertenece exclusivamente a `src/integration/`.

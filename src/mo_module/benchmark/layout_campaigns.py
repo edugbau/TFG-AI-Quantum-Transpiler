@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -23,12 +24,63 @@ def _copy_config_with_seed(config: OptimizerConfig, seed: int) -> OptimizerConfi
     return replace(config, seed=seed)
 
 
-def _build_reference_layouts(circuit_qubits: int, backend) -> dict[str, list[int]]:
-    """Construye los layouts de referencia no evolutivos."""
+def build_reference_layouts(
+    num_qubits: int,
+    backend_num_qubits: int,
+    *,
+    backend=None,
+) -> dict[str, list[int]]:
+    """Construye los layouts de referencia no evolutivos de la campaña."""
+    backend_for_heaviest_hex = backend
+    if backend_for_heaviest_hex is None:
+        backend_for_heaviest_hex = SimpleNamespace(num_qubits=backend_num_qubits)
+
+    high_index_block = list(range(backend_num_qubits - num_qubits, backend_num_qubits))
+
+    try:
+        heaviest_hex = get_heaviest_hex_layout(backend_for_heaviest_hex, num_qubits)
+    except (AttributeError, TypeError, ValueError):
+        heaviest_hex = list(reversed(high_index_block))
+
     return {
-        "trivial": list(range(circuit_qubits)),
-        "heaviest_hex": get_heaviest_hex_layout(backend, circuit_qubits),
+        "trivial": list(range(num_qubits)),
+        "reverse_trivial": list(reversed(range(num_qubits))),
+        "high_index_block": high_index_block,
+        "heaviest_hex": heaviest_hex,
     }
+
+
+def build_layout_campaign_spec(*, preset: str = "balanced") -> dict[str, object]:
+    """Devuelve la especificación del preset de campaña."""
+    specs = {
+        "quick": {
+            "reference_names": ["trivial", "heaviest_hex"],
+            "mo_candidate_names": ["compromise"],
+            "include_knee": False,
+            "include_best_per_objective": False,
+        },
+        "balanced": {
+            "reference_names": ["trivial", "heaviest_hex"],
+            "mo_candidate_names": ["compromise", "knee"],
+            "include_knee": True,
+            "include_best_per_objective": True,
+        },
+        "thorough": {
+            "reference_names": [
+                "trivial",
+                "heaviest_hex",
+                "reverse_trivial",
+                "high_index_block",
+            ],
+            "mo_candidate_names": None,
+            "include_knee": True,
+            "include_best_per_objective": True,
+        },
+    }
+    try:
+        return specs[preset]
+    except KeyError as exc:
+        raise ValueError(f"Unknown layout campaign preset: {preset}") from exc
 
 
 def _extract_available_candidate_layouts(candidates: dict) -> dict[str, list[int]]:
@@ -40,6 +92,43 @@ def _extract_available_candidate_layouts(candidates: dict) -> dict[str, list[int
         if candidate is not None and candidate.get("layout") is not None:
             layouts[strategy] = candidate["layout"]
     return layouts
+
+
+def _select_candidate_layouts(
+    candidates: dict,
+    spec: dict[str, object],
+) -> dict[str, list[int]]:
+    """Filtra los candidatos MO según el preset activo."""
+    available_layouts = _extract_available_candidate_layouts(candidates)
+    selected: dict[str, list[int]] = {}
+
+    mo_candidate_names = spec["mo_candidate_names"]
+    if mo_candidate_names is None:
+        return available_layouts
+
+    for name in mo_candidate_names:
+        layout = available_layouts.get(name)
+        if layout is not None:
+            selected[name] = layout
+
+    if spec["include_best_per_objective"]:
+        for name, layout in available_layouts.items():
+            if name.startswith("best_"):
+                selected[name] = layout
+
+    return selected
+
+
+def _select_reference_layouts(
+    all_reference_layouts: dict[str, list[int]],
+    spec: dict[str, object],
+) -> dict[str, list[int]]:
+    """Filtra las referencias según el preset activo."""
+    return {
+        name: all_reference_layouts[name]
+        for name in spec["reference_names"]
+        if name in all_reference_layouts
+    }
 
 
 def _append_metric_if_present(values: list[float], row: dict, key: str) -> None:
@@ -56,6 +145,7 @@ def run_layout_selection_campaign(
     seeds: list[int],
     config: OptimizerConfig | None = None,
     backend_name: str = "fake_torino",
+    preset: str = "balanced",
 ) -> list[dict]:
     """Ejecuta una campaña comparando candidatos MO y referencias.
 
@@ -73,6 +163,7 @@ def run_layout_selection_campaign(
         )
 
     backend = get_backend(backend_name)
+    spec = build_layout_campaign_spec(preset=preset)
     rows: list[dict] = []
 
     for benchmark_circuit in circuits:
@@ -86,9 +177,14 @@ def run_layout_selection_campaign(
             analysis = analyze_pareto_front(opt_result)
             candidates = analysis.get("selection_candidates", {})
 
+            reference_layouts = build_reference_layouts(
+                circuit.num_qubits,
+                backend.num_qubits,
+                backend=backend,
+            )
             layouts = {
-                **_extract_available_candidate_layouts(candidates),
-                **_build_reference_layouts(circuit.num_qubits, backend),
+                **_select_candidate_layouts(candidates, spec),
+                **_select_reference_layouts(reference_layouts, spec),
             }
             evaluated_rows = compare_layouts(
                 circuit=circuit,

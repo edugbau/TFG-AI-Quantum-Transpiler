@@ -259,6 +259,28 @@ def test_mo_docs_route_layout_consumption_through_integration() -> None:
     assert "Salida hacia el módulo `rl_module`" not in mo_doc_text
 
 
+def test_mo_docs_keep_mo_to_rl_handoff_exclusive_to_integration() -> None:
+    internal_text = read_text("src/mo_module/docs/internal_documentation.md")
+    benchmark_text = read_text("src/mo_module/docs/benchmark_documentation.md")
+
+    assert_contains_all(
+        internal_text,
+        (
+            "consumibles por el módulo `integration`",
+            "no debe comunicarse directamente con `rl_module`",
+            "handoff MO -> RL pertenece exclusivamente a `src/integration/`",
+        ),
+    )
+    assert_contains_all(
+        benchmark_text,
+        (
+            "tooling experimental local al módulo MO",
+            "no actúan como puente de orquestación hacia `rl_module`",
+            "src/integration/",
+        ),
+    )
+
+
 def test_mo_tuning_docs_keep_fixed_session_ref_point_contract() -> None:
     tuning_doc_text = read_text("src/mo_module/docs/tuning.md")
     internal_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
