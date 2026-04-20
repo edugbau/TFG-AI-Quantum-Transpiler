@@ -44,8 +44,9 @@ def _build_reference_layouts(circuit_qubits: int, backend) -> dict[str, list[int
 def _extract_available_candidate_layouts(candidates: dict) -> dict[str, list[int]]:
     """Extrae solo los candidatos MO presentes en el análisis."""
     layouts: dict[str, list[int]] = {}
-    for strategy in ("compromise", "knee", "best_depth", "best_cnot_count"):
-        candidate = candidates.get(strategy)
+    for strategy, candidate in candidates.items():
+        if strategy not in {"compromise", "knee"} and not strategy.startswith("best_"):
+            continue
         if candidate is not None and candidate.get("layout") is not None:
             layouts[strategy] = candidate["layout"]
     return layouts

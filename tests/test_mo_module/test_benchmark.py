@@ -929,6 +929,95 @@ class TestLayoutCampaigns:
             },
         }
 
+    def test_run_layout_selection_campaign_keeps_dynamic_best_objective_candidates(
+        self, monkeypatch, tiny_config, single_circuit
+    ):
+        """La campaña conserva candidatos best_<objetivo> emitidos dinámicamente."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        opt_result = OptimizationResult(
+            pareto_layouts=[[0, 1, 2], [2, 3, 4]],
+            pareto_fitness=np.array([[3.0, 7.0], [5.0, 2.0]], dtype=float),
+            objective_names=["swap_count", "error_rate"],
+            backend_name="fake_torino",
+            circuit_name="campaign_circuit",
+        )
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            lambda **kwargs: opt_result,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [1, 2, 3], "index": 1},
+                    "knee": {"layout": [0, 1, 2], "index": 0},
+                    "best_swap_count": {"layout": [2, 3, 4], "index": 1},
+                    "best_error_rate": {"layout": [3, 4, 5], "index": 2},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, layouts, **kwargs):
+            compare_calls.append(dict(layouts))
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 70 + idx,
+                    "cnot_equivalent": 9.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[34],
+            backend_name="fake_torino",
+            config=tiny_config,
+        )
+
+        assert compare_calls == [
+            {
+                "compromise": [1, 2, 3],
+                "knee": [0, 1, 2],
+                "best_swap_count": [2, 3, 4],
+                "best_error_rate": [3, 4, 5],
+                "trivial": [0, 1, 2],
+                "heaviest_hex": [6, 5, 4],
+            }
+        ]
+
+        mo_rows = [row for row in rows if row["layout_family"] == "mo_candidate"]
+        assert {row["selection_strategy"] for row in mo_rows} == {
+            "compromise",
+            "knee",
+            "best_swap_count",
+            "best_error_rate",
+        }
+
 
 def _make_bell() -> QuantumCircuit:
     """Crea un circuito Bell de 2 qubits (helper para tests)."""
