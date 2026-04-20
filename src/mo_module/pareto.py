@@ -360,6 +360,8 @@ def select_min_objective(
 def _build_candidate_entry(
     index: int,
     layout: list[int],
+    objective_values: dict[str, float],
+    normalized_objective_values: dict[str, float],
     distance_to_ideal: float,
     reason: str,
 ) -> dict:
@@ -367,6 +369,8 @@ def _build_candidate_entry(
     return {
         "index": index,
         "layout": layout,
+        "objective_values": objective_values,
+        "normalized_objective_values": normalized_objective_values,
         "distance_to_ideal": distance_to_ideal,
         "reason": reason,
     }
@@ -433,18 +437,34 @@ def analyze_pareto_front(
     compromise_idx = int(np.argmin(distances_to_ideal))
     compromise_layout = opt_result.pareto_layouts[compromise_idx]
 
+    def objective_payload(idx: int) -> dict[str, float]:
+        return {
+            name: float(F[idx, objective_idx])
+            for objective_idx, name in enumerate(opt_result.objective_names)
+        }
+
+    def normalized_objective_payload(idx: int) -> dict[str, float]:
+        return {
+            name: float(F_norm[idx, objective_idx])
+            for objective_idx, name in enumerate(opt_result.objective_names)
+        }
+
     selection_candidates = {
         "compromise": _build_candidate_entry(
             index=compromise_idx,
             layout=compromise_layout,
+            objective_values=objective_payload(compromise_idx),
+            normalized_objective_values=normalized_objective_payload(compromise_idx),
             distance_to_ideal=float(distances_to_ideal[compromise_idx]),
-            reason="Closest solution to the normalized ideal point.",
+            reason="closest_to_normalized_ideal",
         ),
         "knee": _build_candidate_entry(
             index=knee_idx,
             layout=knee_layout,
+            objective_values=objective_payload(knee_idx),
+            normalized_objective_values=normalized_objective_payload(knee_idx),
             distance_to_ideal=float(distances_to_ideal[knee_idx]),
-            reason="Knee point with the strongest marginal trade-off.",
+            reason="max_tradeoff_change",
         ),
     }
 
@@ -452,8 +472,10 @@ def analyze_pareto_front(
         selection_candidates[f"best_{name}"] = _build_candidate_entry(
             index=best_info["index"],
             layout=best_info["layout"],
+            objective_values=objective_payload(best_info["index"]),
+            normalized_objective_values=normalized_objective_payload(best_info["index"]),
             distance_to_ideal=float(distances_to_ideal[best_info["index"]]),
-            reason=f"Lowest value found for objective '{name}'.",
+            reason=f"min_{name}",
         )
 
     tradeoff_table = []

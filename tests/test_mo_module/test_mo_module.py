@@ -1516,12 +1516,22 @@ class TestAnalyzePareto:
             "best_cnot_count",
         }
         assert candidates["compromise"]["layout"] == [2, 3]
-        assert candidates["compromise"]["reason"]
+        assert candidates["compromise"]["reason"] == "closest_to_normalized_ideal"
+        assert candidates["compromise"]["objective_values"] == {
+            "depth": 5.0,
+            "cnot_count": 5.0,
+        }
+        assert candidates["compromise"]["normalized_objective_values"] == {
+            "depth": 4.0 / 9.0,
+            "cnot_count": 4.0 / 9.0,
+        }
         assert candidates["compromise"]["distance_to_ideal"] == pytest.approx(
             np.linalg.norm([4.0 / 9.0, 4.0 / 9.0])
         )
         assert candidates["knee"]["layout"] == analysis["knee_point_layout"]
-        assert candidates["knee"]["reason"]
+        assert candidates["knee"]["reason"] == "max_tradeoff_change"
+        assert candidates["best_depth"]["reason"] == "min_depth"
+        assert candidates["best_cnot_count"]["reason"] == "min_cnot_count"
 
         tradeoff_table = analysis["tradeoff_table"]
         assert len(tradeoff_table) == 3
@@ -1556,6 +1566,10 @@ class TestAnalyzePareto:
         for candidate in analysis["selection_candidates"].values():
             assert isinstance(candidate["reason"], str)
             assert candidate["reason"]
+            assert set(candidate["objective_values"]) == {"depth", "cnot_count"}
+            assert set(candidate["normalized_objective_values"]) == {
+                "depth", "cnot_count"
+            }
             assert candidate["distance_to_ideal"] >= 0.0
 
     def test_analyze_pareto_front_uses_lowest_index_for_tied_minima(self):
