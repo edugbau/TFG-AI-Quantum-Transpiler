@@ -17,6 +17,7 @@ Fecha: 2026-02-24
 import pytest
 import numpy as np
 from qiskit import QuantumCircuit
+from types import SimpleNamespace
 
 # ---------------------------------------------------------------------------
 #  Imports del submódulo bajo test
@@ -39,6 +40,8 @@ from src.mo_module.benchmark.analysis import (
     analyze_results,
     BenchmarkReport,
 )
+import src.mo_module.benchmark as benchmark_module
+import src.mo_module.benchmark.layout_campaigns as campaign_module
 from src.mo_module.benchmark import run_benchmark
 from src.mo_module.optimizer import OptimizerConfig, OptimizationResult
 
@@ -116,6 +119,32 @@ def _make_result_set(runs: list[BenchmarkRun]) -> BenchmarkResultSet:
         backend_name="fake_torino",
         config=config,
         total_elapsed_s=12.5,
+    )
+
+
+def _make_campaign_opt_result() -> OptimizationResult:
+    """Resultado MO sintético con cuatro layouts Pareto distinguibles."""
+    return OptimizationResult(
+        pareto_layouts=[
+            [0, 1, 2],
+            [1, 2, 3],
+            [2, 3, 4],
+            [3, 4, 5],
+        ],
+        pareto_fitness=np.array(
+            [
+                [10.0, 6.0],
+                [8.0, 8.0],
+                [6.0, 12.0],
+                [7.0, 7.0],
+            ],
+            dtype=float,
+        ),
+        objective_names=["depth", "cnot_count"],
+        elapsed_time_s=1.0,
+        algorithm_name="nsga2",
+        backend_name="fake_torino",
+        circuit_name="campaign_circuit",
     )
 
 
@@ -640,6 +669,817 @@ class TestRunBenchmarkConvenience:
             n_generations=4,
         )
         assert results.n_ok == 2
+
+
+class TestLayoutCampaigns:
+    """Tests de campañas de selección de layouts."""
+
+    def test_build_reference_layouts_exposes_phase3_reference_set(self, monkeypatch):
+        """Las referencias incluyen variantes adversariales controladas de Phase 3."""
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        references = campaign_module.build_reference_layouts(
+            num_qubits=3,
+            backend_num_qubits=7,
+        )
+
+        assert references == {
+            "trivial": [0, 1, 2],
+            "reverse_trivial": [2, 1, 0],
+            "high_index_block": [4, 5, 6],
+            "heaviest_hex": [6, 5, 4],
+        }
+
+    def test_build_layout_campaign_spec_supports_phase3_presets(self):
+        """Phase 3 define presets quick, balanced y thorough."""
+        quick = campaign_module.build_layout_campaign_spec(preset="quick")
+        balanced = campaign_module.build_layout_campaign_spec(preset="balanced")
+        thorough = campaign_module.build_layout_campaign_spec(preset="thorough")
+
+        assert quick["reference_names"] == ["trivial", "heaviest_hex"]
+        assert quick["mo_candidate_names"] == ["compromise"]
+        assert quick["include_knee"] is False
+        assert quick["include_best_per_objective"] is False
+
+        assert balanced["reference_names"] == ["trivial", "heaviest_hex"]
+        assert balanced["mo_candidate_names"] == ["compromise", "knee"]
+        assert balanced["include_knee"] is True
+        assert balanced["include_best_per_objective"] is True
+
+        assert thorough["reference_names"] == [
+            "trivial",
+            "heaviest_hex",
+            "reverse_trivial",
+            "high_index_block",
+        ]
+        assert thorough["mo_candidate_names"] is None
+        assert thorough["include_knee"] is True
+        assert thorough["include_best_per_objective"] is True
+
+    def test_build_layout_campaign_spec_rejects_unknown_preset(self):
+        """Los presets desconocidos fallan explícitamente."""
+        with pytest.raises(ValueError, match="Unknown layout campaign preset"):
+            campaign_module.build_layout_campaign_spec(preset="custom")
+
+    def test_build_reference_layouts_raises_for_oversized_num_qubits(self):
+        """Las referencias fallan rápido si el circuito excede el backend."""
+        with pytest.raises(ValueError, match="num_qubits"):
+            campaign_module.build_reference_layouts(
+                num_qubits=8,
+                backend_num_qubits=7,
+            )
+
+    def test_run_layout_selection_campaign_collects_rows_for_candidates_and_references(
+        self, monkeypatch, tiny_config, single_circuit
+    ):
+        """La campaña evalúa candidatos MO y referencias externas."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        calls = {
+            "get_backend": [],
+            "optimize_layout": [],
+            "analyze_pareto_front": [],
+            "compare_layouts": [],
+        }
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        opt_result = _make_campaign_opt_result()
+
+        def fake_get_backend(name: str):
+            calls["get_backend"].append(name)
+            return fake_backend
+
+        def fake_optimize_layout(*, circuit, backend, config):
+            calls["optimize_layout"].append(
+                {
+                    "circuit_name": circuit.name,
+                    "backend": backend,
+                    "seed": config.seed,
+                    "objectives": list(config.objectives),
+                }
+            )
+            return opt_result
+
+        def fake_analyze_pareto_front(result):
+            calls["analyze_pareto_front"].append(result)
+            return {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            }
+
+        def fake_compare_layouts(*, circuit, layouts, backend, seed, **kwargs):
+            calls["compare_layouts"].append(
+                {
+                    "circuit_name": circuit.name,
+                    "layouts": dict(layouts),
+                    "backend": backend,
+                    "seed": seed,
+                }
+            )
+            rows = []
+            for idx, (name, layout) in enumerate(layouts.items()):
+                rows.append(
+                    {
+                        "layout_name": name,
+                        "layout": layout,
+                        "depth": 100 + idx,
+                        "cnot_equivalent": 10.0 + idx,
+                    }
+                )
+            return rows
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            fake_get_backend,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            fake_analyze_pareto_front,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[11, 13],
+            backend_name="fake_torino",
+            config=tiny_config,
+        )
+
+        assert calls["get_backend"] == ["fake_torino"]
+        assert len(calls["optimize_layout"]) == 2
+        assert len(calls["analyze_pareto_front"]) == 2
+        assert len(calls["compare_layouts"]) == 2
+        assert all(call["backend"] is fake_backend for call in calls["optimize_layout"])
+        assert all(call["backend"] is fake_backend for call in calls["compare_layouts"])
+        assert [call["seed"] for call in calls["optimize_layout"]] == [11, 13]
+        assert [call["seed"] for call in calls["compare_layouts"]] == [11, 13]
+
+        assert len(rows) == 12
+        assert {row["circuit_name"] for row in rows} == {"test_3q"}
+        assert {row["seed"] for row in rows} == {11, 13}
+        assert {row["layout_family"] for row in rows} == {"mo_candidate", "reference"}
+        assert {row["selection_strategy"] for row in rows} == {
+            "compromise",
+            "knee",
+            "best_depth",
+            "best_cnot_count",
+            "trivial",
+            "heaviest_hex",
+        }
+
+        pareto_indices = {
+            row["selection_strategy"]: row["pareto_index"] for row in rows if row["seed"] == 11
+        }
+        assert pareto_indices["compromise"] == 3
+        assert pareto_indices["knee"] == 1
+        assert pareto_indices["best_depth"] == 2
+        assert pareto_indices["best_cnot_count"] == 0
+        assert pareto_indices["trivial"] is None
+        assert pareto_indices["heaviest_hex"] is None
+
+    def test_summarize_layout_campaign_returns_means_by_layout_name(self):
+        """El resumen agrega por layout_name y maneja entrada vacía."""
+        summary_fn = getattr(benchmark_module, "summarize_layout_campaign", None)
+        assert summary_fn is not None
+
+        rows = [
+            {"layout_name": "compromise", "depth": 10, "cnot_equivalent": 4.0},
+            {"layout_name": "compromise", "depth": 14, "cnot_equivalent": 6.0},
+            {"layout_name": "trivial", "depth": 20, "cnot_equivalent": 8.0},
+        ]
+
+        summary = summary_fn(rows)
+
+        assert summary == {
+            "compromise": {
+                "count": 2,
+                "depth_mean": 12.0,
+                "cnot_equivalent_mean": 5.0,
+            },
+            "trivial": {
+                "count": 1,
+                "depth_mean": 20.0,
+                "cnot_equivalent_mean": 8.0,
+            },
+        }
+        assert summary_fn([]) == {}
+
+    def test_run_layout_selection_campaign_with_empty_pareto_keeps_reference_rows(
+        self, monkeypatch, tiny_config, single_circuit
+    ):
+        """Sin candidatos Pareto, la campaña sigue evaluando referencias."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        opt_result = OptimizationResult(
+            pareto_layouts=[],
+            pareto_fitness=np.empty((0, 2), dtype=float),
+            objective_names=["depth", "cnot_count"],
+            backend_name="fake_torino",
+            circuit_name="campaign_circuit",
+        )
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            lambda **kwargs: opt_result,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {"selection_candidates": {}},
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, layouts, **kwargs):
+            compare_calls.append(dict(layouts))
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 50 + idx,
+                    "cnot_equivalent": 5.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[21],
+            backend_name="fake_torino",
+            config=tiny_config,
+        )
+
+        assert compare_calls == [
+            {
+                "trivial": [0, 1, 2],
+                "heaviest_hex": [6, 5, 4],
+            }
+        ]
+        assert len(rows) == 2
+        assert {row["selection_strategy"] for row in rows} == {"trivial", "heaviest_hex"}
+        assert {row["layout_family"] for row in rows} == {"reference"}
+        assert all(row["pareto_index"] is None for row in rows)
+
+    def test_summarize_layout_campaign_skips_missing_metrics(self):
+        """El resumen ignora métricas ausentes sin romper el agregado."""
+        summary_fn = getattr(benchmark_module, "summarize_layout_campaign", None)
+        assert summary_fn is not None
+
+        rows = [
+            {"layout_name": "compromise", "depth": 10, "cnot_equivalent": 4.0},
+            {"layout_name": "compromise", "depth": None, "cnot_equivalent": 6.0},
+            {"layout_name": "compromise", "depth": 14},
+            {"layout_name": "trivial", "cnot_equivalent": None},
+        ]
+
+        summary = summary_fn(rows)
+
+        assert summary == {
+            "compromise": {
+                "count": 3,
+                "depth_mean": 12.0,
+                "cnot_equivalent_mean": 5.0,
+            },
+            "trivial": {
+                "count": 1,
+                "depth_mean": 0.0,
+                "cnot_equivalent_mean": 0.0,
+            },
+        }
+
+    def test_run_layout_selection_campaign_allows_omitted_config_with_keyword_only_call(
+        self, monkeypatch, single_circuit
+    ):
+        """La campaña acepta config omitido y expone una llamada keyword-only."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        optimize_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+
+        def fake_optimize_layout(*, circuit, backend, config):
+            optimize_calls.append(config)
+            return _make_campaign_opt_result()
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            lambda *, layouts, **kwargs: [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 100 + idx,
+                    "cnot_equivalent": 10.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ],
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[55],
+            backend_name="fake_torino",
+        )
+
+        assert len(rows) == 6
+        assert len(optimize_calls) == 1
+        assert isinstance(optimize_calls[0], OptimizerConfig)
+        assert optimize_calls[0].objectives == ["depth", "cnot_count"]
+
+        with pytest.raises(TypeError):
+            campaign_fn(single_circuit, [55])
+
+    def test_run_layout_selection_campaign_keeps_dynamic_best_objective_candidates(
+        self, monkeypatch, tiny_config, single_circuit
+    ):
+        """La campaña conserva candidatos best_<objetivo> emitidos dinámicamente."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        opt_result = OptimizationResult(
+            pareto_layouts=[[0, 1, 2], [2, 3, 4]],
+            pareto_fitness=np.array([[3.0, 7.0], [5.0, 2.0]], dtype=float),
+            objective_names=["swap_count", "error_rate"],
+            backend_name="fake_torino",
+            circuit_name="campaign_circuit",
+        )
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            lambda **kwargs: opt_result,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [1, 2, 3], "index": 1},
+                    "knee": {"layout": [0, 1, 2], "index": 0},
+                    "best_swap_count": {"layout": [2, 3, 4], "index": 1},
+                    "best_error_rate": {"layout": [3, 4, 5], "index": 2},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, layouts, **kwargs):
+            compare_calls.append(dict(layouts))
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 70 + idx,
+                    "cnot_equivalent": 9.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[34],
+            backend_name="fake_torino",
+            config=tiny_config,
+        )
+
+        assert compare_calls == [
+            {
+                "compromise": [1, 2, 3],
+                "knee": [0, 1, 2],
+                "best_swap_count": [2, 3, 4],
+                "best_error_rate": [3, 4, 5],
+                "trivial": [0, 1, 2],
+                "heaviest_hex": [6, 5, 4],
+            }
+        ]
+
+        mo_rows = [row for row in rows if row["layout_family"] == "mo_candidate"]
+        assert {row["selection_strategy"] for row in mo_rows} == {
+            "compromise",
+            "knee",
+            "best_swap_count",
+            "best_error_rate",
+        }
+
+    def test_run_layout_selection_campaign_quick_uses_compromise_and_two_references(
+        self, monkeypatch, tiny_config, single_circuit
+    ):
+        """El preset quick limita la comparación a compromise y dos referencias."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            lambda **kwargs: _make_campaign_opt_result(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, layouts, **kwargs):
+            compare_calls.append(dict(layouts))
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 80 + idx,
+                    "cnot_equivalent": 6.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[12],
+            backend_name="fake_torino",
+            config=tiny_config,
+            preset="quick",
+        )
+
+        assert compare_calls == [
+            {
+                "compromise": [3, 4, 5],
+                "trivial": [0, 1, 2],
+                "heaviest_hex": [6, 5, 4],
+            }
+        ]
+        assert {row["selection_strategy"] for row in rows} == {
+            "compromise",
+            "trivial",
+            "heaviest_hex",
+        }
+
+    def test_run_layout_selection_campaign_thorough_uses_full_candidate_and_reference_set(
+        self, monkeypatch, tiny_config, single_circuit
+    ):
+        """El preset thorough mantiene todos los candidatos MO y referencias Phase 3."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            lambda **kwargs: _make_campaign_opt_result(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, layouts, **kwargs):
+            compare_calls.append(dict(layouts))
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 90 + idx,
+                    "cnot_equivalent": 7.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[14],
+            backend_name="fake_torino",
+            config=tiny_config,
+            preset="thorough",
+        )
+
+        assert compare_calls == [
+            {
+                "compromise": [3, 4, 5],
+                "knee": [1, 2, 3],
+                "best_depth": [2, 3, 4],
+                "best_cnot_count": [0, 1, 2],
+                "trivial": [0, 1, 2],
+                "heaviest_hex": [6, 5, 4],
+                "reverse_trivial": [2, 1, 0],
+                "high_index_block": [4, 5, 6],
+            }
+        ]
+        assert {row["selection_strategy"] for row in rows} == {
+            "compromise",
+            "knee",
+            "best_depth",
+            "best_cnot_count",
+            "trivial",
+            "heaviest_hex",
+            "reverse_trivial",
+            "high_index_block",
+        }
+
+    def test_run_layout_selection_campaign_continues_after_failed_circuit_seed(
+        self, monkeypatch, tiny_config
+    ):
+        """La campaña aísla fallos por circuito-semilla y continúa con el resto."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        circuit_ok = make_custom_circuit("ok_3q", QuantumCircuit(3, name="ok_3q"))
+        circuit_fail = make_custom_circuit(
+            "fail_3q", QuantumCircuit(3, name="fail_3q")
+        )
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+
+        def fake_optimize_layout(*, circuit, **kwargs):
+            if circuit.name == "fail_3q":
+                raise RuntimeError("synthetic campaign failure")
+            return _make_campaign_opt_result()
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, circuit, layouts, **kwargs):
+            compare_calls.append(circuit.name)
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 60 + idx,
+                    "cnot_equivalent": 5.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=[circuit_fail, circuit_ok],
+            seeds=[7],
+            backend_name="fake_torino",
+            config=tiny_config,
+            preset="quick",
+        )
+
+        assert compare_calls == ["ok_3q"]
+        assert len(rows) == 3
+        assert {row["circuit_name"] for row in rows} == {"ok_3q"}
+        assert {row["selection_strategy"] for row in rows} == {
+            "compromise",
+            "trivial",
+            "heaviest_hex",
+        }
+
+    def test_run_layout_selection_campaign_preserves_config_fields_except_seed(
+        self, monkeypatch, single_circuit
+    ):
+        """La campaña conserva la config del llamador salvo la semilla por run."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        supplied_config = OptimizerConfig(
+            algorithm="nsga2",
+            population_size=8,
+            n_generations=5,
+            objectives=["depth", "cnot_count"],
+            optimization_level=3,
+            crossover_operator="ox",
+            prob_swap_mutation=0.5,
+            prob_replace_mutation=0.9,
+            seed=123,
+            verbose=True,
+        )
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        optimize_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+
+        def fake_optimize_layout(*, circuit, backend, config):
+            optimize_calls.append(config)
+            return _make_campaign_opt_result()
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            lambda *, layouts, **kwargs: [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 100 + idx,
+                    "cnot_equivalent": 10.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ],
+            raising=False,
+        )
+
+        campaign_fn(
+            circuits=single_circuit,
+            seeds=[91],
+            backend_name="fake_torino",
+            config=supplied_config,
+        )
+
+        assert len(optimize_calls) == 1
+        run_config = optimize_calls[0]
+        assert run_config is not supplied_config
+        assert run_config.algorithm == supplied_config.algorithm
+        assert run_config.population_size == supplied_config.population_size
+        assert run_config.n_generations == supplied_config.n_generations
+        assert run_config.objectives == supplied_config.objectives
+        assert run_config.optimization_level == supplied_config.optimization_level
+        assert run_config.crossover_operator == supplied_config.crossover_operator
+        assert run_config.prob_swap_mutation == supplied_config.prob_swap_mutation
+        assert run_config.prob_replace_mutation == supplied_config.prob_replace_mutation
+        assert run_config.verbose == supplied_config.verbose
+        assert run_config.seed == 91
 
 
 def _make_bell() -> QuantumCircuit:

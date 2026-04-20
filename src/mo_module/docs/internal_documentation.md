@@ -190,6 +190,8 @@ Notas operativas:
 - `OptimizationResult.to_dict()` genera datos tabulares para análisis.
 - `compare_layouts()` permite comparar MO vs baselines (SABRE, trivial).
 - `ParetoMetrics` proporciona indicadores de calidad para reportes.
+- `mo_module` no debe comunicarse directamente con `rl_module`; el handoff MO -> RL pertenece exclusivamente a `src/integration/`.
+- Los artefactos producidos por `mo_module` son consumibles por `src/integration/`, que decide si se usan en `MO_Only` o en un flujo `MO+RL`.
 
 ### Integración con la GUI de benchmark/tuning:
 - `benchmark/benchmark_gui.py` expone los modos `calibrated` y `manual` al usuario.

@@ -83,13 +83,10 @@ from .runner import (
     BenchmarkRunner,
 )
 
-# --- analysis ---
-from .analysis import (
-    ObjectiveStats,
-    CircuitAnalysis,
-    BenchmarkReport,
-    compute_objective_stats,
-    analyze_results,
+# --- layout_campaigns ---
+from .layout_campaigns import (
+    run_layout_selection_campaign,
+    summarize_layout_campaign,
 )
 
 
@@ -146,6 +143,20 @@ def run_benchmark(
     return runner.run()
 
 
+def __getattr__(name: str):
+    if name in {
+        "ObjectiveStats",
+        "CircuitAnalysis",
+        "BenchmarkReport",
+        "compute_objective_stats",
+        "analyze_results",
+    }:
+        from . import analysis as _analysis
+
+        return getattr(_analysis, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     # circuits
     "BenchmarkCircuit",
@@ -163,6 +174,9 @@ __all__ = [
     "BenchmarkReport",
     "compute_objective_stats",
     "analyze_results",
+    # layout campaigns
+    "run_layout_selection_campaign",
+    "summarize_layout_campaign",
     # conveniencia
     "run_benchmark",
 ]

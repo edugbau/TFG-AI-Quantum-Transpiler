@@ -135,10 +135,16 @@ def compute_pareto_metrics(
     Returns:
         ParetoMetrics con las métricas calculadas.
     """
+    if pareto_fitness.size == 0:
+        return ParetoMetrics(n_solutions=0)
+
     if pareto_fitness.ndim == 1:
         pareto_fitness = pareto_fitness.reshape(1, -1)
 
     n_solutions, n_objectives = pareto_fitness.shape
+
+    if n_solutions == 0:
+        return ParetoMetrics(n_solutions=0)
 
     # Punto ideal y nadir
     ideal = pareto_fitness.min(axis=0)
@@ -351,6 +357,25 @@ def select_min_objective(
     return int(np.argmin(pareto_fitness[:, objective_index]))
 
 
+def _build_candidate_entry(
+    index: int,
+    layout: list[int],
+    objective_values: dict[str, float],
+    normalized_objective_values: dict[str, float],
+    distance_to_ideal: float,
+    reason: str,
+) -> dict:
+    """Construye un payload homogéneo para candidatos de selección."""
+    return {
+        "index": index,
+        "layout": layout,
+        "objective_values": objective_values,
+        "normalized_objective_values": normalized_objective_values,
+        "distance_to_ideal": distance_to_ideal,
+        "reason": reason,
+    }
+
+
 # ===========================================================================
 #  Análisis del frente de Pareto
 # ===========================================================================
@@ -383,9 +408,13 @@ def analyze_pareto_front(
             "knee_point_layout": [],
             "best_per_objective": {},
             "compromise_layout": [],
+            "selection_candidates": {},
+            "tradeoff_table": [],
         }
 
     F = opt_result.pareto_fitness
+    F_norm = _normalize_front(F)
+    distances_to_ideal = np.linalg.norm(F_norm, axis=1)
 
     # Métricas de calidad
     metrics = compute_pareto_metrics(F, reference_point)
@@ -405,7 +434,67 @@ def analyze_pareto_front(
         }
 
     # Compromiso
-    compromise_layout = opt_result.get_compromise_layout()
+    compromise_idx = int(np.argmin(distances_to_ideal))
+    compromise_layout = opt_result.pareto_layouts[compromise_idx]
+
+    def objective_payload(idx: int) -> dict[str, float]:
+        return {
+            name: float(F[idx, objective_idx])
+            for objective_idx, name in enumerate(opt_result.objective_names)
+        }
+
+    def normalized_objective_payload(idx: int) -> dict[str, float]:
+        return {
+            name: float(F_norm[idx, objective_idx])
+            for objective_idx, name in enumerate(opt_result.objective_names)
+        }
+
+    selection_candidates = {
+        "compromise": _build_candidate_entry(
+            index=compromise_idx,
+            layout=compromise_layout,
+            objective_values=objective_payload(compromise_idx),
+            normalized_objective_values=normalized_objective_payload(compromise_idx),
+            distance_to_ideal=float(distances_to_ideal[compromise_idx]),
+            reason="closest_to_normalized_ideal",
+        ),
+        "knee": _build_candidate_entry(
+            index=knee_idx,
+            layout=knee_layout,
+            objective_values=objective_payload(knee_idx),
+            normalized_objective_values=normalized_objective_payload(knee_idx),
+            distance_to_ideal=float(distances_to_ideal[knee_idx]),
+            reason="max_tradeoff_change",
+        ),
+    }
+
+    for name, best_info in best_per_obj.items():
+        selection_candidates[f"best_{name}"] = _build_candidate_entry(
+            index=best_info["index"],
+            layout=best_info["layout"],
+            objective_values=objective_payload(best_info["index"]),
+            normalized_objective_values=normalized_objective_payload(best_info["index"]),
+            distance_to_ideal=float(distances_to_ideal[best_info["index"]]),
+            reason=f"min_{name}",
+        )
+
+    tradeoff_table = []
+    for idx, layout in enumerate(opt_result.pareto_layouts):
+        tradeoff_table.append(
+            {
+                "index": idx,
+                "layout": layout,
+                "raw_objectives": {
+                    name: float(F[idx, objective_idx])
+                    for objective_idx, name in enumerate(opt_result.objective_names)
+                },
+                "normalized_objectives": {
+                    name: float(F_norm[idx, objective_idx])
+                    for objective_idx, name in enumerate(opt_result.objective_names)
+                },
+                "distance_to_ideal": float(distances_to_ideal[idx]),
+            }
+        )
 
     result = {
         "metrics": metrics,
@@ -413,6 +502,8 @@ def analyze_pareto_front(
         "knee_point_layout": knee_layout,
         "best_per_objective": best_per_obj,
         "compromise_layout": compromise_layout,
+        "selection_candidates": selection_candidates,
+        "tradeoff_table": tradeoff_table,
     }
 
     logger.info(
@@ -475,7 +566,7 @@ def plot_pareto_front_2d(
     )
 
     # Knee point
-    if highlight_knee and len(F) > 2:
+    if highlight_knee and len(F) >= 1:
         knee_idx = select_knee_point(F)
         ax.scatter(
             F[knee_idx, objective_x],
@@ -490,8 +581,7 @@ def plot_pareto_front_2d(
 
     # Compromiso
     if highlight_compromise:
-        comp_layout = opt_result.get_compromise_layout()
-        comp_idx = opt_result.pareto_layouts.index(comp_layout)
+        comp_idx = int(np.argmin(np.linalg.norm(_normalize_front(F), axis=1)))
         ax.scatter(
             F[comp_idx, objective_x],
             F[comp_idx, objective_y],
@@ -633,7 +723,7 @@ def plot_parallel_coordinates(
         ax.plot(x, F_norm[i], c="steelblue", alpha=0.3, linewidth=1)
 
     # Knee point
-    if highlight_knee and len(F) > 2:
+    if highlight_knee and len(F) >= 1:
         knee_idx = select_knee_point(F)
         ax.plot(
             x, F_norm[knee_idx],
@@ -649,7 +739,7 @@ def plot_parallel_coordinates(
         title = f"Coordenadas Paralelas — {opt_result.algorithm_name.upper()}"
     ax.set_title(title, fontsize=13)
 
-    if highlight_knee and len(F) > 2:
+    if highlight_knee and len(F) >= 1:
         ax.legend(fontsize=10)
 
     ax.grid(True, alpha=0.3)

@@ -4,8 +4,12 @@ import importlib.util
 import pathlib
 import sys
 import types
+from contextlib import contextmanager
 
 import numpy as np
+
+
+_MISSING = object()
 
 
 def _install_stub_modules():
@@ -190,10 +194,10 @@ def _install_stub_modules():
     sys.modules.setdefault("src", src_pkg)
     sys.modules.setdefault("src.rl_module", rl_module_pkg)
     sys.modules.setdefault("src.rl_module.gui", gui_pkg)
-    sys.modules.setdefault("matplotlib", matplotlib_stub)
-    sys.modules.setdefault("matplotlib.pyplot", pyplot_stub)
-    sys.modules.setdefault("matplotlib.backends.backend_tkagg", backend_stub)
-    sys.modules.setdefault("customtkinter", ctk_stub)
+    sys.modules["matplotlib"] = matplotlib_stub
+    sys.modules["matplotlib.pyplot"] = pyplot_stub
+    sys.modules["matplotlib.backends.backend_tkagg"] = backend_stub
+    sys.modules["customtkinter"] = ctk_stub
     sys.modules.setdefault("qiskit", qiskit_stub)
     sys.modules.setdefault("stable_baselines3.common.monitor", monitor_stub)
     sys.modules.setdefault("stable_baselines3.common.callbacks", callbacks_stub)
@@ -204,17 +208,52 @@ def _install_stub_modules():
     return ctk_stub
 
 
-def _load_gui_modules():
+@contextmanager
+def _temporary_gui_stub_modules():
+    stubbed_module_names = (
+        "matplotlib",
+        "matplotlib.pyplot",
+        "matplotlib.backends.backend_tkagg",
+        "customtkinter",
+    )
+    previous_modules = {
+        name: sys.modules.get(name, _MISSING) for name in stubbed_module_names
+    }
     _install_stub_modules()
+    try:
+        yield
+    finally:
+        for name, previous_module in previous_modules.items():
+            if previous_module is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous_module
 
+
+def _load_gui_modules():
     gui_dir = pathlib.Path(__file__).resolve().parents[2] / "src" / "rl_module" / "gui"
     loaded = {}
-    for qualified_name, filename in [
-        ("src.rl_module.gui.routing_view", "routing_view.py"),
-        ("src.rl_module.gui.synthesis_view", "synthesis_view.py"),
-        ("src.rl_module.gui.evaluation_panel", "evaluation_panel.py"),
-        ("test_rl_gui_module", "rl_gui.py"),
-    ]:
+    with _temporary_gui_stub_modules():
+        for qualified_name, filename in [
+            ("src.rl_module.gui.routing_view", "routing_view.py"),
+            ("src.rl_module.gui.synthesis_view", "synthesis_view.py"),
+            ("src.rl_module.gui.evaluation_panel", "evaluation_panel.py"),
+            ("test_rl_gui_module", "rl_gui.py"),
+        ]:
+            sys.modules.pop(qualified_name, None)
+            module_path = gui_dir / filename
+            spec = importlib.util.spec_from_file_location(qualified_name, module_path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[qualified_name] = module
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            loaded[qualified_name] = module
+    return loaded
+
+
+def _load_gui_module(qualified_name, filename):
+    gui_dir = pathlib.Path(__file__).resolve().parents[2] / "src" / "rl_module" / "gui"
+    with _temporary_gui_stub_modules():
         sys.modules.pop(qualified_name, None)
         module_path = gui_dir / filename
         spec = importlib.util.spec_from_file_location(qualified_name, module_path)
@@ -222,21 +261,6 @@ def _load_gui_modules():
         sys.modules[qualified_name] = module
         assert spec.loader is not None
         spec.loader.exec_module(module)
-        loaded[qualified_name] = module
-    return loaded
-
-
-def _load_gui_module(qualified_name, filename):
-    _install_stub_modules()
-
-    gui_dir = pathlib.Path(__file__).resolve().parents[2] / "src" / "rl_module" / "gui"
-    sys.modules.pop(qualified_name, None)
-    module_path = gui_dir / filename
-    spec = importlib.util.spec_from_file_location(qualified_name, module_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[qualified_name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
     return module
 
 
@@ -250,6 +274,53 @@ RoutingView = ROUTING_VIEW_MODULE.RoutingView
 SynthesisView = SYNTHESIS_VIEW_MODULE.SynthesisView
 EvaluationStepRecord = EVALUATION_PANEL_MODULE.EvaluationStepRecord
 SYNTHESIS_BASIS_PROFILES = RL_GUI_MODULE.SYNTHESIS_BASIS_PROFILES
+
+
+class TestRLGuiStubInstallation:
+    def test_install_stub_modules_overrides_preloaded_customtkinter_module(self):
+        previous_customtkinter = sys.modules.get("customtkinter")
+        sentinel_module = types.ModuleType("customtkinter")
+        sys.modules["customtkinter"] = sentinel_module
+
+        try:
+            ctk_stub = _install_stub_modules()
+            assert sys.modules["customtkinter"] is ctk_stub
+        finally:
+            if previous_customtkinter is None:
+                sys.modules.pop("customtkinter", None)
+            else:
+                sys.modules["customtkinter"] = previous_customtkinter
+
+    def test_load_gui_module_restores_preloaded_matplotlib_modules_after_import(self):
+        previous_matplotlib = sys.modules.get("matplotlib")
+        previous_pyplot = sys.modules.get("matplotlib.pyplot")
+        previous_backend = sys.modules.get("matplotlib.backends.backend_tkagg")
+        sentinel_matplotlib = types.ModuleType("matplotlib")
+        sentinel_pyplot = types.ModuleType("matplotlib.pyplot")
+        sentinel_backend = types.ModuleType("matplotlib.backends.backend_tkagg")
+        sys.modules["matplotlib"] = sentinel_matplotlib
+        sys.modules["matplotlib.pyplot"] = sentinel_pyplot
+        sys.modules["matplotlib.backends.backend_tkagg"] = sentinel_backend
+
+        try:
+            gui_module = _load_gui_module("test_rl_gui_restore_module", "rl_gui.py")
+            assert gui_module.RLBenchmarkGUI is not None
+            assert sys.modules["matplotlib"] is sentinel_matplotlib
+            assert sys.modules["matplotlib.pyplot"] is sentinel_pyplot
+            assert sys.modules["matplotlib.backends.backend_tkagg"] is sentinel_backend
+        finally:
+            if previous_matplotlib is None:
+                sys.modules.pop("matplotlib", None)
+            else:
+                sys.modules["matplotlib"] = previous_matplotlib
+            if previous_pyplot is None:
+                sys.modules.pop("matplotlib.pyplot", None)
+            else:
+                sys.modules["matplotlib.pyplot"] = previous_pyplot
+            if previous_backend is None:
+                sys.modules.pop("matplotlib.backends.backend_tkagg", None)
+            else:
+                sys.modules["matplotlib.backends.backend_tkagg"] = previous_backend
 
 
 class TestRLGuiModeViews:

@@ -122,6 +122,12 @@ from .tuning import (
     LayoutTuner,
 )
 
+# --- benchmark ---
+from .benchmark import (
+    run_layout_selection_campaign,
+    summarize_layout_campaign,
+)
+
 
 # ===================================================================
 #  __all__ — API pública explícita
@@ -173,4 +179,7 @@ __all__ = [
     # tuning
     "HyperparameterSpace",
     "LayoutTuner",
+    # benchmark
+    "run_layout_selection_campaign",
+    "summarize_layout_campaign",
 ]

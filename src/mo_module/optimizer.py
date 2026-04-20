@@ -572,7 +572,7 @@ class OptimizationResult:
             "n_pareto_solutions": self.n_pareto_solutions,
             "objective_names": self.objective_names,
         }
-        if self.pareto_fitness is not None:
+        if self.pareto_fitness is not None and len(self.pareto_fitness) > 0:
             for i, name in enumerate(self.objective_names):
                 col = self.pareto_fitness[:, i]
                 result[f"pareto_{name}_min"] = float(col.min())
@@ -832,6 +832,10 @@ def compare_layouts(
                 result.transpiled_metrics.two_qubit_gates
                 if result.transpiled_metrics else None
             ),
+            "cnot_equivalent": (
+                result.transpiled_metrics.cnot_equivalent
+                if result.transpiled_metrics else None
+            ),
             "total_gates": (
                 result.transpiled_metrics.total_gates
                 if result.transpiled_metrics else None
@@ -861,23 +865,31 @@ def print_layout_comparison(rows: list[dict]) -> None:
     Args:
         rows: Resultados de ``compare_layouts()``.
     """
-    print(f"\n{'=' * 90}")
+    print(f"\n{'=' * 108}")
     print(f"  COMPARACIÓN DE LAYOUTS")
-    print(f"{'=' * 90}")
+    print(f"{'=' * 108}")
     print(
-        f"  {'Layout':<20} {'Depth':>8} {'2Q Gates':>10} "
+        f"  {'Layout':<20} {'Depth':>8} {'2Q Gates':>10} {'CNOT Eq':>10} "
         f"{'Total':>8} {'Err 2Q':>12} {'Edges':>8}"
     )
-    print(f"  {'-' * 70}")
+    print(f"  {'-' * 88}")
+
+    def display(value, *, float_precision: Optional[int] = None):
+        if value is None:
+            return "-"
+        if float_precision is not None:
+            return f"{value:.{float_precision}f}"
+        return str(value)
 
     for row in rows:
         print(
             f"  {row['layout_name']:<20} "
-            f"{row.get('depth', '-'):>8} "
-            f"{row.get('two_qubit_gates', '-'):>10} "
-            f"{row.get('total_gates', '-'):>8} "
-            f"{row.get('avg_error_2q', 0):>12.6f} "
-            f"{row.get('num_edges', 0):>8}"
+            f"{display(row.get('depth')):>8} "
+            f"{display(row.get('two_qubit_gates')):>10} "
+            f"{display(row.get('cnot_equivalent')):>10} "
+            f"{display(row.get('total_gates')):>8} "
+            f"{display(row.get('avg_error_2q'), float_precision=6):>12} "
+            f"{display(row.get('num_edges')):>8}"
         )
 
-    print(f"{'=' * 90}\n")
+    print(f"{'=' * 108}\n")

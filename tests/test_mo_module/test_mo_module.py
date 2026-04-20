@@ -953,6 +953,37 @@ class TestOptimizationResult:
         assert "pareto_depth_min" in d
         assert "pareto_error_min" in d
 
+    def test_to_dict_with_empty_front_array_keeps_base_metadata_only(self):
+        """Un frente vacío serializa metadatos sin reducciones inválidas."""
+        result = OptimizationResult(
+            pareto_layouts=[],
+            pareto_fitness=np.empty((0, 2)),
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="empty_case",
+            num_logical_qubits=3,
+            n_generations_run=5,
+            elapsed_time_s=0.25,
+        )
+
+        data = result.to_dict()
+
+        assert data["algorithm_name"] == "nsga2"
+        assert data["backend_name"] == "fake_torino"
+        assert data["circuit_name"] == "empty_case"
+        assert data["num_logical_qubits"] == 3
+        assert data["n_generations_run"] == 5
+        assert data["elapsed_time_s"] == 0.25
+        assert data["n_pareto_solutions"] == 0
+        assert data["objective_names"] == ["depth", "cnot_count"]
+        assert "pareto_depth_min" not in data
+        assert "pareto_depth_max" not in data
+        assert "pareto_depth_mean" not in data
+        assert "pareto_cnot_count_min" not in data
+        assert "pareto_cnot_count_max" not in data
+        assert "pareto_cnot_count_mean" not in data
+
 
 class TestCompareLayouts:
     """Tests de comparación de layouts."""
@@ -972,7 +1003,30 @@ class TestCompareLayouts:
             assert "layout_name" in row
             assert "depth" in row
             assert "two_qubit_gates" in row
+            assert "cnot_equivalent" in row
             assert "avg_error_2q" in row
+
+    def test_compare_layouts_keeps_two_qubit_gates_and_adds_cnot_equivalent(
+        self, backend_torino
+    ):
+        """La comparación expone ambas métricas 2Q y preserva su semántica."""
+        qc = QuantumCircuit(2, name="swap_only")
+        qc.swap(0, 1)
+
+        rows = compare_layouts(
+            qc,
+            {"swap_layout": [0, 1]},
+            backend=backend_torino,
+            seed=42,
+        )
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert "two_qubit_gates" in row
+        assert "cnot_equivalent" in row
+        assert row["two_qubit_gates"] is not None
+        assert row["cnot_equivalent"] is not None
+        assert row["cnot_equivalent"] >= row["two_qubit_gates"]
 
 
 class TestReportingUtilities:
@@ -986,6 +1040,7 @@ class TestReportingUtilities:
                 "layout_name": "layout_a",
                 "depth": 12,
                 "two_qubit_gates": 4,
+                "cnot_equivalent": 7,
                 "total_gates": 20,
                 "avg_error_2q": 0.012345,
                 "num_edges": 3,
@@ -994,6 +1049,7 @@ class TestReportingUtilities:
                 "layout_name": "layout_b",
                 "depth": 9,
                 "two_qubit_gates": 3,
+                "cnot_equivalent": 3,
                 "total_gates": 18,
                 "avg_error_2q": 0.006789,
                 "num_edges": 4,
@@ -1009,7 +1065,30 @@ class TestReportingUtilities:
         assert "layout_a" in captured.out
         assert "layout_b" in captured.out
         assert "2Q Gates" in captured.out
+        assert "CNOT Eq" in captured.out
+        assert "7" in captured.out
         assert "Err 2Q" in captured.out
+
+    def test_print_layout_comparison_renders_none_metrics_as_dash(self, capsys):
+        """Las métricas None se muestran como '-' en vez de 'None'."""
+        rows = [
+            {
+                "layout_name": "layout_none",
+                "depth": None,
+                "two_qubit_gates": None,
+                "cnot_equivalent": None,
+                "total_gates": None,
+                "avg_error_2q": None,
+                "num_edges": None,
+            }
+        ]
+
+        print_layout_comparison(rows)
+        captured = capsys.readouterr()
+
+        assert "layout_none" in captured.out
+        assert "None" not in captured.out
+        assert "-" in captured.out
 
 
 class TestParetoPlots:
@@ -1056,6 +1135,101 @@ class TestParetoPlots:
 
         # Assert
         assert fig is None
+
+    def test_plot_pareto_front_2d_highlights_actual_compromise_row_with_duplicates(self):
+        """El resaltado de compromiso usa la fila ganadora aunque el layout se repita."""
+        result = OptimizationResult(
+            pareto_layouts=[[7, 8], [9, 10], [7, 8]],
+            pareto_fitness=np.array([
+                [1.0, 9.0],
+                [9.0, 1.0],
+                [5.0, 5.0],
+            ]),
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="dup_front",
+        )
+
+        fig = plot_pareto_front_2d(
+            result,
+            highlight_knee=False,
+            highlight_compromise=True,
+        )
+
+        assert isinstance(fig, Figure)
+
+        compromise_collection = next(
+            collection
+            for collection in fig.axes[0].collections
+            if collection.get_label() == "Compromiso"
+        )
+        compromise_offsets = compromise_collection.get_offsets()
+
+        assert compromise_offsets.shape == (1, 2)
+        np.testing.assert_allclose(compromise_offsets[0], [5.0, 5.0])
+        fig.clf()
+
+    def test_plot_pareto_front_2d_highlights_knee_for_two_point_front(self):
+        """El plot 2D resalta el knee también en frentes de dos soluciones."""
+        fitness = np.array([
+            [1.0, 9.0],
+            [3.0, 1.0],
+        ])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1], [2, 3]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="two_point_front",
+        )
+
+        fig = plot_pareto_front_2d(
+            result,
+            highlight_knee=True,
+            highlight_compromise=False,
+        )
+
+        assert isinstance(fig, Figure)
+
+        knee_collection = next(
+            collection
+            for collection in fig.axes[0].collections
+            if collection.get_label() == "Knee Point"
+        )
+        knee_idx = select_knee_point(fitness)
+        np.testing.assert_allclose(knee_collection.get_offsets()[0], fitness[knee_idx])
+        assert knee_idx == 0
+        fig.clf()
+
+    def test_plot_pareto_front_2d_highlights_knee_for_single_solution(self):
+        """El plot 2D resalta el knee también con una sola solución."""
+        fitness = np.array([[3.0, 4.0]])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="single_point_front",
+        )
+
+        fig = plot_pareto_front_2d(
+            result,
+            highlight_knee=True,
+            highlight_compromise=False,
+        )
+
+        assert isinstance(fig, Figure)
+
+        knee_collection = next(
+            collection
+            for collection in fig.axes[0].collections
+            if collection.get_label() == "Knee Point"
+        )
+        np.testing.assert_allclose(knee_collection.get_offsets()[0], fitness[0])
+        fig.clf()
 
     def test_plot_pareto_front_3d_returns_figure_and_saves_file(
         self, pareto_result_3d, tmp_path
@@ -1143,6 +1317,55 @@ class TestParetoPlots:
         # Assert
         assert fig is None
 
+    def test_plot_parallel_coordinates_highlights_knee_for_two_point_front(self):
+        """Las coordenadas paralelas resaltan el knee en frentes de dos soluciones."""
+        fitness = np.array([
+            [1.0, 9.0],
+            [3.0, 1.0],
+        ])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1], [2, 3]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="two_point_front",
+        )
+
+        fig = plot_parallel_coordinates(result, highlight_knee=True)
+
+        assert isinstance(fig, Figure)
+
+        knee_line = next(
+            line for line in fig.axes[0].lines if line.get_label() == "Knee Point"
+        )
+        knee_idx = select_knee_point(fitness)
+        assert knee_idx == 0
+        np.testing.assert_allclose(knee_line.get_ydata(), [0.0, 1.0])
+        fig.clf()
+
+    def test_plot_parallel_coordinates_highlights_knee_for_single_solution(self):
+        """Las coordenadas paralelas resaltan el knee con una sola solución."""
+        fitness = np.array([[3.0, 4.0]])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="single_point_front",
+        )
+
+        fig = plot_parallel_coordinates(result, highlight_knee=True)
+
+        assert isinstance(fig, Figure)
+
+        knee_line = next(
+            line for line in fig.axes[0].lines if line.get_label() == "Knee Point"
+        )
+        np.testing.assert_allclose(knee_line.get_ydata(), [0.0, 0.0])
+        fig.clf()
+
 
 # ===========================================================================
 #  Tests — pareto
@@ -1174,6 +1397,32 @@ class TestParetoMetrics:
         metrics = compute_pareto_metrics(F)
         assert metrics.n_solutions == 1
         assert metrics.hypervolume > 0
+
+    def test_compute_metrics_empty_front_returns_no_data_metrics(self):
+        """Un frente vacío devuelve métricas válidas de no-datos."""
+        metrics = compute_pareto_metrics(np.empty((0, 2)))
+
+        assert isinstance(metrics, ParetoMetrics)
+        assert metrics.n_solutions == 0
+        assert metrics.hypervolume == 0.0
+        assert metrics.spacing == 0.0
+        assert metrics.spread is None
+        assert metrics.ideal_point is None
+        assert metrics.nadir_point is None
+        assert metrics.reference_point is None
+
+    def test_compute_metrics_flattened_empty_front_returns_no_data_metrics(self):
+        """Un frente vacío plano se trata también como caso sin datos."""
+        metrics = compute_pareto_metrics(np.array([]))
+
+        assert isinstance(metrics, ParetoMetrics)
+        assert metrics.n_solutions == 0
+        assert metrics.hypervolume == 0.0
+        assert metrics.spacing == 0.0
+        assert metrics.spread is None
+        assert metrics.ideal_point is None
+        assert metrics.nadir_point is None
+        assert metrics.reference_point is None
 
     def test_metrics_summary(self):
         """El resumen contiene información legible."""
@@ -1237,7 +1486,7 @@ class TestAnalyzePareto:
                 [5.0, 5.0],
                 [10.0, 1.0],
             ]),
-            objective_names=["depth", "error"],
+            objective_names=["depth", "cnot_count"],
         )
         analysis = analyze_pareto_front(result)
 
@@ -1246,6 +1495,8 @@ class TestAnalyzePareto:
         assert "knee_point_layout" in analysis
         assert "best_per_objective" in analysis
         assert "compromise_layout" in analysis
+        assert "selection_candidates" in analysis
+        assert "tradeoff_table" in analysis
 
         # Verificar que el knee point es una solución del frente
         assert analysis["knee_point_layout"] in result.pareto_layouts
@@ -1253,9 +1504,120 @@ class TestAnalyzePareto:
         # Verificar mejores por objetivo
         bpo = analysis["best_per_objective"]
         assert "depth" in bpo
-        assert "error" in bpo
+        assert "cnot_count" in bpo
         assert bpo["depth"]["layout"] == [0, 1]   # min depth = 1.0
-        assert bpo["error"]["layout"] == [4, 5]   # min error = 1.0
+        assert bpo["cnot_count"]["layout"] == [4, 5]   # min cnot_count = 1.0
+
+        candidates = analysis["selection_candidates"]
+        assert set(candidates) == {
+            "compromise",
+            "knee",
+            "best_depth",
+            "best_cnot_count",
+        }
+        assert candidates["compromise"]["layout"] == [2, 3]
+        assert candidates["compromise"]["reason"] == "closest_to_normalized_ideal"
+        assert candidates["compromise"]["objective_values"] == {
+            "depth": 5.0,
+            "cnot_count": 5.0,
+        }
+        assert candidates["compromise"]["normalized_objective_values"] == {
+            "depth": 4.0 / 9.0,
+            "cnot_count": 4.0 / 9.0,
+        }
+        assert candidates["compromise"]["distance_to_ideal"] == pytest.approx(
+            np.linalg.norm([4.0 / 9.0, 4.0 / 9.0])
+        )
+        assert candidates["knee"]["layout"] == analysis["knee_point_layout"]
+        assert candidates["knee"]["reason"] == "max_tradeoff_change"
+        assert candidates["best_depth"]["reason"] == "min_depth"
+        assert candidates["best_cnot_count"]["reason"] == "min_cnot_count"
+
+        tradeoff_table = analysis["tradeoff_table"]
+        assert len(tradeoff_table) == 3
+        assert tradeoff_table[0]["index"] == 0
+        assert tradeoff_table[0]["layout"] == [0, 1]
+        assert tradeoff_table[0]["raw_objectives"] == {
+            "depth": 1.0,
+            "cnot_count": 10.0,
+        }
+        assert tradeoff_table[0]["normalized_objectives"] == {
+            "depth": 0.0,
+            "cnot_count": 1.0,
+        }
+        assert tradeoff_table[1]["distance_to_ideal"] == pytest.approx(
+            np.linalg.norm([4.0 / 9.0, 4.0 / 9.0])
+        )
+
+    def test_analyze_pareto_front_candidate_payload_has_reason_and_distance(self):
+        """Cada candidato de selección expone justificación y distancia."""
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1], [2, 3], [4, 5]],
+            pareto_fitness=np.array([
+                [1.0, 10.0],
+                [5.0, 5.0],
+                [10.0, 1.0],
+            ]),
+            objective_names=["depth", "cnot_count"],
+        )
+
+        analysis = analyze_pareto_front(result)
+
+        for candidate in analysis["selection_candidates"].values():
+            assert isinstance(candidate["reason"], str)
+            assert candidate["reason"]
+            assert set(candidate["objective_values"]) == {"depth", "cnot_count"}
+            assert set(candidate["normalized_objective_values"]) == {
+                "depth", "cnot_count"
+            }
+            assert candidate["distance_to_ideal"] >= 0.0
+
+    def test_analyze_pareto_front_uses_lowest_index_for_tied_minima(self):
+        """Los mínimos explícitos usan desempate estable por primer índice."""
+        result = OptimizationResult(
+            pareto_layouts=[[10, 11], [20, 21], [30, 31]],
+            pareto_fitness=np.array([
+                [1.0, 9.0],
+                [1.0, 5.0],
+                [4.0, 5.0],
+            ]),
+            objective_names=["depth", "cnot_count"],
+        )
+
+        analysis = analyze_pareto_front(result)
+
+        assert analysis["best_per_objective"]["depth"]["index"] == 0
+        assert analysis["best_per_objective"]["depth"]["layout"] == [10, 11]
+        assert analysis["best_per_objective"]["cnot_count"]["index"] == 1
+        assert analysis["best_per_objective"]["cnot_count"]["layout"] == [20, 21]
+
+    def test_analyze_pareto_front_compromise_candidate_uses_actual_winning_row(self):
+        """El candidato compromise conserva el índice real aunque el layout se repita."""
+        result = OptimizationResult(
+            pareto_layouts=[[7, 8], [9, 10], [7, 8]],
+            pareto_fitness=np.array([
+                [1.0, 9.0],
+                [9.0, 1.0],
+                [5.0, 5.0],
+            ]),
+            objective_names=["depth", "cnot_count"],
+        )
+
+        analysis = analyze_pareto_front(result)
+
+        compromise = analysis["selection_candidates"]["compromise"]
+        expected_distance = np.linalg.norm([0.5, 0.5])
+
+        assert analysis["compromise_layout"] == [7, 8]
+        assert compromise["index"] == 2
+        assert compromise["layout"] == [7, 8]
+        assert compromise["distance_to_ideal"] == pytest.approx(expected_distance)
+        assert analysis["tradeoff_table"][compromise["index"]]["distance_to_ideal"] == pytest.approx(
+            expected_distance
+        )
+        assert analysis["tradeoff_table"][0]["distance_to_ideal"] != pytest.approx(
+            expected_distance
+        )
 
     def test_analyze_empty_front(self):
         """Funciona con un frente vacío."""
@@ -1263,3 +1625,5 @@ class TestAnalyzePareto:
         analysis = analyze_pareto_front(result)
         assert analysis["metrics"].n_solutions == 0
         assert analysis["knee_point_idx"] == -1
+        assert analysis["selection_candidates"] == {}
+        assert analysis["tradeoff_table"] == []
