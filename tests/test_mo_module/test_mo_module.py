@@ -1009,6 +1009,7 @@ class TestReportingUtilities:
                 "layout_name": "layout_a",
                 "depth": 12,
                 "two_qubit_gates": 4,
+                "cnot_equivalent": 7,
                 "total_gates": 20,
                 "avg_error_2q": 0.012345,
                 "num_edges": 3,
@@ -1017,6 +1018,7 @@ class TestReportingUtilities:
                 "layout_name": "layout_b",
                 "depth": 9,
                 "two_qubit_gates": 3,
+                "cnot_equivalent": 3,
                 "total_gates": 18,
                 "avg_error_2q": 0.006789,
                 "num_edges": 4,
@@ -1032,6 +1034,8 @@ class TestReportingUtilities:
         assert "layout_a" in captured.out
         assert "layout_b" in captured.out
         assert "2Q Gates" in captured.out
+        assert "CNOT Eq" in captured.out
+        assert "7" in captured.out
         assert "Err 2Q" in captured.out
 
 
@@ -1357,3 +1361,5 @@ class TestAnalyzePareto:
         analysis = analyze_pareto_front(result)
         assert analysis["metrics"].n_solutions == 0
         assert analysis["knee_point_idx"] == -1
+        assert analysis["selection_candidates"] == {}
+        assert analysis["tradeoff_table"] == []

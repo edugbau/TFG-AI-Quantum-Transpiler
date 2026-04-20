@@ -865,23 +865,24 @@ def print_layout_comparison(rows: list[dict]) -> None:
     Args:
         rows: Resultados de ``compare_layouts()``.
     """
-    print(f"\n{'=' * 90}")
+    print(f"\n{'=' * 108}")
     print(f"  COMPARACIÓN DE LAYOUTS")
-    print(f"{'=' * 90}")
+    print(f"{'=' * 108}")
     print(
-        f"  {'Layout':<20} {'Depth':>8} {'2Q Gates':>10} "
+        f"  {'Layout':<20} {'Depth':>8} {'2Q Gates':>10} {'CNOT Eq':>10} "
         f"{'Total':>8} {'Err 2Q':>12} {'Edges':>8}"
     )
-    print(f"  {'-' * 70}")
+    print(f"  {'-' * 88}")
 
     for row in rows:
         print(
             f"  {row['layout_name']:<20} "
             f"{row.get('depth', '-'):>8} "
             f"{row.get('two_qubit_gates', '-'):>10} "
+            f"{row.get('cnot_equivalent', '-'):>10} "
             f"{row.get('total_gates', '-'):>8} "
             f"{row.get('avg_error_2q', 0):>12.6f} "
             f"{row.get('num_edges', 0):>8}"
         )
 
-    print(f"{'=' * 90}\n")
+    print(f"{'=' * 108}\n")

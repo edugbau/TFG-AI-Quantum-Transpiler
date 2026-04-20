@@ -398,6 +398,8 @@ def analyze_pareto_front(
             "knee_point_layout": [],
             "best_per_objective": {},
             "compromise_layout": [],
+            "selection_candidates": {},
+            "tradeoff_table": [],
         }
 
     F = opt_result.pareto_fitness
