@@ -424,8 +424,8 @@ def analyze_pareto_front(
         }
 
     # Compromiso
-    compromise_layout = opt_result.get_compromise_layout()
-    compromise_idx = opt_result.pareto_layouts.index(compromise_layout)
+    compromise_idx = int(np.argmin(distances_to_ideal))
+    compromise_layout = opt_result.pareto_layouts[compromise_idx]
 
     selection_candidates = {
         "compromise": _build_candidate_entry(

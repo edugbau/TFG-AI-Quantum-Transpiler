@@ -1386,6 +1386,34 @@ class TestAnalyzePareto:
         assert analysis["best_per_objective"]["cnot_count"]["index"] == 1
         assert analysis["best_per_objective"]["cnot_count"]["layout"] == [20, 21]
 
+    def test_analyze_pareto_front_compromise_candidate_uses_actual_winning_row(self):
+        """El candidato compromise conserva el índice real aunque el layout se repita."""
+        result = OptimizationResult(
+            pareto_layouts=[[7, 8], [9, 10], [7, 8]],
+            pareto_fitness=np.array([
+                [1.0, 9.0],
+                [9.0, 1.0],
+                [5.0, 5.0],
+            ]),
+            objective_names=["depth", "cnot_count"],
+        )
+
+        analysis = analyze_pareto_front(result)
+
+        compromise = analysis["selection_candidates"]["compromise"]
+        expected_distance = np.linalg.norm([0.5, 0.5])
+
+        assert analysis["compromise_layout"] == [7, 8]
+        assert compromise["index"] == 2
+        assert compromise["layout"] == [7, 8]
+        assert compromise["distance_to_ideal"] == pytest.approx(expected_distance)
+        assert analysis["tradeoff_table"][compromise["index"]]["distance_to_ideal"] == pytest.approx(
+            expected_distance
+        )
+        assert analysis["tradeoff_table"][0]["distance_to_ideal"] != pytest.approx(
+            expected_distance
+        )
+
     def test_analyze_empty_front(self):
         """Funciona con un frente vacío."""
         result = OptimizationResult()
