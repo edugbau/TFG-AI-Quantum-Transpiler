@@ -725,6 +725,14 @@ class TestLayoutCampaigns:
         with pytest.raises(ValueError, match="Unknown layout campaign preset"):
             campaign_module.build_layout_campaign_spec(preset="custom")
 
+    def test_build_reference_layouts_raises_for_oversized_num_qubits(self):
+        """Las referencias fallan rápido si el circuito excede el backend."""
+        with pytest.raises(ValueError, match="num_qubits"):
+            campaign_module.build_reference_layouts(
+                num_qubits=8,
+                backend_num_qubits=7,
+            )
+
     def test_run_layout_selection_campaign_collects_rows_for_candidates_and_references(
         self, monkeypatch, tiny_config, single_circuit
     ):
@@ -1302,6 +1310,86 @@ class TestLayoutCampaigns:
             "heaviest_hex",
             "reverse_trivial",
             "high_index_block",
+        }
+
+    def test_run_layout_selection_campaign_continues_after_failed_circuit_seed(
+        self, monkeypatch, tiny_config
+    ):
+        """La campaña aísla fallos por circuito-semilla y continúa con el resto."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        circuit_ok = make_custom_circuit("ok_3q", QuantumCircuit(3, name="ok_3q"))
+        circuit_fail = make_custom_circuit(
+            "fail_3q", QuantumCircuit(3, name="fail_3q")
+        )
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        compare_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+
+        def fake_optimize_layout(*, circuit, **kwargs):
+            if circuit.name == "fail_3q":
+                raise RuntimeError("synthetic campaign failure")
+            return _make_campaign_opt_result()
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+
+        def fake_compare_layouts(*, circuit, layouts, **kwargs):
+            compare_calls.append(circuit.name)
+            return [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 60 + idx,
+                    "cnot_equivalent": 5.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ]
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            fake_compare_layouts,
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=[circuit_fail, circuit_ok],
+            seeds=[7],
+            backend_name="fake_torino",
+            config=tiny_config,
+            preset="quick",
+        )
+
+        assert compare_calls == ["ok_3q"]
+        assert len(rows) == 3
+        assert {row["circuit_name"] for row in rows} == {"ok_3q"}
+        assert {row["selection_strategy"] for row in rows} == {
+            "compromise",
+            "trivial",
+            "heaviest_hex",
         }
 
     def test_run_layout_selection_campaign_preserves_config_fields_except_seed(

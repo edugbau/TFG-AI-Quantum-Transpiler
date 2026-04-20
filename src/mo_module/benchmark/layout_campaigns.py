@@ -31,6 +31,11 @@ def build_reference_layouts(
     backend=None,
 ) -> dict[str, list[int]]:
     """Construye los layouts de referencia no evolutivos de la campaña."""
+    if num_qubits > backend_num_qubits:
+        raise ValueError(
+            "num_qubits cannot exceed backend_num_qubits in reference layouts"
+        )
+
     backend_for_heaviest_hex = backend
     if backend_for_heaviest_hex is None:
         backend_for_heaviest_hex = SimpleNamespace(num_qubits=backend_num_qubits)
@@ -169,30 +174,33 @@ def run_layout_selection_campaign(
     for benchmark_circuit in circuits:
         circuit = benchmark_circuit.create()
         for seed in seeds:
-            opt_result = optimize_layout(
-                circuit=circuit,
-                backend=backend,
-                config=_copy_config_with_seed(config, seed),
-            )
-            analysis = analyze_pareto_front(opt_result)
-            candidates = analysis.get("selection_candidates", {})
+            try:
+                opt_result = optimize_layout(
+                    circuit=circuit,
+                    backend=backend,
+                    config=_copy_config_with_seed(config, seed),
+                )
+                analysis = analyze_pareto_front(opt_result)
+                candidates = analysis.get("selection_candidates", {})
 
-            reference_layouts = build_reference_layouts(
-                circuit.num_qubits,
-                backend.num_qubits,
-                backend=backend,
-            )
-            layouts = {
-                **_select_candidate_layouts(candidates, spec),
-                **_select_reference_layouts(reference_layouts, spec),
-            }
-            evaluated_rows = compare_layouts(
-                circuit=circuit,
-                layouts=layouts,
-                backend=backend,
-                optimization_level=config.optimization_level,
-                seed=seed,
-            )
+                reference_layouts = build_reference_layouts(
+                    circuit.num_qubits,
+                    backend.num_qubits,
+                    backend=backend,
+                )
+                layouts = {
+                    **_select_candidate_layouts(candidates, spec),
+                    **_select_reference_layouts(reference_layouts, spec),
+                }
+                evaluated_rows = compare_layouts(
+                    circuit=circuit,
+                    layouts=layouts,
+                    backend=backend,
+                    optimization_level=config.optimization_level,
+                    seed=seed,
+                )
+            except Exception:
+                continue
 
             for row in evaluated_rows:
                 strategy = row["layout_name"]
