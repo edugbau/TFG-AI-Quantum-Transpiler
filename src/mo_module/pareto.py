@@ -140,6 +140,9 @@ def compute_pareto_metrics(
 
     n_solutions, n_objectives = pareto_fitness.shape
 
+    if n_solutions == 0:
+        return ParetoMetrics(n_solutions=0)
+
     # Punto ideal y nadir
     ideal = pareto_fitness.min(axis=0)
     nadir = pareto_fitness.max(axis=0)

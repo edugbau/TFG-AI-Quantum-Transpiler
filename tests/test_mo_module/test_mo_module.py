@@ -1267,6 +1267,19 @@ class TestParetoMetrics:
         assert metrics.n_solutions == 1
         assert metrics.hypervolume > 0
 
+    def test_compute_metrics_empty_front_returns_no_data_metrics(self):
+        """Un frente vacío devuelve métricas válidas de no-datos."""
+        metrics = compute_pareto_metrics(np.empty((0, 2)))
+
+        assert isinstance(metrics, ParetoMetrics)
+        assert metrics.n_solutions == 0
+        assert metrics.hypervolume == 0.0
+        assert metrics.spacing == 0.0
+        assert metrics.spread is None
+        assert metrics.ideal_point is None
+        assert metrics.nadir_point is None
+        assert metrics.reference_point is None
+
     def test_metrics_summary(self):
         """El resumen contiene información legible."""
         F = np.array([[1.0, 5.0], [5.0, 1.0]])
