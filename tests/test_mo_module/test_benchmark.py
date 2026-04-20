@@ -924,10 +924,80 @@ class TestLayoutCampaigns:
             },
             "trivial": {
                 "count": 1,
-                "depth_mean": None,
-                "cnot_equivalent_mean": None,
+                "depth_mean": 0.0,
+                "cnot_equivalent_mean": 0.0,
             },
         }
+
+    def test_run_layout_selection_campaign_allows_omitted_config_with_keyword_only_call(
+        self, monkeypatch, single_circuit
+    ):
+        """La campaña acepta config omitido y expone una llamada keyword-only."""
+        campaign_fn = getattr(benchmark_module, "run_layout_selection_campaign", None)
+        assert campaign_fn is not None
+
+        fake_backend = SimpleNamespace(name="fake_torino", num_qubits=7)
+        optimize_calls = []
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_backend",
+            lambda name: fake_backend,
+            raising=False,
+        )
+
+        def fake_optimize_layout(*, circuit, backend, config):
+            optimize_calls.append(config)
+            return _make_campaign_opt_result()
+
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.optimize_layout",
+            fake_optimize_layout,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.analyze_pareto_front",
+            lambda result: {
+                "selection_candidates": {
+                    "compromise": {"layout": [3, 4, 5], "index": 3},
+                    "knee": {"layout": [1, 2, 3], "index": 1},
+                    "best_depth": {"layout": [2, 3, 4], "index": 2},
+                    "best_cnot_count": {"layout": [0, 1, 2], "index": 0},
+                }
+            },
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.get_heaviest_hex_layout",
+            lambda backend, num_qubits: [6, 5, 4][:num_qubits],
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.mo_module.benchmark.layout_campaigns.compare_layouts",
+            lambda *, layouts, **kwargs: [
+                {
+                    "layout_name": name,
+                    "layout": layout,
+                    "depth": 100 + idx,
+                    "cnot_equivalent": 10.0 + idx,
+                }
+                for idx, (name, layout) in enumerate(layouts.items())
+            ],
+            raising=False,
+        )
+
+        rows = campaign_fn(
+            circuits=single_circuit,
+            seeds=[55],
+            backend_name="fake_torino",
+        )
+
+        assert len(rows) == 6
+        assert len(optimize_calls) == 1
+        assert isinstance(optimize_calls[0], OptimizerConfig)
+        assert optimize_calls[0].objectives == ["depth", "cnot_count"]
+
+        with pytest.raises(TypeError):
+            campaign_fn(single_circuit, [55])
 
     def test_run_layout_selection_campaign_keeps_dynamic_best_objective_candidates(
         self, monkeypatch, tiny_config, single_circuit

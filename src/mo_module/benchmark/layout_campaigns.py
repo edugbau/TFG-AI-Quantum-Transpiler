@@ -61,9 +61,10 @@ def _append_metric_if_present(values: list[float], row: dict, key: str) -> None:
 
 
 def run_layout_selection_campaign(
+    *,
     circuits: list[BenchmarkCircuit],
     seeds: list[int],
-    config: OptimizerConfig,
+    config: OptimizerConfig | None = None,
     backend_name: str = "fake_torino",
 ) -> list[dict]:
     """Ejecuta una campaña comparando candidatos MO y referencias.
@@ -72,6 +73,15 @@ def run_layout_selection_campaign(
     Pareto, selecciona cuatro candidatos del frente y los compara frente a
     dos referencias externas con ``compare_layouts``.
     """
+    if config is None:
+        config = OptimizerConfig(
+            algorithm="nsga2",
+            population_size=30,
+            n_generations=50,
+            objectives=["depth", "cnot_count"],
+            verbose=False,
+        )
+
     backend = get_backend(backend_name)
     rows: list[dict] = []
 
@@ -144,12 +154,12 @@ def summarize_layout_campaign(rows: list[dict]) -> dict[str, dict[str, float]]:
         summary[layout_name] = {
             "count": count,
             "depth_mean": (
-                float(np.mean(values["depth"])) if values["depth"] else None
+                float(np.mean(values["depth"])) if values["depth"] else 0.0
             ),
             "cnot_equivalent_mean": (
                 float(np.mean(values["cnot_equivalent"]))
                 if values["cnot_equivalent"]
-                else None
+                else 0.0
             ),
         }
 
