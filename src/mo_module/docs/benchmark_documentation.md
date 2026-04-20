@@ -52,6 +52,24 @@ Transforma los resultados crudos del runner en estadísticas descriptivas estruc
 - **`BenchmarkReport`**: Colección de `CircuitAnalysis` con métodos `to_text()` (para consola) y `to_dict()` (para JSON/pandas).
 - **Test de Kruskal-Wallis** (`_seed_stability_test`): Compara las distribuciones del primer objetivo entre grupos de semillas. Un p-valor > 0.05 indica que el algoritmo es *estable* (semillas distintas producen resultados estadísticamente similares). Se usa Kruskal-Wallis en lugar de ANOVA porque no asume normalidad.
 
+### 4. Campañas de Layout (`layout_campaigns.py`)
+
+`layout_campaigns.py` añade tooling experimental local al módulo MO para comparar layouts MO seleccionados frente a referencias controladas, sin actuar como puente de orquestación hacia `rl_module`.
+
+- **`run_layout_selection_campaign()`**: Ejecuta una campaña circuito × seed que optimiza el layout, analiza el frente de Pareto y evalúa con `compare_layouts()` solo los candidatos/referencias activados por un preset.
+- **`build_layout_campaign_spec()`**: Centraliza los presets `quick`, `balanced` y `thorough`.
+- **`build_reference_layouts()`**: Construye las referencias `trivial`, `heaviest_hex`, `reverse_trivial` y `high_index_block`.
+
+Presets Phase 3:
+
+| Preset | Candidatos MO | Referencias |
+|:---|:---|:---|
+| `quick` | `compromise` | `trivial`, `heaviest_hex` |
+| `balanced` | `compromise`, `knee`, `best_<objective>` | `trivial`, `heaviest_hex` |
+| `thorough` | Todos los candidatos MO disponibles | `trivial`, `heaviest_hex`, `reverse_trivial`, `high_index_block` |
+
+Las referencias adicionales `reverse_trivial` y `high_index_block` introducen comparadores adversariales controlados dentro del propio módulo MO. `heaviest_hex` sigue siendo la referencia topológica conectada obtenida desde `qiskit_interface`.
+
 ## Patrones de Diseño Aplicados
 
 | Patrón | Dónde | Propósito |
@@ -59,6 +77,7 @@ Transforma los resultados crudos del runner en estadísticas descriptivas estruc
 | **Factory (método `create`)** | `BenchmarkCircuit.create()` | Generación diferida del circuito; permite circuitos custom sin serializar `QuantumCircuit` |
 | **Dataclass como DTO** | `BenchmarkRun`, `BenchmarkResultSet`, `BenchmarkReport` | Transportar datos entre capas sin dependencias circulares |
 | **Facade** | `run_benchmark()` | Una sola función de entrada para el caso de uso habitual; oculta la composición `Runner → ResultSet → Report` |
+| **Preset object implícito** | `layout_campaigns.py` | Seleccionar subconjuntos reproducibles de candidatos y referencias sin cambiar la API principal del benchmark |
 | **Dataclass frozen** | `BenchmarkCircuit` | Inmutabilidad: el descriptor de un circuito no debe cambiar tras su definición |
 
 ## Pipelines (Flujos de Trabajo)
@@ -103,6 +122,15 @@ Para cada circuito en `BenchmarkResultSet`:
 5. Ejecutar `_seed_stability_test()`: grupos de valores del frente de Pareto → Kruskal-Wallis → p-valor.
 6. Empaquetar en `CircuitAnalysis`.
 
+### C. Pipeline de `run_layout_selection_campaign()`
+
+1. Resolver el preset activo con `build_layout_campaign_spec()` (`quick`, `balanced` o `thorough`).
+2. Para cada circuito y seed, ejecutar `optimize_layout()` y `analyze_pareto_front()`.
+3. Construir referencias con `build_reference_layouts()` (`trivial`, `heaviest_hex`, `reverse_trivial`, `high_index_block`).
+4. Filtrar candidatos MO y referencias según el preset.
+5. Evaluar solo ese subconjunto con `compare_layouts()` y añadir metadatos (`selection_strategy`, `layout_family`, `pareto_index`).
+6. Si una evaluación circuito-seed falla, la campaña continúa con el siguiente caso para mantener el estilo robusto del tooling de benchmark.
+
 ## Decisiones de Diseño
 
 ### ¿Por qué el runner itera sobre semillas y no sobre circuitos en el bucle exterior?
@@ -119,6 +147,9 @@ Los valores de fitness del frente de Pareto no tienen distribución normal garan
 
 ### ¿Por qué `BenchmarkCircuit` es frozen?
 Un descriptor de circuito es conceptualmente constante: su nombre, descripción y factory no deben cambiar una vez definido. El frozen dataclass lo garantiza en tiempo de ejecución y facilita su uso como clave de diccionario si fuera necesario.
+
+### ¿Por qué las layout campaigns usan presets en lugar de un flujo fijo?
+Phase 3 introdujo tres niveles de coste experimental. `quick` sirve para checks ligeros, `balanced` cubre el caso por defecto con compromiso + knee + mejores por objetivo, y `thorough` habilita el conjunto completo de candidatos MO y referencias adversariales controladas.
 
 ## Guía de Uso
 
@@ -178,6 +209,8 @@ print(results.summary())
 | **`compute_objective_stats`** | `analysis.py` | Estadísticas descriptivas | Llamada por `analyze_results` para cada objetivo de cada circuito |
 | **`analyze_results`** | `analysis.py` | Genera informe completo | Punto de entrada del análisis post-ejecución |
 | **`run_benchmark`** | `__init__.py` | Facade de una sola llamada | Para uso interactivo y notebooks |
+| **`run_layout_selection_campaign`** | `layout_campaigns.py` | Campaña preset-driven de layouts | Comparar candidatos MO frente a referencias locales del módulo |
+| **`build_reference_layouts`** | `layout_campaigns.py` | Referencias Phase 3 | Construir `trivial`, `heaviest_hex`, `reverse_trivial` y `high_index_block` |
 
 ## Integración con el Resto del Módulo
 

@@ -155,8 +155,20 @@ def run_layout_selection_campaign(
     """Ejecuta una campaña comparando candidatos MO y referencias.
 
     Por cada circuito y semilla, optimiza el layout, analiza el frente de
-    Pareto, selecciona cuatro candidatos del frente y los compara frente a
-    dos referencias externas con ``compare_layouts``.
+    Pareto y compara un subconjunto de candidatos/referencias determinado por
+    ``preset``.
+
+    Presets soportados:
+    - ``quick``: ``compromise`` + referencias ``trivial`` y ``heaviest_hex``.
+    - ``balanced``: ``compromise``, ``knee`` y candidatos ``best_<objective>``
+      + referencias ``trivial`` y ``heaviest_hex``.
+    - ``thorough``: todos los candidatos MO disponibles + referencias
+      ``trivial``, ``heaviest_hex``, ``reverse_trivial`` y
+      ``high_index_block``.
+
+    La campaña es tooling experimental local al módulo MO: evalúa layouts
+    para análisis interno y no implementa ningún puente de orquestación hacia
+    ``rl_module``.
     """
     if config is None:
         config = OptimizerConfig(

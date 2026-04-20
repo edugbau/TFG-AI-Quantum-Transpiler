@@ -281,6 +281,38 @@ def test_mo_docs_keep_mo_to_rl_handoff_exclusive_to_integration() -> None:
     )
 
 
+def test_mo_benchmark_docs_cover_phase3_layout_campaign_presets() -> None:
+    benchmark_text = read_text("src/mo_module/docs/benchmark_documentation.md")
+    campaigns_text = read_text("src/mo_module/benchmark/layout_campaigns.py")
+
+    assert_contains_all(
+        benchmark_text,
+        (
+            "layout_campaigns.py",
+            "run_layout_selection_campaign",
+            "build_reference_layouts",
+            "quick",
+            "balanced",
+            "thorough",
+            "reverse_trivial",
+            "high_index_block",
+            "heaviest_hex",
+            "tooling experimental local al módulo MO",
+            "no actúan como puente de orquestación hacia `rl_module`",
+        ),
+    )
+    assert_contains_all(
+        campaigns_text,
+        (
+            "preset",
+            "quick",
+            "balanced",
+            "thorough",
+            "heaviest_hex",
+        ),
+    )
+
+
 def test_mo_tuning_docs_keep_fixed_session_ref_point_contract() -> None:
     tuning_doc_text = read_text("src/mo_module/docs/tuning.md")
     internal_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
