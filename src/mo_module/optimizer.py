@@ -572,7 +572,7 @@ class OptimizationResult:
             "n_pareto_solutions": self.n_pareto_solutions,
             "objective_names": self.objective_names,
         }
-        if self.pareto_fitness is not None:
+        if self.pareto_fitness is not None and len(self.pareto_fitness) > 0:
             for i, name in enumerate(self.objective_names):
                 col = self.pareto_fitness[:, i]
                 result[f"pareto_{name}_min"] = float(col.min())

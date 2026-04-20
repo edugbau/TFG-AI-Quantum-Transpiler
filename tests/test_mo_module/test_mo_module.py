@@ -953,6 +953,37 @@ class TestOptimizationResult:
         assert "pareto_depth_min" in d
         assert "pareto_error_min" in d
 
+    def test_to_dict_with_empty_front_array_keeps_base_metadata_only(self):
+        """Un frente vacío serializa metadatos sin reducciones inválidas."""
+        result = OptimizationResult(
+            pareto_layouts=[],
+            pareto_fitness=np.empty((0, 2)),
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="empty_case",
+            num_logical_qubits=3,
+            n_generations_run=5,
+            elapsed_time_s=0.25,
+        )
+
+        data = result.to_dict()
+
+        assert data["algorithm_name"] == "nsga2"
+        assert data["backend_name"] == "fake_torino"
+        assert data["circuit_name"] == "empty_case"
+        assert data["num_logical_qubits"] == 3
+        assert data["n_generations_run"] == 5
+        assert data["elapsed_time_s"] == 0.25
+        assert data["n_pareto_solutions"] == 0
+        assert data["objective_names"] == ["depth", "cnot_count"]
+        assert "pareto_depth_min" not in data
+        assert "pareto_depth_max" not in data
+        assert "pareto_depth_mean" not in data
+        assert "pareto_cnot_count_min" not in data
+        assert "pareto_cnot_count_max" not in data
+        assert "pareto_cnot_count_mean" not in data
+
 
 class TestCompareLayouts:
     """Tests de comparación de layouts."""
