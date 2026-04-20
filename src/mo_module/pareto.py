@@ -135,6 +135,9 @@ def compute_pareto_metrics(
     Returns:
         ParetoMetrics con las métricas calculadas.
     """
+    if pareto_fitness.size == 0:
+        return ParetoMetrics(n_solutions=0)
+
     if pareto_fitness.ndim == 1:
         pareto_fitness = pareto_fitness.reshape(1, -1)
 
@@ -541,7 +544,7 @@ def plot_pareto_front_2d(
     )
 
     # Knee point
-    if highlight_knee and len(F) >= 2:
+    if highlight_knee and len(F) >= 1:
         knee_idx = select_knee_point(F)
         ax.scatter(
             F[knee_idx, objective_x],
@@ -698,7 +701,7 @@ def plot_parallel_coordinates(
         ax.plot(x, F_norm[i], c="steelblue", alpha=0.3, linewidth=1)
 
     # Knee point
-    if highlight_knee and len(F) >= 2:
+    if highlight_knee and len(F) >= 1:
         knee_idx = select_knee_point(F)
         ax.plot(
             x, F_norm[knee_idx],
@@ -714,7 +717,7 @@ def plot_parallel_coordinates(
         title = f"Coordenadas Paralelas — {opt_result.algorithm_name.upper()}"
     ax.set_title(title, fontsize=13)
 
-    if highlight_knee and len(F) >= 2:
+    if highlight_knee and len(F) >= 1:
         ax.legend(fontsize=10)
 
     ax.grid(True, alpha=0.3)

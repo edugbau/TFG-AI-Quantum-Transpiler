@@ -1203,6 +1203,34 @@ class TestParetoPlots:
         assert knee_idx == 0
         fig.clf()
 
+    def test_plot_pareto_front_2d_highlights_knee_for_single_solution(self):
+        """El plot 2D resalta el knee también con una sola solución."""
+        fitness = np.array([[3.0, 4.0]])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="single_point_front",
+        )
+
+        fig = plot_pareto_front_2d(
+            result,
+            highlight_knee=True,
+            highlight_compromise=False,
+        )
+
+        assert isinstance(fig, Figure)
+
+        knee_collection = next(
+            collection
+            for collection in fig.axes[0].collections
+            if collection.get_label() == "Knee Point"
+        )
+        np.testing.assert_allclose(knee_collection.get_offsets()[0], fitness[0])
+        fig.clf()
+
     def test_plot_pareto_front_3d_returns_figure_and_saves_file(
         self, pareto_result_3d, tmp_path
     ):
@@ -1316,6 +1344,28 @@ class TestParetoPlots:
         np.testing.assert_allclose(knee_line.get_ydata(), [0.0, 1.0])
         fig.clf()
 
+    def test_plot_parallel_coordinates_highlights_knee_for_single_solution(self):
+        """Las coordenadas paralelas resaltan el knee con una sola solución."""
+        fitness = np.array([[3.0, 4.0]])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="single_point_front",
+        )
+
+        fig = plot_parallel_coordinates(result, highlight_knee=True)
+
+        assert isinstance(fig, Figure)
+
+        knee_line = next(
+            line for line in fig.axes[0].lines if line.get_label() == "Knee Point"
+        )
+        np.testing.assert_allclose(knee_line.get_ydata(), [0.0, 0.0])
+        fig.clf()
+
 
 # ===========================================================================
 #  Tests — pareto
@@ -1351,6 +1401,19 @@ class TestParetoMetrics:
     def test_compute_metrics_empty_front_returns_no_data_metrics(self):
         """Un frente vacío devuelve métricas válidas de no-datos."""
         metrics = compute_pareto_metrics(np.empty((0, 2)))
+
+        assert isinstance(metrics, ParetoMetrics)
+        assert metrics.n_solutions == 0
+        assert metrics.hypervolume == 0.0
+        assert metrics.spacing == 0.0
+        assert metrics.spread is None
+        assert metrics.ideal_point is None
+        assert metrics.nadir_point is None
+        assert metrics.reference_point is None
+
+    def test_compute_metrics_flattened_empty_front_returns_no_data_metrics(self):
+        """Un frente vacío plano se trata también como caso sin datos."""
+        metrics = compute_pareto_metrics(np.array([]))
 
         assert isinstance(metrics, ParetoMetrics)
         assert metrics.n_solutions == 0
