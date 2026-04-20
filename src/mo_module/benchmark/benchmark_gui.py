@@ -15,7 +15,7 @@ import customtkinter as ctk
 # Ensure src is in the python path if executed standalone
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent.parent))
 
-from src.mo_module.benchmark import DEFAULT_BENCHMARK_CIRCUITS, analyze_results
+from src.mo_module.benchmark import DEFAULT_BENCHMARK_CIRCUITS
 from src.mo_module.benchmark.runner import BenchmarkRun, BenchmarkResultSet
 from src.mo_module.benchmark.tuning_gui_helpers import (
     _format_ref_point_display,
@@ -836,6 +836,8 @@ class BenchmarkGUI(ctk.CTk):
         result_set.total_elapsed_s = time.perf_counter() - t0
         self._last_results = result_set
         self._last_baseline = baseline
+        from src.mo_module.benchmark.analysis import analyze_results
+
         self._last_report = analyze_results(result_set, baseline_results=baseline)
 
         # Resumen de terminal
