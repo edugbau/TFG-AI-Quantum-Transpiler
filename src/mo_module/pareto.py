@@ -541,7 +541,7 @@ def plot_pareto_front_2d(
     )
 
     # Knee point
-    if highlight_knee and len(F) > 2:
+    if highlight_knee and len(F) >= 2:
         knee_idx = select_knee_point(F)
         ax.scatter(
             F[knee_idx, objective_x],
@@ -698,7 +698,7 @@ def plot_parallel_coordinates(
         ax.plot(x, F_norm[i], c="steelblue", alpha=0.3, linewidth=1)
 
     # Knee point
-    if highlight_knee and len(F) > 2:
+    if highlight_knee and len(F) >= 2:
         knee_idx = select_knee_point(F)
         ax.plot(
             x, F_norm[knee_idx],
@@ -714,7 +714,7 @@ def plot_parallel_coordinates(
         title = f"Coordenadas Paralelas — {opt_result.algorithm_name.upper()}"
     ax.set_title(title, fontsize=13)
 
-    if highlight_knee and len(F) > 2:
+    if highlight_knee and len(F) >= 2:
         ax.legend(fontsize=10)
 
     ax.grid(True, alpha=0.3)

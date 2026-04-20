@@ -1149,6 +1149,39 @@ class TestParetoPlots:
         np.testing.assert_allclose(compromise_offsets[0], [5.0, 5.0])
         fig.clf()
 
+    def test_plot_pareto_front_2d_highlights_knee_for_two_point_front(self):
+        """El plot 2D resalta el knee también en frentes de dos soluciones."""
+        fitness = np.array([
+            [1.0, 9.0],
+            [3.0, 1.0],
+        ])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1], [2, 3]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="two_point_front",
+        )
+
+        fig = plot_pareto_front_2d(
+            result,
+            highlight_knee=True,
+            highlight_compromise=False,
+        )
+
+        assert isinstance(fig, Figure)
+
+        knee_collection = next(
+            collection
+            for collection in fig.axes[0].collections
+            if collection.get_label() == "Knee Point"
+        )
+        knee_idx = select_knee_point(fitness)
+        np.testing.assert_allclose(knee_collection.get_offsets()[0], fitness[knee_idx])
+        assert knee_idx == 0
+        fig.clf()
+
     def test_plot_pareto_front_3d_returns_figure_and_saves_file(
         self, pareto_result_3d, tmp_path
     ):
@@ -1234,6 +1267,33 @@ class TestParetoPlots:
 
         # Assert
         assert fig is None
+
+    def test_plot_parallel_coordinates_highlights_knee_for_two_point_front(self):
+        """Las coordenadas paralelas resaltan el knee en frentes de dos soluciones."""
+        fitness = np.array([
+            [1.0, 9.0],
+            [3.0, 1.0],
+        ])
+        result = OptimizationResult(
+            pareto_layouts=[[0, 1], [2, 3]],
+            pareto_fitness=fitness,
+            objective_names=["depth", "cnot_count"],
+            algorithm_name="nsga2",
+            backend_name="fake_torino",
+            circuit_name="two_point_front",
+        )
+
+        fig = plot_parallel_coordinates(result, highlight_knee=True)
+
+        assert isinstance(fig, Figure)
+
+        knee_line = next(
+            line for line in fig.axes[0].lines if line.get_label() == "Knee Point"
+        )
+        knee_idx = select_knee_point(fitness)
+        assert knee_idx == 0
+        np.testing.assert_allclose(knee_line.get_ydata(), [0.0, 1.0])
+        fig.clf()
 
 
 # ===========================================================================
