@@ -41,6 +41,24 @@ def _build_reference_layouts(circuit_qubits: int, backend) -> dict[str, list[int
     }
 
 
+def _extract_available_candidate_layouts(candidates: dict) -> dict[str, list[int]]:
+    """Extrae solo los candidatos MO presentes en el análisis."""
+    layouts: dict[str, list[int]] = {}
+    for strategy in ("compromise", "knee", "best_depth", "best_cnot_count"):
+        candidate = candidates.get(strategy)
+        if candidate is not None and candidate.get("layout") is not None:
+            layouts[strategy] = candidate["layout"]
+    return layouts
+
+
+def _append_metric_if_present(values: list[float], row: dict, key: str) -> None:
+    """Añade una métrica numérica si la fila la contiene."""
+    value = row.get(key)
+    if value is None:
+        return
+    values.append(float(value))
+
+
 def run_layout_selection_campaign(
     circuits: list[BenchmarkCircuit],
     seeds: list[int],
@@ -68,10 +86,7 @@ def run_layout_selection_campaign(
             candidates = analysis.get("selection_candidates", {})
 
             layouts = {
-                "compromise": candidates["compromise"]["layout"],
-                "knee": candidates["knee"]["layout"],
-                "best_depth": candidates["best_depth"]["layout"],
-                "best_cnot_count": candidates["best_cnot_count"]["layout"],
+                **_extract_available_candidate_layouts(candidates),
                 **_build_reference_layouts(circuit.num_qubits, backend),
             }
             evaluated_rows = compare_layouts(
@@ -112,19 +127,29 @@ def summarize_layout_campaign(rows: list[dict]) -> dict[str, dict[str, float]]:
     grouped: dict[str, dict[str, list[float]]] = defaultdict(
         lambda: {"depth": [], "cnot_equivalent": []}
     )
+    counts: dict[str, int] = defaultdict(int)
 
     for row in rows:
-        grouped[row["layout_name"]]["depth"].append(float(row["depth"]))
-        grouped[row["layout_name"]]["cnot_equivalent"].append(
-            float(row["cnot_equivalent"])
+        layout_name = row["layout_name"]
+        counts[layout_name] += 1
+        _append_metric_if_present(grouped[layout_name]["depth"], row, "depth")
+        _append_metric_if_present(
+            grouped[layout_name]["cnot_equivalent"], row, "cnot_equivalent"
         )
 
     summary: dict[str, dict[str, float]] = {}
-    for layout_name, values in grouped.items():
+    for layout_name, count in counts.items():
+        values = grouped[layout_name]
         summary[layout_name] = {
-            "count": len(values["depth"]),
-            "depth_mean": float(np.mean(values["depth"])),
-            "cnot_equivalent_mean": float(np.mean(values["cnot_equivalent"])),
+            "count": count,
+            "depth_mean": (
+                float(np.mean(values["depth"])) if values["depth"] else None
+            ),
+            "cnot_equivalent_mean": (
+                float(np.mean(values["cnot_equivalent"]))
+                if values["cnot_equivalent"]
+                else None
+            ),
         }
 
     return summary
