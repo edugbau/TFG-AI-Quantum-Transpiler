@@ -1,3 +1,5 @@
+import pytest
+
 from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
 
 
@@ -67,3 +69,56 @@ def test_resolve_routing_model_contract_rejects_non_routing_metadata(tmp_path):
         assert "routing" in str(exc)
     else:
         raise AssertionError("Expected ValueError for non-routing metadata")
+
+
+def test_resolve_routing_model_contract_rejects_malformed_sidecar_json(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    (tmp_path / "run_metadata.json").write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="routing model metadata"):
+        resolve_routing_model_contract(model_path)
+
+
+def test_resolve_routing_model_contract_rejects_unknown_schema_version(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    metadata = build_run_metadata(
+        mode="routing",
+        algorithm="DQN",
+        seed=31,
+        frontier_mode="dag",
+        lookahead_window=8,
+        max_steps=144,
+        basis_gates=None,
+    )
+    metadata["schema_version"] = "rl_run_metadata.v2"
+    save_run_metadata(tmp_path, metadata)
+
+    with pytest.raises(ValueError, match="schema"):
+        resolve_routing_model_contract(model_path)
+
+
+def test_resolve_routing_model_contract_rejects_missing_required_keys(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    metadata = build_run_metadata(
+        mode="routing",
+        algorithm="DQN",
+        seed=31,
+        frontier_mode="dag",
+        lookahead_window=8,
+        max_steps=144,
+        basis_gates=None,
+    )
+    del metadata["environment"]["max_steps"]
+    save_run_metadata(tmp_path, metadata)
+
+    with pytest.raises(ValueError, match="max_steps"):
+        resolve_routing_model_contract(model_path)
