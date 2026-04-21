@@ -116,6 +116,7 @@ def setup_training_pipeline(
     run_model_dir = _make_run_dir(model_save_dir, prefix="rl")
     os.makedirs(run_log_dir, exist_ok=True)
     os.makedirs(run_model_dir, exist_ok=True)
+    metadata_basis_gates = basis_gates if mode == "synthesis" else None
     save_run_metadata(
         run_model_dir,
         build_run_metadata(
@@ -125,7 +126,7 @@ def setup_training_pipeline(
             frontier_mode=frontier_mode,
             lookahead_window=lookahead_window,
             max_steps=max_steps,
-            basis_gates=basis_gates,
+            basis_gates=metadata_basis_gates,
         ),
     )
     

@@ -2130,6 +2130,55 @@ class TestTrainingUtilities:
         assert metadata["environment"]["max_steps"] == 77
         assert metadata["environment"]["basis_gates"] is None
 
+    def test_setup_training_pipeline_omits_basis_gates_from_routing_metadata(
+        self, monkeypatch, linear_coupling_3q, tmp_path
+    ):
+        from src.rl_module import training
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log=None, seed=None, **kwargs):
+                self.env = env
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=True):
+                return None
+
+            def save(self, path):
+                Path(path).write_text("model", encoding="utf-8")
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(training, "Monitor", lambda env: env)
+        monkeypatch.setattr(training, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(training, "CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr(training, "EvalCallback", lambda *args, **kwargs: object())
+
+        agent = training.setup_training_pipeline(
+            target_circuit=QuantumCircuit(2),
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+            frontier_mode="dag",
+            algorithm="PPO",
+            total_timesteps=1,
+            seed=11,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+            lookahead_window=6,
+            max_steps=77,
+            basis_gates=["cz", "rz", "sx", "x"],
+        )
+
+        metadata = json.loads(
+            Path(agent.run_model_dir, "run_metadata.json").read_text(encoding="utf-8")
+        )
+        assert metadata["mode"] == "routing"
+        assert metadata["environment"]["basis_gates"] is None
+
     def test_setup_training_pipeline_reports_best_model_artifact_when_available(
         self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
     ):
