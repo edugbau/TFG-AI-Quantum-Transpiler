@@ -16,6 +16,8 @@ Proyecto de transpilación cuántica organizado en cuatro módulos: `qiskit_inte
 
 El objetivo es superar las limitaciones de heurísticas como SABRE. MO y RL evolucionan como módulos separados mientras la integración define y evalua los flujos `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
 
+Los modelos de routing guardados por `rl_module` pueden incluir un sidecar `run_metadata.json` junto al modelo para describir el contrato de evaluación consumible por `integration`, manteniendo desacoplados `mo_module` y `rl_module`.
+
 En el estado actual de integration v1, los escenarios basados en RL devuelven `episode summaries`, not final circuits. Reconstructing/exporting the final circuit from RL is left for a future iteration. QASM input is available for `Baseline` and `MO_Only` through `qasm_file`, mientras que los escenarios basados en RL todavía no exponen una entrada QASM equivalente en su superficie pública.
 
 ## Instalación

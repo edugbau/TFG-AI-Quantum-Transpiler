@@ -30,3 +30,14 @@ def test_integration_docs_describe_routing_evaluation_v1_scope_and_known_limits(
     assert "--circuit-format" in internal_doc_text
     assert "Baseline" in internal_doc_text and "MO_Only" in internal_doc_text
     assert "backend catalog is intentionally limited" in internal_doc_text
+
+
+def test_integration_docs_describe_rl_metadata_sidecar_contract() -> None:
+    repo_readme_text = read_text("README.md")
+    integration_readme_text = read_text("src/integration/README.md")
+    internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
+
+    assert "run_metadata.json" in repo_readme_text
+    assert "saved routing contract" in integration_readme_text
+    assert "metadata_source" in internal_doc_text
+    assert "legacy defaults" in internal_doc_text

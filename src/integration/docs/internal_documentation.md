@@ -98,6 +98,7 @@ Contiene la lógica de composición de los cuatro escenarios soportados.
 
 - **`_load_circuit()`**: carga circuitos mediante `qiskit_interface.load_circuit(...)`, resolviendo tanto `library` como `qasm_file` y propagando la metadata normalizada de entrada.
 - **`_load_agent()`**: carga el modelo RL usando `QuantumRLAgent.load(...)`, con importación perezosa.
+- **`_load_routing_contract()`**: intenta leer el sidecar `run_metadata.json` del checkpoint RL y usa ese saved routing contract cuando está disponible; si no existe, marca `metadata_source="legacy defaults"` y reporta el fallback en el resultado para mantener compatibilidad con checkpoints previos.
 - **`_require_scenario()`**: evita ejecutar el runner equivocado para un `ScenarioRequest` dado.
 - **`_validate_selected_layout()`**: valida ancho, duplicados, negatividad y rango físico del layout seleccionado por MO antes de entregarlo a Qiskit o RL.
 - **`_run_mo()`**: encapsula la elección entre `optimize_layout_quick()` y `optimize_layout()`.
@@ -114,12 +115,14 @@ Funciones principales:
   - devuelve `selected_layout`, `transpilation_metrics` y `transpilation_artifact`.
 - **`run_rl_only_scenario()`**
   - carga modelo RL;
+  - resuelve el contrato de routing desde `run_metadata.json` cuando está presente o desde legacy defaults cuando falta el sidecar;
   - evalúa el episodio con el layout inicial proporcionado por el llamador o el layout trivial del entorno;
   - devuelve `routing_summary` y la nota de limitación RL.
 - **`run_mo_rl_scenario()`**
   - ejecuta MO;
   - selecciona un layout;
   - lo inyecta en RL como `initial_layout`;
+  - reutiliza el mismo contrato de routing persistido y reporta si el `metadata_source` provino del sidecar o de legacy defaults;
   - devuelve `selected_layout`, `routing_summary` y la nota de limitación RL.
 
 ## Pipelines (Flujos de Trabajo)
@@ -148,7 +151,8 @@ Funciones principales:
 1. Crear `ScenarioRequest` con `rl_model_path`.
 2. Resolver backend.
 3. Cargar circuito y agente RL.
-4. Ejecutar `evaluate_routing_episode()`.
+4. Resolver el contrato de routing desde `run_metadata.json` si existe; en caso contrario, reportar el fallback a legacy defaults.
+5. Ejecutar `evaluate_routing_episode()`.
 5. Devolver `ScenarioResult` con `routing_summary`.
 
 ### D. Pipeline `MO+RL`
@@ -159,7 +163,8 @@ Funciones principales:
 4. Ejecutar MO y seleccionar layout.
 5. Validar el layout seleccionado.
 6. Cargar agente RL.
-7. Ejecutar `evaluate_routing_episode()` con ese layout como `initial_layout`.
+7. Resolver el contrato de routing desde el sidecar cuando esté disponible y registrar `metadata_source` cuando haya fallback a legacy defaults.
+8. Ejecutar `evaluate_routing_episode()` con ese layout como `initial_layout`.
 8. Devolver `ScenarioResult` con `selected_layout`, `routing_summary` y nota de limitación.
 
 ## CLI y Reproducibilidad
@@ -229,6 +234,7 @@ Dos decisiones de desacoplamiento importantes:
 - `QuantumRLAgent.load()` para cargar modelos ya entrenados.
 - `QuantumTranspilationEnv` en `mode="routing"` para ejecutar episodios.
 - Soporte de `initial_layout` vía `reset(options=...)` como contrato de handoff.
+- Sidecar `run_metadata.json` para persistir el contrato de evaluación de routing; si falta, `integration` conserva legacy defaults y reporta `metadata_source` para que el consumidor sepa de dónde salió la configuración.
 
 ## Limitaciones Conocidas de la v1
 
@@ -249,6 +255,9 @@ La v1 ya acepta `qasm_file` para `Baseline` y `MO_Only`. Ese soporte no se extie
 
 ### 4. Sin entrenamiento RL desde `integration`
 `integration` consume modelos ya entrenados, pero no invoca el pipeline de entrenamiento.
+
+### 5. Fallback para metadata ausente en checkpoints antiguos
+Cuando un checkpoint RL no trae `run_metadata.json`, `integration` sigue evaluándolo con legacy defaults. Ese fallback se reporta mediante `metadata_source` para distinguir configuraciones persistidas de configuraciones heredadas.
 
 ## Evolución Futura
 

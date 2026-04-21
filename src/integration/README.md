@@ -13,6 +13,8 @@ Integration v1 covers these routing evaluation scenarios:
 
 The current implementation focuses on scenario orchestration and shared contracts for routing evaluation.
 
+When an RL routing model has a neighboring `run_metadata.json`, integration uses the saved routing contract from that sidecar when available before falling back to legacy defaults.
+
 QASM input is available for the Qiskit-facing scenarios in this v1 scope. Concretely, `Baseline` and `MO_Only` can load circuits from `qasm_file`, while `RL_Only` and `MO+RL` remain centered on routing episode evaluation rather than circuit materialization.
 
 The backend catalog is intentionally limited to the current fake backends exposed by `qiskit_interface` so the integration scenarios stay reproducible and credential-free.
@@ -24,6 +26,8 @@ Internal implementation details, contracts and pipelines are documented in `docs
 In this v1 scope, RL-based scenarios return episode summaries, not final circuits.
 
 That means `RL_Only` and `MO+RL` currently report routing-level outcomes such as layouts, rewards, step counts, and swap counts, but they do not reconstruct or export a final routed circuit artifact yet.
+
+If the metadata sidecar is missing, integration reports that condition and falls back to legacy defaults so previously saved routing checkpoints remain evaluable.
 
 Reconstructing or exporting final circuits from RL is left for a future iteration.
 
