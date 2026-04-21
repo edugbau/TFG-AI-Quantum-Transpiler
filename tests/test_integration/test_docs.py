@@ -41,5 +41,7 @@ def test_integration_docs_describe_rl_metadata_sidecar_contract() -> None:
     assert "saved routing contract from that sidecar when available" in integration_readme_text
     assert "reports that condition through an extra note" in integration_readme_text
     assert "ScenarioResult.notes" in internal_doc_text
+    assert "resolve_routing_model_contract()" in internal_doc_text
     assert "Legacy RL evaluation defaults were used because no run metadata sidecar was found." in internal_doc_text
     assert "metadata_source" not in internal_doc_text
+    assert "_load_routing_contract()" not in internal_doc_text
