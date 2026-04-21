@@ -1,5 +1,7 @@
+import json
 import sys
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 import numpy as np
 import pytest
@@ -35,6 +37,20 @@ def _make_transpilation_result(**overrides):
         },
         **overrides,
     )
+
+
+def _write_legacy_sb3_model(tmp_path, model_name: str, *, policy_module: str) -> None:
+    with ZipFile(tmp_path / model_name, "w") as archive:
+        archive.writestr(
+            "data",
+            json.dumps(
+                {
+                    "policy_class": {
+                        "__module__": policy_module,
+                    }
+                }
+            ),
+        )
 
 
 def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -> None:
@@ -660,6 +676,59 @@ def test_run_rl_only_scenario_adds_fallback_note_when_metadata_is_missing(monkey
         _make_request("RL_Only", rl_model_path=str(model_path))
     )
 
+    assert result.notes == [
+        "RL outputs are episode summaries, not final circuits.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
+    ]
+
+
+def test_run_rl_only_scenario_recovers_dqn_algorithm_when_metadata_is_missing(monkeypatch, tmp_path) -> None:
+    from src.integration import scenarios
+
+    model_path = tmp_path / "legacy_dqn_model.zip"
+    _write_legacy_sb3_model(
+        tmp_path,
+        model_path.name,
+        policy_module="stable_baselines3.dqn.policies",
+    )
+    circuit = QuantumCircuit(3)
+    load_calls = []
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend="backend-object",
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": load_calls.append(algorithm) or "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: RoutingEpisodeSummary(
+            initial_layout=None,
+            final_layout=[0, 1, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+        ),
+    )
+
+    result = scenarios.run_rl_only_scenario(
+        _make_request("RL_Only", rl_model_path=str(model_path))
+    )
+
+    assert load_calls == ["DQN"]
     assert result.notes == [
         "RL outputs are episode summaries, not final circuits.",
         "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",

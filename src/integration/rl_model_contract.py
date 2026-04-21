@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+import json
 from json import JSONDecodeError
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 from src.rl_module.model_metadata import load_run_metadata_for_model
 
@@ -10,6 +12,8 @@ _DEFAULT_FRONTIER_MODE = "sequential"
 _DEFAULT_LOOKAHEAD_WINDOW = 4
 _DEFAULT_MAX_STEPS = 256
 _SUPPORTED_SCHEMA_VERSION = "rl_run_metadata.v1"
+_LEGACY_SB3_DATA_ENTRY = "data"
+_LEGACY_DQN_POLICY_MODULE = "stable_baselines3.dqn.policies"
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,23 @@ def _require_field(mapping: dict, field_name: str):
     return mapping[field_name]
 
 
+def _infer_legacy_algorithm_from_checkpoint(model_path: Path | str) -> str:
+    try:
+        with ZipFile(model_path) as archive:
+            payload = json.loads(archive.read(_LEGACY_SB3_DATA_ENTRY).decode("utf-8"))
+    except (FileNotFoundError, BadZipFile, KeyError, JSONDecodeError, OSError, UnicodeDecodeError):
+        return _DEFAULT_ALGORITHM
+
+    policy_class = payload.get("policy_class")
+    if not isinstance(policy_class, dict):
+        return _DEFAULT_ALGORITHM
+
+    policy_module = policy_class.get("__module__")
+    if policy_module == _LEGACY_DQN_POLICY_MODULE:
+        return "DQN"
+    return _DEFAULT_ALGORITHM
+
+
 def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContract:
     try:
         metadata = load_run_metadata_for_model(model_path)
@@ -45,7 +66,7 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
 
     if metadata is None:
         return RoutingModelContract(
-            algorithm=_DEFAULT_ALGORITHM,
+            algorithm=_infer_legacy_algorithm_from_checkpoint(model_path),
             frontier_mode=_DEFAULT_FRONTIER_MODE,
             lookahead_window=_DEFAULT_LOOKAHEAD_WINDOW,
             max_steps=_DEFAULT_MAX_STEPS,

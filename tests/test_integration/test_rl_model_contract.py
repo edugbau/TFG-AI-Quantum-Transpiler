@@ -1,6 +1,23 @@
+import json
+from zipfile import ZipFile
+
 import pytest
 
 from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
+
+
+def _write_legacy_sb3_model(tmp_path, model_name: str, *, policy_module: str) -> None:
+    with ZipFile(tmp_path / model_name, "w") as archive:
+        archive.writestr(
+            "data",
+            json.dumps(
+                {
+                    "policy_class": {
+                        "__module__": policy_module,
+                    }
+                }
+            ),
+        )
 
 
 def test_resolve_routing_model_contract_uses_sidecar_when_present(tmp_path):
@@ -35,6 +52,44 @@ def test_resolve_routing_model_contract_falls_back_to_legacy_defaults(tmp_path):
 
     model_path = tmp_path / "legacy_model.zip"
     model_path.write_text("stub", encoding="utf-8")
+
+    contract = resolve_routing_model_contract(model_path)
+
+    assert contract.algorithm == "PPO"
+    assert contract.frontier_mode == "sequential"
+    assert contract.lookahead_window == 4
+    assert contract.max_steps == 256
+    assert contract.metadata_source == "defaults"
+
+
+def test_resolve_routing_model_contract_recovers_dqn_from_legacy_checkpoint(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "legacy_dqn_model.zip"
+    _write_legacy_sb3_model(
+        tmp_path,
+        model_path.name,
+        policy_module="stable_baselines3.dqn.policies",
+    )
+
+    contract = resolve_routing_model_contract(model_path)
+
+    assert contract.algorithm == "DQN"
+    assert contract.frontier_mode == "sequential"
+    assert contract.lookahead_window == 4
+    assert contract.max_steps == 256
+    assert contract.metadata_source == "defaults"
+
+
+def test_resolve_routing_model_contract_recovers_ppo_from_legacy_checkpoint(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "legacy_ppo_model.zip"
+    _write_legacy_sb3_model(
+        tmp_path,
+        model_path.name,
+        policy_module="stable_baselines3.common.policies",
+    )
 
     contract = resolve_routing_model_contract(model_path)
 
