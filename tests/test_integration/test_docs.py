@@ -38,6 +38,8 @@ def test_integration_docs_describe_rl_metadata_sidecar_contract() -> None:
     internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
 
     assert "run_metadata.json" in repo_readme_text
-    assert "saved routing contract" in integration_readme_text
-    assert "metadata_source" in internal_doc_text
-    assert "legacy defaults" in internal_doc_text
+    assert "saved routing contract from that sidecar when available" in integration_readme_text
+    assert "reports that condition through an extra note" in integration_readme_text
+    assert "ScenarioResult.notes" in internal_doc_text
+    assert "Legacy RL evaluation defaults were used because no run metadata sidecar was found." in internal_doc_text
+    assert "metadata_source" not in internal_doc_text

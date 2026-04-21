@@ -27,7 +27,7 @@ In this v1 scope, RL-based scenarios return episode summaries, not final circuit
 
 That means `RL_Only` and `MO+RL` currently report routing-level outcomes such as layouts, rewards, step counts, and swap counts, but they do not reconstruct or export a final routed circuit artifact yet.
 
-If the metadata sidecar is missing, integration reports that condition and falls back to legacy defaults so previously saved routing checkpoints remain evaluable.
+If the metadata sidecar is missing, integration reports that condition through an extra note and falls back to legacy defaults so previously saved routing checkpoints remain evaluable.
 
 Reconstructing or exporting final circuits from RL is left for a future iteration.
 
