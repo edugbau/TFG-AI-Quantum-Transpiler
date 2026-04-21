@@ -1,6 +1,7 @@
 """Focused regression tests for the RL GUI mode views."""
 
 import importlib.util
+import json
 import pathlib
 import sys
 import types
@@ -379,6 +380,89 @@ class TestRLGuiModeViews:
         assert cfg["max_steps"] == 321
         assert cfg["lookahead"] == 7
         assert cfg["seed"] == 9
+
+    def test_training_thread_writes_gui_metadata_sidecar(self, tmp_path):
+        rl_gui = _load_gui_module("test_rl_gui_training_metadata_module", "rl_gui.py")
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, verbose=0, seed=None):
+                self.env = env
+                self.algorithm = algorithm
+                self.device = "cpu"
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=False):
+                return None
+
+            def save(self, path):
+                pathlib.Path(path).write_text("model", encoding="utf-8")
+
+        class DummyCallback:
+            def __init__(self, *args, **kwargs):
+                self.episode_rewards = []
+                self.episode_lengths = []
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEnv
+        rl_gui.QuantumRLAgent = DummyAgent
+        rl_gui.GUIProgressCallback = DummyCallback
+        rl_gui.EvalCallback = lambda *args, **kwargs: object()
+        rl_gui.Monitor = lambda env: env
+        rl_gui._make_run_dir = lambda base_dir, prefix="gui_rl": str(tmp_path / prefix)
+
+        class DummyGUI:
+            def __init__(self):
+                self._training_cfg = {
+                    "seed": 23,
+                    "circuit": object(),
+                    "circuit_name": "fixture-routing",
+                    "coupling_map": [(0, 1), (1, 2)],
+                    "mode": "routing",
+                    "frontier_mode": "dag",
+                    "lookahead": 5,
+                    "max_steps": 91,
+                    "algorithm": "PPO",
+                    "timesteps": 1,
+                }
+                self._is_training = True
+                self._agent = None
+                self._last_callback = None
+                self._train_button = type("B", (), {"configure": lambda *args, **kwargs: None})()
+                self._eval_button = type("B", (), {"configure": lambda *args, **kwargs: None})()
+                self._progress_label = type("L", (), {"configure": lambda *args, **kwargs: None})()
+                self._progress_bar = type("P", (), {"set": lambda *args, **kwargs: None})()
+
+            def _log(self, *_args):
+                return None
+
+            def _render_training_plots(self):
+                return None
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+            def _get_config(self):
+                return dict(self._training_cfg)
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._training_thread(gui, gui._training_cfg)
+
+        metadata = json.loads(
+            (tmp_path / "gui_rl" / "run_metadata.json").read_text(encoding="utf-8")
+        )
+        assert metadata["mode"] == "routing"
+        assert metadata["algorithm"] == "PPO"
+        assert metadata["seed"] == 23
+        assert metadata["environment"]["frontier_mode"] == "dag"
+        assert metadata["environment"]["lookahead_window"] == 5
+        assert metadata["environment"]["max_steps"] == 91
+        assert metadata["environment"]["basis_gates"] is None
 
 
 class TestRLEvaluationInspector:

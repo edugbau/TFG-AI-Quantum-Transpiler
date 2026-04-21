@@ -18,6 +18,7 @@ import gymnasium as gym
 
 from .agent import QuantumRLAgent
 from .environment import QuantumTranspilationEnv
+from .model_metadata import build_run_metadata, save_run_metadata
 from qiskit import QuantumCircuit
 from typing import Tuple, List, Optional
 
@@ -115,6 +116,18 @@ def setup_training_pipeline(
     run_model_dir = _make_run_dir(model_save_dir, prefix="rl")
     os.makedirs(run_log_dir, exist_ok=True)
     os.makedirs(run_model_dir, exist_ok=True)
+    save_run_metadata(
+        run_model_dir,
+        build_run_metadata(
+            mode=mode,
+            algorithm=algorithm,
+            seed=seed,
+            frontier_mode=frontier_mode,
+            lookahead_window=lookahead_window,
+            max_steps=max_steps,
+            basis_gates=basis_gates,
+        ),
+    )
     
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,

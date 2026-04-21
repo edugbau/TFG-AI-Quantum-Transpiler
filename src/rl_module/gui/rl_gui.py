@@ -35,6 +35,7 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
+from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
 from src.rl_module.training import set_global_seeds
 from src.rl_module.gui.routing_view import RoutingView
 from src.rl_module.gui.synthesis_view import SynthesisView
@@ -562,6 +563,20 @@ class RLBenchmarkGUI(ctk.CTk):
             run_log_dir = _make_run_dir("./experiments/logs/rl_logs", prefix="gui_rl")
             os.makedirs(run_model_dir, exist_ok=True)
             os.makedirs(run_log_dir, exist_ok=True)
+            save_run_metadata(
+                run_model_dir,
+                build_run_metadata(
+                    mode=cfg["mode"],
+                    algorithm=cfg["algorithm"],
+                    seed=cfg["seed"],
+                    frontier_mode=cfg["frontier_mode"],
+                    lookahead_window=cfg["lookahead"],
+                    max_steps=cfg["max_steps"],
+                    basis_gates=(
+                        cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None
+                    ),
+                ),
+            )
 
             callbacks = [callback]
             should_track_best = cfg["timesteps"] > 1
