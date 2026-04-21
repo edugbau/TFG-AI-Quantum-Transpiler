@@ -1,13 +1,14 @@
 from src.integration.contracts import RoutingEpisodeSummary
 
 
-def _create_routing_env(*, circuit, coupling_edges, max_steps, lookahead_window):
+def _create_routing_env(*, circuit, coupling_edges, frontier_mode, max_steps, lookahead_window):
     from src.rl_module.environment import QuantumTranspilationEnv
 
     return QuantumTranspilationEnv(
         target_circuit=circuit,
         coupling_map=coupling_edges,
         mode="routing",
+        frontier_mode=frontier_mode,
         max_steps=max_steps,
         lookahead_window=lookahead_window,
     )
@@ -39,12 +40,14 @@ def evaluate_routing_episode(
     agent,
     seed,
     initial_layout,
+    frontier_mode,
     max_steps,
     lookahead_window,
 ) -> RoutingEpisodeSummary:
     env = _create_routing_env(
         circuit=circuit,
         coupling_edges=coupling_edges,
+        frontier_mode=frontier_mode,
         max_steps=max_steps,
         lookahead_window=lookahead_window,
     )

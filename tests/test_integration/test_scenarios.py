@@ -11,6 +11,7 @@ from src.integration.contracts import (
     RoutingEpisodeSummary,
     ScenarioRequest,
 )
+from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
 
 
 def _make_request(scenario_name: str, **overrides) -> ScenarioRequest:
@@ -513,7 +514,11 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
-    monkeypatch.setattr(scenarios, "_load_agent", lambda request: "agent-object")
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
     monkeypatch.setattr(
         scenarios,
         "evaluate_routing_episode",
@@ -529,7 +534,8 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
     assert result.transpilation_metrics is None
     assert result.routing_summary is summary
     assert result.notes == [
-        "RL outputs are episode summaries, not final circuits."
+        "RL outputs are episode summaries, not final circuits.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
     assert eval_calls == [
         {
@@ -538,9 +544,125 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
             "agent": "agent-object",
             "seed": 17,
             "initial_layout": None,
+            "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
         }
+    ]
+
+
+def test_run_rl_only_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
+    from src.integration import scenarios
+
+    model_path = tmp_path / "best_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="DQN",
+            seed=17,
+            frontier_mode="dag",
+            lookahead_window=9,
+            max_steps=333,
+            basis_gates=None,
+        ),
+    )
+
+    load_calls = []
+    eval_calls = []
+    circuit = QuantumCircuit(3)
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            coupling_edges=[(0, 1)], backend="backend", backend_name=backend_name
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=None,
+            final_layout=[0, 1, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+        ),
+    )
+
+    class StubQuantumRLAgent:
+        @staticmethod
+        def load(path, env=None, algorithm="PPO", **kwargs):
+            load_calls.append({"path": path, "algorithm": algorithm, "env": env})
+            return "agent-object"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.rl_module",
+        SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
+    )
+
+    result = scenarios.run_rl_only_scenario(
+        _make_request("RL_Only", rl_model_path=str(model_path))
+    )
+
+    assert load_calls == [{"path": str(model_path), "algorithm": "DQN", "env": None}]
+    assert eval_calls[0]["lookahead_window"] == 9
+    assert eval_calls[0]["max_steps"] == 333
+    assert eval_calls[0]["frontier_mode"] == "dag"
+    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+
+
+def test_run_rl_only_scenario_adds_fallback_note_when_metadata_is_missing(monkeypatch, tmp_path) -> None:
+    from src.integration import scenarios
+
+    model_path = tmp_path / "legacy_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    circuit = QuantumCircuit(3)
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend="backend-object",
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: RoutingEpisodeSummary(
+            initial_layout=None,
+            final_layout=[0, 1, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+        ),
+    )
+
+    result = scenarios.run_rl_only_scenario(
+        _make_request("RL_Only", rl_model_path=str(model_path))
+    )
+
+    assert result.notes == [
+        "RL outputs are episode summaries, not final circuits.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
 
 
@@ -551,8 +673,8 @@ def test_load_agent_uses_public_rl_api(monkeypatch) -> None:
 
     class StubQuantumRLAgent:
         @staticmethod
-        def load(path, env=None):
-            load_calls.append((path, env))
+        def load(path, env=None, algorithm="PPO"):
+            load_calls.append((path, env, algorithm))
             return "agent-object"
 
     monkeypatch.setitem(
@@ -561,10 +683,13 @@ def test_load_agent_uses_public_rl_api(monkeypatch) -> None:
         SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
     )
 
-    agent = scenarios._load_agent(_make_request("RL_Only", rl_model_path="models/policy.zip"))
+    agent = scenarios._load_agent(
+        _make_request("RL_Only", rl_model_path="models/policy.zip"),
+        algorithm="DQN",
+    )
 
     assert agent == "agent-object"
-    assert load_calls == [("models/policy.zip", None)]
+    assert load_calls == [("models/policy.zip", None, "DQN")]
 
 
 def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(monkeypatch) -> None:
@@ -601,7 +726,11 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
         "select_layout_from_mo_result",
         lambda result, *, policy, objective_index=0: [2, 0, 1],
     )
-    monkeypatch.setattr(scenarios, "_load_agent", lambda request: "agent-object")
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
     monkeypatch.setattr(
         scenarios,
         "evaluate_routing_episode",
@@ -615,7 +744,8 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
     assert result.transpilation_metrics is None
     assert result.routing_summary is summary
     assert result.notes == [
-        "RL outputs are episode summaries, not final circuits."
+        "RL outputs are episode summaries, not final circuits.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
     assert eval_calls == [
         {
@@ -624,10 +754,91 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
             "agent": "agent-object",
             "seed": 17,
             "initial_layout": [2, 0, 1],
+            "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
         }
     ]
+
+
+def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
+    from src.integration import scenarios
+
+    model_path = tmp_path / "best_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="DQN",
+            seed=17,
+            frontier_mode="dag",
+            lookahead_window=9,
+            max_steps=333,
+            basis_gates=None,
+        ),
+    )
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path=str(model_path))
+    load_calls = []
+    eval_calls = []
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            coupling_edges=[(0, 1)],
+            backend=SimpleNamespace(num_qubits=3),
+            backend_name=backend_name,
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=[2, 0, 1],
+            final_layout=[1, 0, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+        ),
+    )
+
+    class StubQuantumRLAgent:
+        @staticmethod
+        def load(path, env=None, algorithm="PPO", **kwargs):
+            load_calls.append({"path": path, "algorithm": algorithm, "env": env})
+            return "agent-object"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.rl_module",
+        SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
+    )
+
+    result = scenarios.run_mo_rl_scenario(request)
+
+    assert load_calls == [{"path": str(model_path), "algorithm": "DQN", "env": None}]
+    assert eval_calls[0]["lookahead_window"] == 9
+    assert eval_calls[0]["max_steps"] == 333
+    assert eval_calls[0]["frontier_mode"] == "dag"
+    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
 
 
 def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monkeypatch) -> None:
@@ -654,7 +865,11 @@ def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monk
         "select_layout_from_mo_result",
         lambda result, *, policy, objective_index=0: [np.int64(2), np.int64(0), np.int64(1)],
     )
-    monkeypatch.setattr(scenarios, "_load_agent", lambda request: "agent-object")
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
     monkeypatch.setattr(
         scenarios,
         "evaluate_routing_episode",
@@ -732,7 +947,11 @@ def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypa
         "select_layout_from_mo_result",
         lambda result, *, policy, objective_index=0: selected_layout,
     )
-    monkeypatch.setattr(scenarios, "_load_agent", lambda request: stub_agent)
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": stub_agent,
+    )
     monkeypatch.setattr(
         scenarios,
         "evaluate_routing_episode",
@@ -770,7 +989,10 @@ def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypa
     assert payload["selected_layout"] == selected_layout
     assert payload["routing_summary"] is not None
     assert payload["routing_summary"]["initial_layout"] == selected_layout
-    assert payload["notes"] == ["RL outputs are episode summaries, not final circuits."]
+    assert payload["notes"] == [
+        "RL outputs are episode summaries, not final circuits.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
+    ]
     assert payload["routing_summary"]["final_layout"] == [1, 0, 2]
 
 

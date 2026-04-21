@@ -1,5 +1,7 @@
+import sys
 import json
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -15,6 +17,43 @@ class StubAgent:
     def predict(self, obs, deterministic: bool = False):
         self.calls.append((obs, deterministic))
         return self.action, None
+
+
+def test_create_routing_env_forwards_frontier_mode(monkeypatch) -> None:
+    from src.integration.routing_evaluator import _create_routing_env
+
+    init_calls = []
+    circuit = QuantumCircuit(2)
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            init_calls.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.rl_module.environment",
+        SimpleNamespace(QuantumTranspilationEnv=FakeEnv),
+    )
+
+    env = _create_routing_env(
+        circuit=circuit,
+        coupling_edges=[(0, 1)],
+        frontier_mode="dag",
+        max_steps=5,
+        lookahead_window=2,
+    )
+
+    assert isinstance(env, FakeEnv)
+    assert init_calls == [
+        {
+            "target_circuit": circuit,
+            "coupling_map": [(0, 1)],
+            "mode": "routing",
+            "frontier_mode": "dag",
+            "max_steps": 5,
+            "lookahead_window": 2,
+        }
+    ]
 
 
 def test_evaluate_routing_episode_uses_initial_layout(monkeypatch) -> None:
@@ -49,6 +88,7 @@ def test_evaluate_routing_episode_uses_initial_layout(monkeypatch) -> None:
         agent=StubAgent(),
         seed=11,
         initial_layout=initial_layout,
+        frontier_mode="sequential",
         max_steps=8,
         lookahead_window=4,
     )
@@ -73,6 +113,7 @@ def test_evaluate_routing_episode_returns_summary_fields_for_completed_reset() -
         agent=StubAgent(),
         seed=7,
         initial_layout=[1, 0],
+        frontier_mode="sequential",
         max_steps=5,
         lookahead_window=2,
     )
@@ -119,6 +160,7 @@ def test_evaluate_routing_episode_uses_deterministic_predict(monkeypatch) -> Non
         agent=agent,
         seed=5,
         initial_layout=None,
+        frontier_mode="sequential",
         max_steps=3,
         lookahead_window=2,
     )
@@ -159,6 +201,7 @@ def test_evaluate_routing_episode_handles_already_completed_reset_without_predic
         agent=agent,
         seed=13,
         initial_layout=None,
+        frontier_mode="sequential",
         max_steps=2,
         lookahead_window=1,
     )
@@ -193,6 +236,7 @@ def test_evaluate_routing_episode_normalizes_layouts_to_python_ints(monkeypatch)
         agent=StubAgent(),
         seed=19,
         initial_layout=np.array([1, 2, 0], dtype=np.int64),
+        frontier_mode="sequential",
         max_steps=4,
         lookahead_window=2,
     )
@@ -231,6 +275,7 @@ def test_evaluate_routing_episode_counts_gates_executed_during_partial_reset(mon
         agent=StubAgent(),
         seed=23,
         initial_layout=[0, 1, 2],
+        frontier_mode="sequential",
         max_steps=5,
         lookahead_window=2,
     )

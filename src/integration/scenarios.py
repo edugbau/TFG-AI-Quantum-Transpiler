@@ -3,10 +3,14 @@ import src.qiskit_interface as qiskit_interface
 from src.integration.backend_adapter import resolve_backend_bundle
 from src.integration.contracts import ScenarioRequest, ScenarioResult
 from src.integration.layout_policy import select_layout_from_mo_result
+from src.integration.rl_model_contract import resolve_routing_model_contract
 from src.integration.routing_evaluator import evaluate_routing_episode
 
 
 _RL_NOTE = "RL outputs are episode summaries, not final circuits."
+_RL_METADATA_FALLBACK_NOTE = (
+    "Legacy RL evaluation defaults were used because no run metadata sidecar was found."
+)
 _DEFAULT_RL_MAX_STEPS = 256
 _DEFAULT_RL_LOOKAHEAD_WINDOW = 4
 
@@ -130,12 +134,19 @@ def _load_circuit(request: ScenarioRequest):
     )
 
 
-def _load_agent(request: ScenarioRequest):
+def _load_agent(request: ScenarioRequest, *, algorithm: str = "PPO"):
     if request.rl_model_path is None:
         raise ValueError("rl_model_path is required for RL scenarios")
     from src.rl_module import QuantumRLAgent
 
-    return QuantumRLAgent.load(request.rl_model_path, env=None)
+    return QuantumRLAgent.load(request.rl_model_path, env=None, algorithm=algorithm)
+
+
+def _build_rl_notes(metadata_source: str) -> list[str]:
+    notes = [_RL_NOTE]
+    if metadata_source == "defaults":
+        notes.append(_RL_METADATA_FALLBACK_NOTE)
+    return notes
 
 
 def _require_scenario(request: ScenarioRequest, expected: str) -> None:
@@ -231,15 +242,17 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     circuit = _load_circuit(request)
     _validate_request_initial_layout(request, circuit)
     backend_bundle = resolve_backend_bundle(request.backend_name)
-    agent = _load_agent(request)
+    contract = resolve_routing_model_contract(request.rl_model_path)
+    agent = _load_agent(request, algorithm=contract.algorithm)
     routing_summary = evaluate_routing_episode(
         circuit=circuit,
         coupling_edges=backend_bundle.coupling_edges,
         agent=agent,
         seed=request.seed,
         initial_layout=request.initial_layout,
-        max_steps=_DEFAULT_RL_MAX_STEPS,
-        lookahead_window=_DEFAULT_RL_LOOKAHEAD_WINDOW,
+        frontier_mode=contract.frontier_mode,
+        max_steps=contract.max_steps,
+        lookahead_window=contract.lookahead_window,
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
@@ -251,7 +264,7 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
         transpilation_metrics=None,
         transpilation_artifact=None,
         routing_summary=routing_summary,
-        notes=[_RL_NOTE],
+        notes=_build_rl_notes(contract.metadata_source),
     )
 
 
@@ -269,15 +282,17 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         _get_request_num_qubits(request, circuit),
         backend_bundle.backend,
     )
-    agent = _load_agent(request)
+    contract = resolve_routing_model_contract(request.rl_model_path)
+    agent = _load_agent(request, algorithm=contract.algorithm)
     routing_summary = evaluate_routing_episode(
         circuit=circuit,
         coupling_edges=backend_bundle.coupling_edges,
         agent=agent,
         seed=request.seed,
         initial_layout=selected_layout,
-        max_steps=_DEFAULT_RL_MAX_STEPS,
-        lookahead_window=_DEFAULT_RL_LOOKAHEAD_WINDOW,
+        frontier_mode=contract.frontier_mode,
+        max_steps=contract.max_steps,
+        lookahead_window=contract.lookahead_window,
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
@@ -289,5 +304,5 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         transpilation_metrics=None,
         transpilation_artifact=None,
         routing_summary=routing_summary,
-        notes=[_RL_NOTE],
+        notes=_build_rl_notes(contract.metadata_source),
     )
