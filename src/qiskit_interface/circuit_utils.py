@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 # ---------------------------------------------------------------------------
-# Imports de Qiskit 2.3.0 (ver agents.md §Protocolo de Versión)
+# Imports de Qiskit 2.3.0 (ver qiskit-2x-compliance skill §Protocolo de Versión)
 # ---------------------------------------------------------------------------
 from qiskit import QuantumCircuit            # Clase principal de circuito
 from qiskit import qasm2, qasm3              # Módulos dedicados de QASM

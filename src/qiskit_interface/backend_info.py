@@ -14,7 +14,7 @@ unificado a:
   - Metadatos del backend (nombre, número de qubits).
 
 Decisiones de diseño:
-  1. **Solo Fake Backends** — Según la política del proyecto (agents.md
+  1. **Solo Fake Backends** — Según la política del proyecto (ver `qiskit-2x-compliance` skill
      §Política de Backends), NO se usan credenciales de IBM Quantum ni
      backends reales. Se emplean exclusivamente ``FakeTorino``,
      ``FakeSherbrooke`` y ``FakeBrisbane`` de

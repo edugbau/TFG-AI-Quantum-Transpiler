@@ -51,4 +51,4 @@ Before modifying code, load the appropriate skill(s) based on the module or task
 4. ✅ Benchmark comparisons include all four scenarios: Baseline, MO_Only, RL_Only, MO+RL.
 5. ✅ Module boundaries are respected: integration owns orchestration and handoff scenarios across the other modules.
 
-For in-depth guidance, see the project skills in [`./skills/`](./skills/).
+For in-depth guidance, see the project skills in [`.opencode/skills/`](../.opencode/skills/).
