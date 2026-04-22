@@ -20,6 +20,7 @@ Fecha: 2026-03-09
 """
 
 import json
+import types
 import pytest
 import numpy as np
 import os
@@ -46,6 +47,7 @@ from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.training import set_global_seeds, setup_training_pipeline
 from src.rl_module.synthesis_clifford import CliffordSynthesisState
 from src.rl_module.frontier import LookaheadEntry
+from src.rl_module import agent as agent_module
 
 # ---------------------------------------------------------------------------
 # Imports de dependencias externas
@@ -1330,6 +1332,127 @@ class TestQuantumTranspilationEnv:
             LookaheadEntry("cx", 2, 3, 1, 3, False),
         ]
 
+    def test_action_masks_enables_all_incident_edges_to_first_blocked_gate_in_sequential_mode(self):
+        qc = QuantumCircuit(4)
+        qc.cx(0, 3)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3), (0, 4)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            np.array([True, True, False, True], dtype=bool),
+        )
+
+    def test_action_masks_returns_all_true_when_no_blocked_gate_exists(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42)
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            np.array([True, True], dtype=bool),
+        )
+
+    def test_action_masks_keeps_non_improving_incident_edges_enabled(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 2]})
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            np.array([True, True, True], dtype=bool),
+        )
+
+    def test_action_masks_keeps_incident_edges_enabled_for_unreachable_blocked_gate(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            np.array([True, True], dtype=bool),
+        )
+
+    def test_action_masks_raises_when_blocked_gate_has_no_incident_valid_edges(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(2, 3)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 1]})
+
+        with pytest.raises(ValueError, match="unroutable"):
+            env.action_masks()
+
+    def test_action_masks_uses_all_blocked_front_layer_gates_in_dag_mode(self):
+        qc = QuantumCircuit(4)
+        qc.cx(0, 1)
+        qc.cx(2, 3)
+        qc.cx(1, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            frontier_mode="dag",
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 2, 1, 3]})
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            np.array([True, True, True], dtype=bool),
+        )
+
+    def test_action_masks_raises_in_dag_mode_when_any_blocked_front_layer_gate_is_stranded(self):
+        qc = QuantumCircuit(4)
+        qc.cx(0, 1)
+        qc.cx(2, 3)
+        qc.cx(1, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 4)],
+            mode="routing",
+            frontier_mode="dag",
+            max_steps=10,
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 2, 1, 3]})
+
+        with pytest.raises(ValueError, match="unroutable"):
+            env.action_masks()
+
     def test_step_marks_swap_between_empty_physical_nodes_as_invalid(self):
         """Un SWAP entre dos nodos fisicos vacios es invalido pero alcanzable desde la estrategia."""
         # Arrange
@@ -1790,6 +1913,33 @@ class TestQuantumRLAgent:
         agent = QuantumRLAgent(env=routing_env, algorithm="DQN", verbose=0)
         assert agent.algorithm_name == "DQN"
         assert agent.model is not None
+
+    def test_init_maskableppo_with_lazy_maskable_support(self, monkeypatch, routing_env):
+        """MaskablePPO se resuelve de forma diferida sin romper PPO/DQN legacy."""
+
+        class DummyMaskablePPO:
+            def __init__(self, policy, env, tensorboard_log, verbose, device, **kwargs):
+                self.policy = policy
+                self.env = env
+
+            def predict(self, observation, deterministic=True):
+                return 0, None
+
+        def fake_import_module(name):
+            assert name == "sb3_contrib"
+            return types.SimpleNamespace(MaskablePPO=DummyMaskablePPO)
+
+        monkeypatch.setattr(
+            agent_module,
+            "importlib",
+            types.SimpleNamespace(import_module=fake_import_module),
+            raising=False,
+        )
+
+        agent = QuantumRLAgent(env=routing_env, algorithm="MaskablePPO", verbose=0)
+
+        assert agent.algorithm_name == "MaskablePPO"
+        assert isinstance(agent.model, DummyMaskablePPO)
 
     def test_init_invalid_algorithm(self, routing_env):
         """Un algoritmo no soportado lanza ValueError."""
@@ -2261,6 +2411,90 @@ class TestTrainingUtilities:
         )
 
         assert agent.best_model_path is None
+
+    def test_setup_training_pipeline_uses_maskable_eval_callback_for_maskable_routing(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
+    ):
+        """Routing con MaskablePPO usa el callback de evaluacion con mascaras."""
+        callback_types = []
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log=None, seed=None, **kwargs):
+                self.env = env
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=True):
+                callback_types.extend(type(cb).__name__ for cb in callbacks)
+                return None
+
+            def save(self, path):
+                Path(path).write_text("model", encoding="utf-8")
+
+        class DummyCheckpointCallback:
+            def __init__(self, **kwargs):
+                pass
+
+        class DummyEvalCallback:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class DummyMaskableEvalCallback:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        from src.rl_module import training
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(training, "Monitor", lambda env: env)
+        monkeypatch.setattr(training, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(training, "CheckpointCallback", DummyCheckpointCallback)
+        monkeypatch.setattr(training, "EvalCallback", DummyEvalCallback)
+        monkeypatch.setattr(training, "MaskableEvalCallback", DummyMaskableEvalCallback, raising=False)
+
+        training.setup_training_pipeline(
+            target_circuit=simple_circuit_3q,
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+            algorithm="MaskablePPO",
+            total_timesteps=1,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+        )
+
+        assert callback_types == ["DummyCheckpointCallback", "DummyMaskableEvalCallback"]
+
+    def test_setup_training_pipeline_rejects_maskableppo_for_synthesis(
+        self, monkeypatch, simple_circuit_3q, linear_coupling_3q
+    ):
+        """MaskablePPO solo esta soportado para routing y synthesis falla temprano."""
+        env_constructed = False
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                nonlocal env_constructed
+                env_constructed = True
+
+        from src.rl_module import training
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", DummyEnv)
+
+        with pytest.raises(ValueError, match="MaskablePPO.*routing"):
+            training.setup_training_pipeline(
+                target_circuit=simple_circuit_3q,
+                coupling_map=linear_coupling_3q,
+                mode="synthesis",
+                algorithm="MaskablePPO",
+                total_timesteps=1,
+                basis_gates=["cz", "rz", "sx", "x"],
+            )
+
+        assert env_constructed is False
 
 
 class TestRLEvaluationGUI:

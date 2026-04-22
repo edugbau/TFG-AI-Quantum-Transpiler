@@ -6,6 +6,7 @@ modelos PPO/DQN, gestionando el uso de GPU (PyTorch) automáticamente.
 """
 
 import os
+import importlib
 import logging
 import torch
 from stable_baselines3 import PPO, DQN
@@ -25,6 +26,20 @@ class QuantumRLAgent:
         "PPO": PPO,
         "DQN": DQN
     }
+
+    @classmethod
+    def _get_algorithm_class(cls, algorithm: str) -> Type[BaseAlgorithm]:
+        if algorithm in cls.ALGORITHMS:
+            return cls.ALGORITHMS[algorithm]
+        if algorithm == "MaskablePPO":
+            try:
+                sb3_contrib = importlib.import_module("sb3_contrib")
+            except ModuleNotFoundError as exc:
+                raise ModuleNotFoundError(
+                    "MaskablePPO requiere instalar sb3-contrib."
+                ) from exc
+            return sb3_contrib.MaskablePPO
+        raise ValueError(f"Algoritmo {algorithm} no soportado. Usar: {list(cls.ALGORITHMS.keys()) + ['MaskablePPO']}")
 
     def __init__(
         self, 
@@ -46,17 +61,14 @@ class QuantumRLAgent:
             verbose: Nivel de verbosidad (0, 1 o 2).
             **kwargs: Hiperparámetros adicionales para el modelo SB3.
         """
-        if algorithm not in self.ALGORITHMS:
-            raise ValueError(f"Algoritmo {algorithm} no soportado. Usar: {list(self.ALGORITHMS.keys())}")
-            
+        AlgorithmClass = self._get_algorithm_class(algorithm)
+
         self.algorithm_name = algorithm
         self.env = env
         
         # Detección automática de dispositivo (CUDA si está disponible)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info("[%s] Inicializando agente en dispositivo: %s", algorithm, self.device.upper())
-        
-        AlgorithmClass = self.ALGORITHMS[algorithm]
         
         # Inyectar hiperparámetros por defecto para DQN si no se proporcionan,
         # para estabilizar el entrenamiento en un entorno de penalizaciones densas.
@@ -93,7 +105,12 @@ class QuantumRLAgent:
         self.model.learn(total_timesteps=total_timesteps, callback=callbacks, progress_bar=progress_bar)
         return self.model
 
-    def predict(self, observation: Dict[str, Any], deterministic: bool = True) -> tuple:
+    def predict(
+        self,
+        observation: Dict[str, Any],
+        deterministic: bool = True,
+        **kwargs: Any,
+    ) -> tuple:
         """
         Pide al agente que prediga una acción basada en una observación.
         
@@ -104,7 +121,7 @@ class QuantumRLAgent:
         Returns:
             Acción predicha por el modelo y el estado interno.
         """
-        action, states = self.model.predict(observation, deterministic=deterministic)
+        action, states = self.model.predict(observation, deterministic=deterministic, **kwargs)
         return action, states
 
     def save(self, path: str):
@@ -124,10 +141,7 @@ class QuantumRLAgent:
         FIX #6: Evita crear un modelo que se descarta inmediatamente.
         Usa object.__new__ para construir sin pasar por __init__ completo.
         """
-        if algorithm not in cls.ALGORITHMS:
-            raise ValueError(f"Algoritmo {algorithm} no soportado.")
-            
-        AlgorithmClass = cls.ALGORITHMS[algorithm]
+        AlgorithmClass = cls._get_algorithm_class(algorithm)
         
         # Crear instancia sin __init__ para evitar instanciar un modelo descartable
         agent = object.__new__(cls)

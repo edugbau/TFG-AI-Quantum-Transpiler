@@ -12,6 +12,22 @@ import numpy as np
 
 _MISSING = object()
 
+_TEMPORARY_STUB_MODULE_NAMES = (
+    "src",
+    "src.rl_module",
+    "src.rl_module.gui",
+    "src.rl_module.environment",
+    "src.rl_module.agent",
+    "src.rl_module.training",
+    "matplotlib",
+    "matplotlib.pyplot",
+    "matplotlib.backends.backend_tkagg",
+    "customtkinter",
+    "qiskit",
+    "stable_baselines3.common.monitor",
+    "stable_baselines3.common.callbacks",
+)
+
 
 def _install_stub_modules():
     repo_src_dir = pathlib.Path(__file__).resolve().parents[2] / "src"
@@ -211,14 +227,8 @@ def _install_stub_modules():
 
 @contextmanager
 def _temporary_gui_stub_modules():
-    stubbed_module_names = (
-        "matplotlib",
-        "matplotlib.pyplot",
-        "matplotlib.backends.backend_tkagg",
-        "customtkinter",
-    )
     previous_modules = {
-        name: sys.modules.get(name, _MISSING) for name in stubbed_module_names
+        name: sys.modules.get(name, _MISSING) for name in _TEMPORARY_STUB_MODULE_NAMES
     }
     _install_stub_modules()
     try:
@@ -279,7 +289,9 @@ SYNTHESIS_BASIS_PROFILES = RL_GUI_MODULE.SYNTHESIS_BASIS_PROFILES
 
 class TestRLGuiStubInstallation:
     def test_install_stub_modules_overrides_preloaded_customtkinter_module(self):
-        previous_customtkinter = sys.modules.get("customtkinter")
+        previous_modules = {
+            name: sys.modules.get(name, _MISSING) for name in _TEMPORARY_STUB_MODULE_NAMES
+        }
         sentinel_module = types.ModuleType("customtkinter")
         sys.modules["customtkinter"] = sentinel_module
 
@@ -287,10 +299,11 @@ class TestRLGuiStubInstallation:
             ctk_stub = _install_stub_modules()
             assert sys.modules["customtkinter"] is ctk_stub
         finally:
-            if previous_customtkinter is None:
-                sys.modules.pop("customtkinter", None)
-            else:
-                sys.modules["customtkinter"] = previous_customtkinter
+            for name, previous_module in previous_modules.items():
+                if previous_module is _MISSING:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = previous_module
 
     def test_load_gui_module_restores_preloaded_matplotlib_modules_after_import(self):
         previous_matplotlib = sys.modules.get("matplotlib")
@@ -322,6 +335,37 @@ class TestRLGuiStubInstallation:
                 sys.modules.pop("matplotlib.backends.backend_tkagg", None)
             else:
                 sys.modules["matplotlib.backends.backend_tkagg"] = previous_backend
+
+    def test_load_gui_module_restores_preloaded_qiskit_module_after_import(self):
+        previous_qiskit = sys.modules.get("qiskit")
+        sentinel_qiskit = types.ModuleType("qiskit")
+        sentinel_qiskit.QuantumCircuit = object
+        sentinel_qiskit.qasm2 = object()
+        sys.modules["qiskit"] = sentinel_qiskit
+
+        try:
+            gui_module = _load_gui_module("test_rl_gui_restore_qiskit_module", "rl_gui.py")
+            assert gui_module.RLBenchmarkGUI is not None
+            assert sys.modules["qiskit"] is sentinel_qiskit
+        finally:
+            if previous_qiskit is None:
+                sys.modules.pop("qiskit", None)
+            else:
+                sys.modules["qiskit"] = previous_qiskit
+
+    def test_load_gui_module_removes_stubbed_qiskit_when_not_preloaded(self):
+        previous_qiskit = sys.modules.get("qiskit", _MISSING)
+        sys.modules.pop("qiskit", None)
+
+        try:
+            gui_module = _load_gui_module("test_rl_gui_cleanup_qiskit_module", "rl_gui.py")
+            assert gui_module.RLBenchmarkGUI is not None
+            assert "qiskit" not in sys.modules
+        finally:
+            if previous_qiskit is _MISSING:
+                sys.modules.pop("qiskit", None)
+            else:
+                sys.modules["qiskit"] = previous_qiskit
 
 
 class TestRLGuiModeViews:
@@ -380,6 +424,122 @@ class TestRLGuiModeViews:
         assert cfg["max_steps"] == 321
         assert cfg["lookahead"] == 7
         assert cfg["seed"] == 9
+
+    def test_algorithm_selector_accepts_maskableppo(self):
+        app = RLBenchmarkGUI()
+
+        assert "MaskablePPO" in app._algo_option.values
+
+    def test_switching_to_synthesis_constrains_algorithm_menu_and_resets_maskableppo_selection(self):
+        app = RLBenchmarkGUI()
+
+        app._algo_option.set("MaskablePPO")
+        app._on_mode_changed("synthesis")
+
+        assert app._algo_option.values == ["PPO", "DQN"]
+        assert app._algo_option.get() == "PPO"
+
+    def test_switching_back_to_routing_restores_maskableppo_in_algorithm_menu(self):
+        app = RLBenchmarkGUI()
+
+        app._on_mode_changed("synthesis")
+        app._on_mode_changed("routing")
+
+        assert app._algo_option.values == ["PPO", "DQN", "MaskablePPO"]
+        assert app._algo_option.get() == "PPO"
+
+    def test_start_training_persists_masked_routing_config_for_maskableppo(self):
+        app = RLBenchmarkGUI()
+        app.after = lambda _delay, callback, *args: callback(*args)
+        app._clear_terminal = lambda: None
+        app._progress_bar.set = lambda *_args, **_kwargs: None
+        app._log = lambda *_args, **_kwargs: None
+
+        original_thread = RL_GUI_MODULE.threading.Thread
+
+        class DummyThread:
+            def __init__(self, target=None, args=(), daemon=None):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self):
+                return None
+
+        RL_GUI_MODULE.threading.Thread = DummyThread
+        try:
+            app._mode_option.set("routing")
+            app._algo_option.set("MaskablePPO")
+
+            app._start_training()
+        finally:
+            RL_GUI_MODULE.threading.Thread = original_thread
+
+        assert app._training_cfg is not None
+        assert app._training_cfg["algorithm"] == "MaskablePPO"
+        assert app._training_cfg["masked"] is True
+        assert app._training_cfg["mask_semantics"] == "frontier_restricted_edges.v1"
+
+    def test_start_training_blocks_maskableppo_for_synthesis_mode(self):
+        app = RLBenchmarkGUI()
+        log_lines = []
+        app.after = lambda _delay, callback, *args: callback(*args)
+        app._clear_terminal = lambda: None
+        app._progress_bar.set = lambda *_args, **_kwargs: None
+        app._log = log_lines.append
+
+        original_thread = RL_GUI_MODULE.threading.Thread
+
+        class DummyThread:
+            def __init__(self, target=None, args=(), daemon=None):
+                raise AssertionError("training thread should not start")
+
+        RL_GUI_MODULE.threading.Thread = DummyThread
+        try:
+            app._mode_option.set("synthesis")
+            app._algo_option.set("MaskablePPO")
+
+            app._start_training()
+        finally:
+            RL_GUI_MODULE.threading.Thread = original_thread
+
+        assert app._is_training is False
+        assert app._training_cfg is None
+        assert any("MaskablePPO" in line and "synthesis" in line for line in log_lines)
+
+    def test_build_eval_callback_uses_standard_callback_for_synthesis_maskableppo(self):
+        standard_calls = []
+        maskable_calls = []
+
+        def fake_eval_callback(*args, **kwargs):
+            standard_calls.append((args, kwargs))
+            return "standard-callback"
+
+        def fake_maskable_eval_callback(*args, **kwargs):
+            maskable_calls.append((args, kwargs))
+            return "maskable-callback"
+
+        original_eval_callback = RL_GUI_MODULE.EvalCallback
+        original_import_module = RL_GUI_MODULE.importlib.import_module
+        RL_GUI_MODULE.EvalCallback = fake_eval_callback
+        RL_GUI_MODULE.importlib.import_module = lambda _name: types.SimpleNamespace(
+            MaskableEvalCallback=fake_maskable_eval_callback
+        )
+        try:
+            callback = RL_GUI_MODULE._build_eval_callback(
+                eval_env="eval-env",
+                cfg={"mode": "synthesis", "algorithm": "MaskablePPO"},
+                run_model_dir="models",
+                run_log_dir="logs",
+                eval_freq=7,
+            )
+        finally:
+            RL_GUI_MODULE.EvalCallback = original_eval_callback
+            RL_GUI_MODULE.importlib.import_module = original_import_module
+
+        assert callback == "standard-callback"
+        assert len(standard_calls) == 1
+        assert maskable_calls == []
 
     def test_training_thread_writes_gui_metadata_sidecar(self, tmp_path):
         rl_gui = _load_gui_module("test_rl_gui_training_metadata_module", "rl_gui.py")
@@ -464,6 +624,89 @@ class TestRLGuiModeViews:
         assert metadata["environment"]["max_steps"] == 91
         assert metadata["environment"]["basis_gates"] is None
 
+    def test_training_thread_writes_masked_routing_metadata_sidecar(self, tmp_path):
+        rl_gui = _load_gui_module("test_rl_gui_training_masked_metadata_module", "rl_gui.py")
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, verbose=0, seed=None):
+                self.env = env
+                self.algorithm = algorithm
+                self.device = "cpu"
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=False):
+                return None
+
+            def save(self, path):
+                pathlib.Path(path).write_text("model", encoding="utf-8")
+
+        class DummyCallback:
+            def __init__(self, *args, **kwargs):
+                self.episode_rewards = []
+                self.episode_lengths = []
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEnv
+        rl_gui.QuantumRLAgent = DummyAgent
+        rl_gui.GUIProgressCallback = DummyCallback
+        rl_gui.Monitor = lambda env: env
+        rl_gui._make_run_dir = lambda base_dir, prefix="gui_rl": str(tmp_path / prefix)
+
+        class DummyGUI:
+            def __init__(self):
+                self._training_cfg = {
+                    "seed": 23,
+                    "circuit": object(),
+                    "circuit_name": "fixture-routing-maskable",
+                    "coupling_map": [(0, 1), (1, 2)],
+                    "mode": "routing",
+                    "frontier_mode": "dag",
+                    "lookahead": 5,
+                    "max_steps": 91,
+                    "algorithm": "MaskablePPO",
+                    "timesteps": 1,
+                    "masked": True,
+                    "mask_semantics": "frontier_restricted_edges.v1",
+                }
+                self._is_training = True
+                self._agent = None
+                self._last_callback = None
+                self._train_button = type("B", (), {"configure": lambda *args, **kwargs: None})()
+                self._eval_button = type("B", (), {"configure": lambda *args, **kwargs: None})()
+                self._progress_label = type("L", (), {"configure": lambda *args, **kwargs: None})()
+                self._progress_bar = type("P", (), {"set": lambda *args, **kwargs: None})()
+
+            def _log(self, *_args):
+                return None
+
+            def _render_training_plots(self):
+                return None
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+            def _get_config(self):
+                return dict(self._training_cfg)
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._training_thread(gui, gui._training_cfg)
+
+        metadata = json.loads(
+            (tmp_path / "gui_rl" / "run_metadata.json").read_text(encoding="utf-8")
+        )
+        assert metadata["mode"] == "routing"
+        assert metadata["algorithm"] == "MaskablePPO"
+        assert metadata["routing_policy"] == {
+            "masked": True,
+            "mask_semantics": "frontier_restricted_edges.v1",
+        }
+
 
 class TestRLEvaluationInspector:
     def test_episode_inspector_panel_renders_routing_summary_and_details(self):
@@ -501,6 +744,27 @@ class TestRLEvaluationInspector:
         assert "gate_name=cx" in panel._details.buffer
         assert "repeated_layout: True" in panel._details.buffer
         assert "undo_swap: True" in panel._details.buffer
+
+    def test_episode_inspector_panel_renders_mask_diagnostics_when_present(self):
+        panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
+        record = EvaluationStepRecord(
+            step=7,
+            reward=0.5,
+            action_type="swap",
+            is_valid_action=True,
+            layout_before=[0, 1, 2],
+            layout_after=[1, 0, 2],
+            swap_edge=(0, 1),
+            candidate_edges=[(0, 1), (1, 2)],
+            action_mask=[True, False],
+            valid_action_indices=[0],
+        )
+
+        panel.set_records([record])
+
+        assert "candidate_edges: [(0, 1), (1, 2)]" in panel._details.buffer
+        assert "action_mask: [True, False]" in panel._details.buffer
+        assert "valid_action_indices: [0]" in panel._details.buffer
 
     def test_episode_inspector_panel_renders_synthesis_summary_and_details(self):
         panel = EVALUATION_PANEL_MODULE.EpisodeInspectorPanel(parent=None)
@@ -932,6 +1196,365 @@ class TestRLEvaluationInspector:
         assert record.undo_swap is False
         assert gui._eval_inspector.records == [record]
         assert not any("│" in line for line in eval_log_lines)
+
+    def test_evaluation_thread_logs_and_records_mask_diagnostics_for_maskableppo(self):
+        rl_gui = _load_gui_module("test_rl_gui_eval_maskable_module", "rl_gui.py")
+        eval_log_lines = []
+
+        class DummyStrategy:
+            edges = [(0, 1), (1, 2), (2, 3)]
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2, 3], dtype=np.int32)
+                self.remaining_gates = [("cx", 0, 3)]
+                self.total_swaps = 0
+                self.strategy = DummyStrategy()
+
+            def get_visible_frontier_entries(self):
+                return [
+                    types.SimpleNamespace(
+                        gate_name="cx",
+                        logical_q1=0,
+                        logical_q2=3,
+                        physical_q1=0,
+                        physical_q2=3,
+                        executable=False,
+                    )
+                ]
+
+            def action_masks(self):
+                return np.array([True, False, True], dtype=bool)
+
+            def reset(self, seed=None):
+                obs = {
+                    "lookahead": np.array([0, 3], dtype=np.int32),
+                    "lookahead_physical": np.array([0, 3], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([2.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([1.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 1}
+
+            def step(self, action):
+                self.current_layout = np.array([1, 0, 2, 3], dtype=np.int32)
+                self.remaining_gates = []
+                self.total_swaps = 1
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "executed_gates": [("cx", 0, 3)],
+                    "swap_edge": (0, 1),
+                    "routing_progress_delta": 2.0,
+                    "repeated_layout": False,
+                    "undo_swap": False,
+                    "is_completed": True,
+                }
+                return obs, 3.5, True, False, info
+
+        class DummyAgent:
+            def __init__(self):
+                self.predict_calls = []
+
+            def predict(self, observation, deterministic=True, **kwargs):
+                self.predict_calls.append({
+                    "observation": observation,
+                    "deterministic": deterministic,
+                    "kwargs": kwargs,
+                })
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._eval_log = []
+                self._eval_inspector = types.SimpleNamespace(records=[])
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": object(),
+                    "circuit_name": "fixture-routing-maskable",
+                    "coupling_map": [(0, 1), (1, 2), (2, 3)],
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "MaskablePPO",
+                    "masked": True,
+                    "mask_semantics": "frontier_restricted_edges.v1",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _append_eval_record(self, record):
+                self._eval_log.append(record)
+                self._eval_inspector.records = list(self._eval_log)
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEvalEnv
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert len(gui._agent.predict_calls) == 1
+        predict_call = gui._agent.predict_calls[0]
+        assert list(predict_call["kwargs"]["action_masks"]) == [True, False, True]
+
+        assert len(gui._eval_log) == 1
+        record = gui._eval_log[0]
+        assert record.candidate_edges == [(0, 1), (1, 2), (2, 3)]
+        assert record.action_mask == [True, False, True]
+        assert record.valid_action_indices == [0, 2]
+        assert any("Candidate edges: [(0, 1), (1, 2), (2, 3)]" in line for line in eval_log_lines)
+        assert any("Action mask: [True, False, True]" in line for line in eval_log_lines)
+        assert any("Valid action indices: [0, 2]" in line for line in eval_log_lines)
+
+    def test_evaluation_thread_handles_maskableppo_when_eval_env_has_no_strategy(self):
+        rl_gui = _load_gui_module("test_rl_gui_eval_maskable_no_strategy_module", "rl_gui.py")
+        eval_log_lines = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2], dtype=np.int32)
+                self.remaining_gates = [("cx", 0, 2)]
+                self.total_swaps = 0
+
+            def get_visible_frontier_entries(self):
+                return []
+
+            def action_masks(self):
+                return np.array([True, False], dtype=bool)
+
+            def reset(self, seed=None):
+                obs = {
+                    "lookahead": np.array([0, 2], dtype=np.int32),
+                    "lookahead_physical": np.array([0, 2], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([2.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([1.0], dtype=np.float32),
+                }
+                return obs, {"total_gates": 1}
+
+            def step(self, action):
+                self.current_layout = np.array([1, 0, 2], dtype=np.int32)
+                self.remaining_gates = []
+                self.total_swaps = 1
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                info = {
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "executed_gates": [("cx", 0, 2)],
+                    "swap_edge": (0, 1),
+                    "routing_progress_delta": 2.0,
+                    "repeated_layout": False,
+                    "undo_swap": False,
+                    "is_completed": True,
+                }
+                return obs, 1.5, True, False, info
+
+        class DummyAgent:
+            def __init__(self):
+                self.predict_calls = []
+
+            def predict(self, observation, deterministic=True, **kwargs):
+                self.predict_calls.append(kwargs)
+                return 0, None
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._eval_log = []
+                self._eval_inspector = types.SimpleNamespace(records=[])
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": object(),
+                    "circuit_name": "fixture-routing-maskable-no-strategy",
+                    "coupling_map": [(0, 1), (1, 2)],
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "MaskablePPO",
+                    "masked": True,
+                    "mask_semantics": "frontier_restricted_edges.v1",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _append_eval_record(self, record):
+                self._eval_log.append(record)
+                self._eval_inspector.records = list(self._eval_log)
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEvalEnv
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert len(gui._agent.predict_calls) == 1
+        assert len(gui._eval_log) == 1
+        record = gui._eval_log[0]
+        assert record.candidate_edges == []
+        assert record.action_mask == [True, False]
+        assert record.valid_action_indices == [0]
+        assert any("Candidate edges: []" in line for line in eval_log_lines)
+
+    def test_evaluation_thread_skips_predict_when_routing_episode_is_completed_at_reset(self):
+        rl_gui = _load_gui_module("test_rl_gui_eval_completed_at_reset_module", "rl_gui.py")
+        eval_log_lines = []
+
+        class DummyEvalEnv:
+            def __init__(self, *args, **kwargs):
+                self.current_layout = np.array([0, 1, 2], dtype=np.int32)
+                self.remaining_gates = []
+                self.total_swaps = 0
+
+            def get_visible_frontier_entries(self):
+                return []
+
+            def reset(self, seed=None):
+                obs = {
+                    "lookahead": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_physical": np.array([-1, -1], dtype=np.int32),
+                    "lookahead_executable": np.array([0.0], dtype=np.float32),
+                    "lookahead_routing_distance": np.array([0.0], dtype=np.float32),
+                    "lookahead_valid_mask": np.array([0.0], dtype=np.float32),
+                }
+                return obs, {
+                    "total_gates": 1,
+                    "already_completed_at_reset": True,
+                }
+
+            def step(self, action):
+                raise AssertionError("step() should not be called for reset-complete episodes")
+
+        class DummyAgent:
+            def __init__(self):
+                self.predict_calls = 0
+
+            def predict(self, observation, deterministic=True, **kwargs):
+                self.predict_calls += 1
+                raise AssertionError("predict() should not be called for reset-complete episodes")
+
+        class DummyButton:
+            def configure(self, **kwargs):
+                return None
+
+        class DummyTabView:
+            def set(self, tab_name):
+                return None
+
+        class DummyGUI:
+            def __init__(self):
+                self._is_training = False
+                self._agent = DummyAgent()
+                self._eval_log = []
+                self._eval_inspector = types.SimpleNamespace(records=[])
+                self._training_cfg = {
+                    "seed": 42,
+                    "circuit": object(),
+                    "circuit_name": "fixture-routing-completed-at-reset",
+                    "coupling_map": [(0, 1), (1, 2)],
+                    "mode": "routing",
+                    "frontier_mode": "sequential",
+                    "lookahead": 1,
+                    "max_steps": 5,
+                    "algorithm": "PPO",
+                    "best_model_path": None,
+                    "last_model_path": None,
+                    "run_model_dir": "models",
+                }
+                self._eval_button = DummyButton()
+                self._tabview = DummyTabView()
+
+            def _append_eval_record(self, record):
+                self._eval_log.append(record)
+                self._eval_inspector.records = list(self._eval_log)
+
+            def _get_config(self):
+                return self._training_cfg
+
+            def _clear_eval_terminal(self):
+                return None
+
+            def _eval_log_write(self, text):
+                eval_log_lines.append(text)
+
+            def after(self, _delay, callback, *args):
+                callback(*args)
+
+        rl_gui.set_global_seeds = lambda seed: None
+        rl_gui.QuantumTranspilationEnv = DummyEvalEnv
+
+        gui = DummyGUI()
+        rl_gui.RLBenchmarkGUI._evaluation_thread(gui)
+
+        assert gui._agent.predict_calls == 0
+        assert gui._eval_log == []
+        assert any("Resultado: COMPLETADO" in line for line in eval_log_lines)
+        assert any("Steps totales: 0" in line for line in eval_log_lines)
+        assert any("Reward acumulada: 0.0" in line for line in eval_log_lines)
+        assert any("Layout final: [0, 1, 2]" in line for line in eval_log_lines)
 
     def test_evaluation_thread_builds_structured_synthesis_step_records(self):
         rl_gui = _load_gui_module("test_rl_gui_eval_synthesis_module", "rl_gui.py")

@@ -20,10 +20,20 @@ Escalate to level 3 when one or more of the following persists after reward tuni
 
 ## Level 3 Options
 
-- MaskablePPO to suppress invalid or dominated routing actions before sampling.
+- MaskablePPO to support the new masked routing regime for new checkpoints only.
 - Explicit action masks generated from frontier-aware heuristics.
 - Recurrent policy variants when short-term observation augmentation is no longer enough to encode trajectory context.
 - Optional longer transition history features if recurrence is too costly or unavailable.
+
+## Current masked-routing interpretation
+
+Task 5 clarifies the intended public contract of the masked-routing regime:
+
+- routing still uses a fixed action space over coupling-map edges;
+- `action_masks()` applies a deterministic frontier-aware hard mask over that fixed index set;
+- this behaves as a SABRE-style candidate restriction layer rather than as a dynamic action-space redesign;
+- `MaskablePPO` is the standard trainer for new masked-routing checkpoints only;
+- legacy PPO/DQN checkpoints remain supported through legacy/default or otherwise unmasked evaluation contracts.
 
 ## Migration Risks
 

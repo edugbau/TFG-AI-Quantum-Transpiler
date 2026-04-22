@@ -49,6 +49,33 @@ class FrontierProvider(Protocol):
     ) -> int:
         ...
 
+    def get_blocked_two_qubit_entries(
+        self,
+        current_layout: np.ndarray,
+        is_connected: Callable[[int, int], bool],
+    ) -> List[LookaheadEntry]:
+        ...
+
+
+def _build_lookahead_entry(
+    gate_name: str,
+    logical_q1: int,
+    logical_q2: int,
+    current_layout: np.ndarray,
+    is_connected: Callable[[int, int], bool],
+) -> LookaheadEntry:
+    physical_q1 = int(current_layout[logical_q1])
+    physical_q2 = int(current_layout[logical_q2])
+    executable = logical_q1 == logical_q2 or is_connected(physical_q1, physical_q2)
+    return LookaheadEntry(
+        gate_name=gate_name,
+        logical_q1=logical_q1,
+        logical_q2=logical_q2,
+        physical_q1=physical_q1,
+        physical_q2=physical_q2,
+        executable=executable,
+    )
+
 
 def _gate_tuple_from_name_and_qargs(gate_name: str, qargs: List[int]) -> GateTuple:
     if len(qargs) == 1:
@@ -79,21 +106,36 @@ class SequentialFrontier:
         visible_entries: List[LookaheadEntry] = []
 
         for gate_name, logical_q1, logical_q2 in list(self.pending_gates)[:lookahead_window]:
-            physical_q1 = int(current_layout[logical_q1])
-            physical_q2 = int(current_layout[logical_q2])
-            executable = logical_q1 == logical_q2 or is_connected(physical_q1, physical_q2)
             visible_entries.append(
-                LookaheadEntry(
-                    gate_name=gate_name,
-                    logical_q1=logical_q1,
-                    logical_q2=logical_q2,
-                    physical_q1=physical_q1,
-                    physical_q2=physical_q2,
-                    executable=executable,
+                _build_lookahead_entry(
+                    gate_name,
+                    logical_q1,
+                    logical_q2,
+                    current_layout,
+                    is_connected,
                 )
             )
 
         return visible_entries
+
+    def get_blocked_two_qubit_entries(
+        self,
+        current_layout: np.ndarray,
+        is_connected: Callable[[int, int], bool],
+    ) -> List[LookaheadEntry]:
+        for gate_name, logical_q1, logical_q2 in self.pending_gates:
+            if logical_q1 == logical_q2:
+                continue
+            entry = _build_lookahead_entry(
+                gate_name,
+                logical_q1,
+                logical_q2,
+                current_layout,
+                is_connected,
+            )
+            if not entry.executable:
+                return [entry]
+        return []
 
     def execute_ready_cascade(
         self,
@@ -117,6 +159,9 @@ class SequentialFrontier:
             if executed_gates is not None:
                 executed_gates.append(gate)
             executed_count += 1
+
+            if not cascade_successors:
+                break
 
         return executed_count
 
@@ -167,21 +212,38 @@ class DagFrontier:
 
         for node in self._ordered_front_layer()[:lookahead_window]:
             gate_name, logical_q1, logical_q2 = self._node_to_gate_tuple(node)
-            physical_q1 = int(current_layout[logical_q1])
-            physical_q2 = int(current_layout[logical_q2])
-            executable = logical_q1 == logical_q2 or is_connected(physical_q1, physical_q2)
             visible_entries.append(
-                LookaheadEntry(
-                    gate_name=gate_name,
-                    logical_q1=logical_q1,
-                    logical_q2=logical_q2,
-                    physical_q1=physical_q1,
-                    physical_q2=physical_q2,
-                    executable=executable,
+                _build_lookahead_entry(
+                    gate_name,
+                    logical_q1,
+                    logical_q2,
+                    current_layout,
+                    is_connected,
                 )
             )
 
         return visible_entries
+
+    def get_blocked_two_qubit_entries(
+        self,
+        current_layout: np.ndarray,
+        is_connected: Callable[[int, int], bool],
+    ) -> List[LookaheadEntry]:
+        blocked_entries: List[LookaheadEntry] = []
+        for node in self._ordered_front_layer():
+            gate_name, logical_q1, logical_q2 = self._node_to_gate_tuple(node)
+            if logical_q1 == logical_q2:
+                continue
+            entry = _build_lookahead_entry(
+                gate_name,
+                logical_q1,
+                logical_q2,
+                current_layout,
+                is_connected,
+            )
+            if not entry.executable:
+                blocked_entries.append(entry)
+        return blocked_entries
 
     def execute_ready_cascade(
         self,

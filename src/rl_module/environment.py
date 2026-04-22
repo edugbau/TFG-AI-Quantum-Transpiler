@@ -315,6 +315,51 @@ class QuantumTranspilationEnv(gym.Env):
             is_connected=self._is_connected,
         )
 
+    def action_masks(self) -> np.ndarray:
+        if self.mode != "routing":
+            raise AttributeError("action_masks is only available in routing mode.")
+
+        blocked_entries = self._frontier.get_blocked_two_qubit_entries(
+            current_layout=self.current_layout,
+            is_connected=self._is_connected,
+        )
+        strategy = self.strategy
+        if not isinstance(strategy, RoutingStrategy):
+            raise AttributeError("action_masks requires a RoutingStrategy.")
+
+        non_empty_edge_mask = np.array(
+            [
+                not (self._inverse_layout[pq1] == -1 and self._inverse_layout[pq2] == -1)
+                for pq1, pq2 in strategy.edges
+            ],
+            dtype=bool,
+        )
+
+        if not blocked_entries:
+            return np.ones(strategy.num_edges, dtype=bool)
+
+        mask = np.zeros(strategy.num_edges, dtype=bool)
+
+        for entry in blocked_entries:
+            entry_mask = np.zeros(strategy.num_edges, dtype=bool)
+            relevant_physical_qubits = {entry.physical_q1, entry.physical_q2}
+
+            for index, (pq1, pq2) in enumerate(strategy.edges):
+                if pq1 not in relevant_physical_qubits and pq2 not in relevant_physical_qubits:
+                    continue
+                if not non_empty_edge_mask[index]:
+                    continue
+                entry_mask[index] = True
+
+            if not np.any(entry_mask):
+                raise ValueError(
+                    "Masked routing state/config is unroutable: blocked frontier gate has no incident valid routing edges."
+                )
+
+            mask |= entry_mask
+
+        return mask
+
     def _layout_signature(self) -> Tuple[int, ...]:
         return tuple(int(value) for value in self.current_layout.tolist())
 

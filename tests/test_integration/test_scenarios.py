@@ -28,6 +28,19 @@ def _make_request(scenario_name: str, **overrides) -> ScenarioRequest:
     return ScenarioRequest(**data)
 
 
+def _make_request_without_validation(scenario_name: str, **overrides) -> ScenarioRequest:
+    request = object.__new__(ScenarioRequest)
+    valid_request = _make_request(
+        scenario_name,
+        rl_model_path="models/policy.zip" if scenario_name in {"RL_Only", "MO+RL"} else None,
+    )
+    for field_name in ScenarioRequest.__slots__:
+        setattr(request, field_name, getattr(valid_request, field_name))
+    for field_name, value in overrides.items():
+        setattr(request, field_name, value)
+    return request
+
+
 def _make_transpilation_result(**overrides):
     return SimpleNamespace(
         to_dict=lambda: {
@@ -563,6 +576,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
             "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
+            "masked": False,
         }
     ]
 
@@ -632,6 +646,77 @@ def test_run_rl_only_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None
     assert eval_calls[0]["lookahead_window"] == 9
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
+    assert eval_calls[0]["masked"] is False
+    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+
+
+def test_run_rl_only_scenario_forwards_masked_contract_fields(monkeypatch, tmp_path) -> None:
+    from src.integration import scenarios
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="MaskablePPO",
+            seed=17,
+            frontier_mode="dag",
+            lookahead_window=9,
+            max_steps=333,
+            basis_gates=None,
+            mask_semantics="frontier_restricted_edges.v1",
+        ),
+    )
+
+    load_calls = []
+    eval_calls = []
+    circuit = QuantumCircuit(3)
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            coupling_edges=[(0, 1)], backend="backend", backend_name=backend_name
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=None,
+            final_layout=[0, 1, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+        ),
+    )
+
+    class StubQuantumRLAgent:
+        @staticmethod
+        def load(path, env=None, algorithm="PPO", **kwargs):
+            load_calls.append({"path": path, "algorithm": algorithm, "env": env})
+            return "agent-object"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.rl_module",
+        SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
+    )
+
+    result = scenarios.run_rl_only_scenario(
+        _make_request("RL_Only", rl_model_path=str(model_path))
+    )
+
+    assert load_calls == [{"path": str(model_path), "algorithm": "MaskablePPO", "env": None}]
+    assert eval_calls[0]["lookahead_window"] == 9
+    assert eval_calls[0]["max_steps"] == 333
+    assert eval_calls[0]["frontier_mode"] == "dag"
+    assert eval_calls[0]["masked"] is True
     assert result.notes == ["RL outputs are episode summaries, not final circuits."]
 
 
@@ -735,6 +820,32 @@ def test_run_rl_only_scenario_recovers_dqn_algorithm_when_metadata_is_missing(mo
     ]
 
 
+def test_run_rl_only_scenario_requires_rl_model_path_before_contract_resolution(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request_without_validation("RL_Only", rl_model_path=None)
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend="backend-object",
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_routing_model_contract",
+        lambda model_path: (_ for _ in ()).throw(AssertionError("contract resolution should not be reached")),
+    )
+
+    with pytest.raises(ValueError, match="rl_model_path is required"):
+        scenarios.run_rl_only_scenario(request)
+
+
 def test_load_agent_uses_public_rl_api(monkeypatch) -> None:
     from src.integration import scenarios
 
@@ -826,6 +937,7 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
             "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
+            "masked": False,
         }
     ]
 
@@ -907,6 +1019,89 @@ def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
     assert eval_calls[0]["lookahead_window"] == 9
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
+    assert eval_calls[0]["masked"] is False
+    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+
+
+def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_path) -> None:
+    from src.integration import scenarios
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="MaskablePPO",
+            seed=17,
+            frontier_mode="dag",
+            lookahead_window=9,
+            max_steps=333,
+            basis_gates=None,
+            mask_semantics="frontier_restricted_edges.v1",
+        ),
+    )
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path=str(model_path))
+    load_calls = []
+    eval_calls = []
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_backend_bundle",
+        lambda backend_name: SimpleNamespace(
+            coupling_edges=[(0, 1)],
+            backend=SimpleNamespace(num_qubits=3),
+            backend_name=backend_name,
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=[2, 0, 1],
+            final_layout=[1, 0, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+        ),
+    )
+
+    class StubQuantumRLAgent:
+        @staticmethod
+        def load(path, env=None, algorithm="PPO", **kwargs):
+            load_calls.append({"path": path, "algorithm": algorithm, "env": env})
+            return "agent-object"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.rl_module",
+        SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
+    )
+
+    result = scenarios.run_mo_rl_scenario(request)
+
+    assert load_calls == [{"path": str(model_path), "algorithm": "MaskablePPO", "env": None}]
+    assert eval_calls[0]["lookahead_window"] == 9
+    assert eval_calls[0]["max_steps"] == 333
+    assert eval_calls[0]["frontier_mode"] == "dag"
+    assert eval_calls[0]["masked"] is True
     assert result.notes == ["RL outputs are episode summaries, not final circuits."]
 
 
@@ -961,6 +1156,72 @@ def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monk
     assert all(type(entry) is int for entry in result.selected_layout)
     assert eval_calls[0]["initial_layout"] == [2, 0, 1]
     assert all(type(entry) is int for entry in eval_calls[0]["initial_layout"])
+
+
+def test_run_mo_rl_scenario_requires_rl_model_path_before_contract_resolution(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request_without_validation("MO+RL", rl_model_path=None)
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend=SimpleNamespace(num_qubits=3),
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_routing_model_contract",
+        lambda model_path: (_ for _ in ()).throw(AssertionError("contract resolution should not be reached")),
+    )
+
+    with pytest.raises(ValueError, match="rl_model_path is required"):
+        scenarios.run_mo_rl_scenario(request)
+
+
+def test_mo_layout_validation_rejects_non_integer_entries_before_contract_resolution(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend=SimpleNamespace(num_qubits=4),
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2.9, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "resolve_routing_model_contract",
+        lambda model_path: (_ for _ in ()).throw(AssertionError("contract resolution should not be reached")),
+    )
+
+    with pytest.raises(ValueError, match="integer"):
+        scenarios.run_mo_rl_scenario(request)
 
 
 def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypatch) -> None:

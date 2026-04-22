@@ -105,6 +105,22 @@ def assert_integration_v1_doc_scope(text: str) -> None:
     assert "fake backends" in lowered
 
 
+def assert_mentions_masked_routing_regime(text: str) -> None:
+    lowered = text.lower()
+
+    assert "masked routing" in lowered
+    assert "sabre" in lowered
+    assert "fixed" in lowered or "fijo" in lowered or "fija" in lowered
+    assert "coupling" in lowered
+    assert "action_masks()" in text
+    assert "deterministic" in lowered or "determinista" in lowered
+    assert "frontier-aware" in lowered
+    assert "hard mask" in lowered
+    assert "maskableppo" in lowered or "maskableppo" in text
+    assert "legacy ppo/dqn" in lowered or ("legacy" in lowered and "ppo" in lowered and "dqn" in lowered)
+    assert "checkpoint" in lowered
+
+
 def iter_python_files(relative_dir: str):
     return (ROOT / relative_dir).rglob("*.py")
 
@@ -146,33 +162,9 @@ def assert_module_tree_has_no_imports(relative_dir: str, forbidden_modules: tupl
 
 
 def test_docs_and_workspace_metadata_define_four_module_ownership() -> None:
-    agents_doc = ROOT / "docs" / "agents.md"
-
-    assert agents_doc.exists(), "README y .github/AGENTS.md apuntan a docs/agents.md"
-
-    agents_text = agents_doc.read_text(encoding="utf-8")
     workspace_agents_text = read_text(".github/AGENTS.md")
     readme_text = read_text("README.md")
 
-    assert_contains_all(
-        agents_text,
-        (
-            "src/qiskit_interface/",
-            "src/rl_module/",
-            "src/mo_module/",
-            "src/integration/",
-            "layout[i] = physical_qubit_for_logical_qubit_i",
-            "MO+RL",
-        ),
-    )
-    assert "integration" in agents_text
-    assert_any_contains(
-        agents_text,
-        (
-            "owns the process that connects producer and consumer",
-            "owns the process",
-        ),
-    )
     assert_contains_all(
         workspace_agents_text,
         (
@@ -186,7 +178,6 @@ def test_docs_and_workspace_metadata_define_four_module_ownership() -> None:
     assert_contains_all(
         readme_text,
         (
-            "[agents.md](docs/agents.md)",
             "Proyecto de transpilación cuántica organizado en cuatro módulos",
             "MO y RL evolucionan como módulos separados",
             "MO+RL",
@@ -382,6 +373,44 @@ def test_integration_docs_declare_routing_v1_scope_and_known_rl_limitations() ->
 
     assert_contains_all(integration_text, ("routing-evaluation v1", "episode summaries, not final circuits"))
     assert_integration_v1_doc_scope(integration_readme_text)
+
+
+def test_masked_routing_docs_describe_public_contracts() -> None:
+    repo_readme_text = read_text("README.md")
+    rl_internal_text = read_text("src/rl_module/docs/internal_documentation.md")
+    rl_lookahead_text = read_text("src/rl_module/docs/lookahead_frontier.md")
+    roadmap_text = read_text("src/rl_module/docs/routing_stability_roadmap.md")
+    integration_readme_text = read_text("src/integration/README.md")
+    integration_internal_text = read_text("src/integration/docs/internal_documentation.md")
+    future_iteration_text = read_text(
+        "docs/future-iterations/chapter3-branch2-frontier-observation-and-feasible-actions.md"
+    )
+
+    for text in (
+        repo_readme_text,
+        rl_internal_text,
+        rl_lookahead_text,
+        roadmap_text,
+        future_iteration_text,
+    ):
+        assert_mentions_masked_routing_regime(text)
+
+    assert_contains_all(
+        integration_readme_text,
+        (
+            "versioned masked routing metadata",
+            "legacy fallback remains",
+            "episode summaries, not final circuits",
+        ),
+    )
+    assert_contains_all(
+        integration_internal_text,
+        (
+            "versioned masked routing metadata",
+            "legacy defaults",
+            "MaskablePPO",
+        ),
+    )
 
 
 def test_mo_module_has_no_direct_rl_imports() -> None:

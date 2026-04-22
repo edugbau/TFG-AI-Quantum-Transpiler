@@ -24,6 +24,11 @@ from typing import Tuple, List, Optional
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
+except ModuleNotFoundError:
+    MaskableEvalCallback = None
+
 
 def _make_run_dir(base_dir: str, prefix: str = "run") -> str:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -80,6 +85,9 @@ def setup_training_pipeline(
     Returns:
         El agente entrenado listo para evaluación.
     """
+
+    if algorithm == "MaskablePPO" and mode != "routing":
+        raise ValueError("MaskablePPO solo esta soportado para mode='routing'.")
     
     # 1. Semillas
     set_global_seeds(seed)
@@ -135,8 +143,16 @@ def setup_training_pipeline(
         save_path=run_model_dir,
         name_prefix=f"rl_model_{mode}_{algorithm}"
     )
+
+    eval_callback_cls = EvalCallback
+    if algorithm == "MaskablePPO" and mode == "routing":
+        if MaskableEvalCallback is None:
+            raise ModuleNotFoundError(
+                "MaskablePPO routing requiere instalar sb3-contrib."
+            )
+        eval_callback_cls = MaskableEvalCallback
     
-    eval_callback = EvalCallback(
+    eval_callback = eval_callback_cls(
         eval_env, 
         best_model_save_path=run_model_dir,
         log_path=run_log_dir,

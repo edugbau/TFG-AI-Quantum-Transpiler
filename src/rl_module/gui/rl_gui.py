@@ -17,6 +17,7 @@ import threading
 import time
 import logging
 import os
+import importlib
 from datetime import datetime
 
 import numpy as np
@@ -47,6 +48,11 @@ from src.rl_module.gui.evaluation_panel import (
 
 logger = logging.getLogger(__name__)
 
+
+MASKED_ROUTING_SEMANTICS = "frontier_restricted_edges.v1"
+ROUTING_ALGORITHMS = ["PPO", "DQN", "MaskablePPO"]
+SYNTHESIS_ALGORITHMS = ["PPO", "DQN"]
+
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
@@ -54,6 +60,51 @@ ctk.set_default_color_theme("blue")
 def _make_run_dir(base_dir: str, prefix: str = "run") -> str:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     return os.path.join(base_dir, f"{prefix}_{run_id}")
+
+
+def _normalize_masked_routing_config(cfg: dict) -> dict:
+    normalized_cfg = dict(cfg)
+    is_masked_routing = (
+        normalized_cfg.get("mode") == "routing"
+        and normalized_cfg.get("algorithm") == "MaskablePPO"
+    )
+    normalized_cfg["masked"] = is_masked_routing
+    if is_masked_routing:
+        normalized_cfg["mask_semantics"] = normalized_cfg.get(
+            "mask_semantics",
+            MASKED_ROUTING_SEMANTICS,
+        )
+    else:
+        normalized_cfg.pop("mask_semantics", None)
+    return normalized_cfg
+
+
+def _build_eval_callback(eval_env, cfg: dict, run_model_dir: str, run_log_dir: str, eval_freq: int):
+    if not (cfg.get("mode") == "routing" and cfg.get("algorithm") == "MaskablePPO"):
+        return EvalCallback(
+            eval_env,
+            best_model_save_path=run_model_dir,
+            log_path=run_log_dir,
+            eval_freq=eval_freq,
+            deterministic=True,
+            render=False,
+        )
+
+    try:
+        sb3_contrib_callbacks = importlib.import_module("sb3_contrib.common.maskable.callbacks")
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "MaskablePPO requiere instalar sb3-contrib para la evaluacion GUI."
+        ) from exc
+
+    return sb3_contrib_callbacks.MaskableEvalCallback(
+        eval_env,
+        best_model_save_path=run_model_dir,
+        log_path=run_log_dir,
+        eval_freq=eval_freq,
+        deterministic=True,
+        render=False,
+    )
 
 
 # ===========================================================================
@@ -271,7 +322,7 @@ class RLBenchmarkGUI(ctk.CTk):
             row=row, column=0, padx=20, pady=(10, 0), sticky="w"
         )
         row += 1
-        self._algo_option = ctk.CTkOptionMenu(sidebar, values=["PPO", "DQN"])
+        self._algo_option = ctk.CTkOptionMenu(sidebar, values=ROUTING_ALGORITHMS)
         self._algo_option.grid(row=row, column=0, padx=20, pady=(0, 10), sticky="ew")
         row += 1
 
@@ -348,10 +399,15 @@ class RLBenchmarkGUI(ctk.CTk):
         if mode == "synthesis":
             self._routing_view.hide()
             self._synthesis_view.show()
+            supported_algorithms = SYNTHESIS_ALGORITHMS
+            self._algo_option.configure(values=supported_algorithms)
+            if self._algo_option.get() not in supported_algorithms:
+                self._algo_option.set(supported_algorithms[0])
             return
 
         self._synthesis_view.hide()
         self._routing_view.show()
+        self._algo_option.configure(values=ROUTING_ALGORITHMS)
 
     # -----------------------------------------------------------------------
     #  Main Frame
@@ -473,7 +529,14 @@ class RLBenchmarkGUI(ctk.CTk):
         if self._is_training:
             return
 
-        cfg = self._get_config()
+        cfg = _normalize_masked_routing_config(self._get_config())
+
+        if cfg["mode"] == "synthesis" and cfg["algorithm"] == "MaskablePPO":
+            self._log(
+                "⚠ MaskablePPO solo esta disponible para routing en la GUI. "
+                "Selecciona PPO o DQN para synthesis."
+            )
+            return
 
         # Validar compatibilidad circuito ↔ coupling map
         cm_qubits = set()
@@ -575,19 +638,19 @@ class RLBenchmarkGUI(ctk.CTk):
                     basis_gates=(
                         cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None
                     ),
+                    mask_semantics=cfg.get("mask_semantics"),
                 ),
             )
 
             callbacks = [callback]
             should_track_best = cfg["timesteps"] > 1
             if should_track_best:
-                eval_callback = EvalCallback(
+                eval_callback = _build_eval_callback(
                     eval_env,
-                    best_model_save_path=run_model_dir,
-                    log_path=run_log_dir,
-                    eval_freq=max(1, cfg["timesteps"] // 2),
-                    deterministic=True,
-                    render=False,
+                    cfg,
+                    run_model_dir,
+                    run_log_dir,
+                    max(1, cfg["timesteps"] // 2),
                 )
                 callbacks.append(eval_callback)
 
@@ -723,7 +786,8 @@ class RLBenchmarkGUI(ctk.CTk):
             # Reutilizar la configuración del entrenamiento para que el entorno
             # de evaluación sea idéntico al que se usó para entrenar.
             # Si no hay entrenamiento previo, leer la config actual del sidebar.
-            cfg = self._training_cfg if self._training_cfg is not None else self._get_config()
+            cfg_source = self._training_cfg if self._training_cfg is not None else self._get_config()
+            cfg = _normalize_masked_routing_config(cfg_source)
             set_global_seeds(cfg["seed"])
 
             # Crear entorno limpio para evaluación
@@ -780,10 +844,11 @@ class RLBenchmarkGUI(ctk.CTk):
             self.after(0, self._eval_log_write, "-" * 70)
 
             total_reward = 0.0
-            done = False
+            done = bool(info.get("already_completed_at_reset", False))
             step = 0
             cycle_detected = False
             should_detect_layout_cycles = cfg["mode"] == "routing"
+            is_masked_routing = bool(cfg.get("masked"))
 
             # Detección de bucles (solo visual, no afecta al entorno de entrenamiento)
             from collections import Counter
@@ -795,13 +860,30 @@ class RLBenchmarkGUI(ctk.CTk):
             while not done:
                 layout_before = eval_env.current_layout.tolist()
                 visible_frontier_before = []
+                candidate_edges = []
+                action_mask = []
+                valid_action_indices = []
                 if cfg["mode"] == "routing" and hasattr(eval_env, "get_visible_frontier_entries"):
                     visible_frontier_before = [
                         frontier_entry_to_dict(entry)
                         for entry in eval_env.get_visible_frontier_entries()
                     ]
 
-                action, _ = eval_agent.predict(obs, deterministic=True)
+                predict_kwargs = {}
+                if is_masked_routing and cfg["mode"] == "routing":
+                    raw_action_mask = np.asarray(eval_env.action_masks(), dtype=bool)
+                    action_mask = raw_action_mask.tolist()
+                    valid_action_indices = [
+                        index for index, is_valid in enumerate(action_mask) if is_valid
+                    ]
+                    strategy = getattr(eval_env, "strategy", None)
+                    candidate_edges = [tuple(edge) for edge in getattr(strategy, "edges", ())]
+                    predict_kwargs["action_masks"] = raw_action_mask
+                    self.after(0, self._eval_log_write, f"Candidate edges: {candidate_edges}")
+                    self.after(0, self._eval_log_write, f"Action mask: {action_mask}")
+                    self.after(0, self._eval_log_write, f"Valid action indices: {valid_action_indices}")
+
+                action, _ = eval_agent.predict(obs, deterministic=True, **predict_kwargs)
                 obs, reward, terminated, truncated, info = eval_env.step(action)
                 layout_after = eval_env.current_layout.tolist()
 
@@ -836,6 +918,9 @@ class RLBenchmarkGUI(ctk.CTk):
                     residual_distance_before=float(info.get("residual_distance_before", 0.0)),
                     residual_distance_after=float(info.get("residual_distance_after", 0.0)),
                     residual_distance_delta=float(info.get("residual_distance_delta", 0.0)),
+                    candidate_edges=candidate_edges,
+                    action_mask=action_mask,
+                    valid_action_indices=valid_action_indices,
                 )
                 append_eval_record = getattr(self, "_append_eval_record", None)
                 if not callable(append_eval_record):
@@ -846,7 +931,7 @@ class RLBenchmarkGUI(ctk.CTk):
 
             if cycle_detected:
                 status = "CICLO DETECTADO ⚠ (agente oscila sin avanzar)"
-            elif info.get("is_completed"):
+            elif info.get("is_completed") or info.get("already_completed_at_reset"):
                 status = "COMPLETADO ✓"
             else:
                 status = "TRUNCADO (max_steps)"

@@ -43,6 +43,7 @@ def evaluate_routing_episode(
     frontier_mode,
     max_steps,
     lookahead_window,
+    masked=False,
 ) -> RoutingEpisodeSummary:
     env = _create_routing_env(
         circuit=circuit,
@@ -66,7 +67,14 @@ def evaluate_routing_episode(
         truncated = False
 
         while not (terminated or truncated):
-            action, _ = agent.predict(obs, deterministic=True)
+            if masked:
+                action, _ = agent.predict(
+                    obs,
+                    action_masks=env.action_masks(),
+                    deterministic=True,
+                )
+            else:
+                action, _ = agent.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, step_info = env.step(action)
             steps_executed += 1
             total_reward += float(reward)

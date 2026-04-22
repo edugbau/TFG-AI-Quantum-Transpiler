@@ -15,6 +15,8 @@ The current implementation focuses on scenario orchestration and shared contract
 
 When an RL routing model has a neighboring `run_metadata.json`, integration uses the saved routing contract from that sidecar when available before falling back to legacy defaults.
 
+When present, that sidecar can carry versioned masked routing metadata for newer checkpoints. `integration` consumes that versioned masked routing metadata when available; otherwise the legacy fallback remains so previously saved PPO/DQN or other unmasked checkpoints stay evaluable.
+
 QASM input is available for the Qiskit-facing scenarios in this v1 scope. Concretely, `Baseline` and `MO_Only` can load circuits from `qasm_file`, while `RL_Only` and `MO+RL` remain centered on routing episode evaluation rather than circuit materialization.
 
 The backend catalog is intentionally limited to the current fake backends exposed by `qiskit_interface` so the integration scenarios stay reproducible and credential-free.
@@ -28,6 +30,8 @@ In this v1 scope, RL-based scenarios return episode summaries, not final circuit
 That means `RL_Only` and `MO+RL` currently report routing-level outcomes such as layouts, rewards, step counts, and swap counts, but they do not reconstruct or export a final routed circuit artifact yet.
 
 If the metadata sidecar is missing, integration reports that condition through an extra note and falls back to legacy defaults so previously saved routing checkpoints remain evaluable.
+
+This does not change module ownership or public scope: `integration` still owns only scenario orchestration, while `rl_module` owns how masked routing or unmasked routing checkpoints are produced.
 
 Reconstructing or exporting final circuits from RL is left for a future iteration.
 

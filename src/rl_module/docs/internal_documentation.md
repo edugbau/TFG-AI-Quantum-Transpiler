@@ -37,7 +37,7 @@ La selección de puertas visibles y su ejecución ya no dependen de una única c
 - `DagFrontier`: usa `qiskit.converters.circuit_to_dag(...).front_layer()` para exponer paralelismo real.
 
 ### 1. Modo Enrutamiento (`mode="routing"`)
-- **Action Space:** Discreto (`gym.spaces.Discrete`). El tamaño equivale al número de aristas bidireccionales del Coupling Map (sin duplicados). El agente inserta un SWAP y el layout dinámico se invierte.
+- **Action Space:** Discreto (`gym.spaces.Discrete`). El tamaño equivale al número de aristas bidireccionales del Coupling Map (sin duplicados). El agente inserta un SWAP y el layout dinámico se invierte. Este espacio permanece fijo sobre las aristas del hardware incluso en el nuevo régimen de **masked routing**.
 - **Observation Space:** Diccionario con:
   - `layout`: Array del mapeo lógico→físico actual (tamaño `num_qubits`).
   - `lookahead`: Buffer vectorial lógico de tamaño fijo ($N \times 2$) sobre la frontera visible.
@@ -47,6 +47,16 @@ La selección de puertas visibles y su ejecución ya no dependen de una única c
   - `lookahead_valid_mask`: Máscara binaria para distinguir puertas reales de padding.
   - `step_progress`: Escalar normalizado $\in [0, 1]$ que indica `current_step / max_steps`. Proporciona **contexto temporal** al agente para distinguir estados idénticos visitados en momentos distintos del episodio, rompiendo oscilaciones cíclicas A→B→A.
 - **Lógica de Ejecución:** El entorno busca qué puertas quedan desbloqueadas tras aplicar el SWAP y ejecuta repetitivamente (en cascada) sus dependencias.
+
+### Régimen de `masked routing`
+
+El módulo incorpora ahora un régimen adicional de routing enmascarado pensado para checkpoints nuevos. La idea es acercar la selección de acciones a la restricción de candidatos típica de SABRE sin redefinir la semántica pública del entorno:
+
+- el espacio de acción sigue indexando todas las aristas del coupling map;
+- `action_masks()` aplica una `hard mask` determinista y frontier-aware sobre ese espacio fijo;
+- la máscara elimina acciones inválidas o dominadas antes del muestreo, pero no introduce un action space dinámico nuevo.
+
+En entrenamiento y carga de modelos, `MaskablePPO` es el estándar para checkpoints nuevos de masked routing. Los checkpoints legacy de `PPO` y `DQN` continúan siendo válidos mediante contratos legacy/default o evaluaciones unmasked, de forma que la compatibilidad hacia atrás se mantiene durante la migración.
 
 ### `frontier_mode`
 
@@ -154,7 +164,7 @@ En esta recta final del desarrollo de `rl_module`, se enumeran las dudas y consi
    ¿Existen valores de pesos o penalizaciones iniciales recomendados basados en la experiencia con enrutadores previos? (Revisar los pesos iniciales: -1 por SWAP, +10 por ejecutar frente a la penalización de timeout). ¿Sugerencias sobre recompensas negativas incrementales?
 
 3. **Algoritmos SB3 y Experimentos:**
-   Nuestro Wrapper soporta tanto `PPO` como `DQN` en políticas de `MultiInput`. ¿Recomiendan enfocar toda la computación empírica y tunning en *Proximal Policy Optimization* (PPO) -que es el estándar general actual-, o prefieren ver un test de comparación gruesos o con DQN en el informe?
+   Nuestro Wrapper soporta tanto `PPO` como `DQN` en políticas de `MultiInput`, y añade `MaskablePPO` como estándar para checkpoints nuevos de masked routing. ¿Recomiendan enfocar la computación empírica principal en `MaskablePPO` para el nuevo régimen enmascarado, manteniendo comparativas gruesas con PPO/DQN legacy cuando resulte útil para el informe?
 
 5. **Entrenamiento y Fuentes de `initial_layout`:**
    El sistema actualmente expone la inyección de un *Layout Estático Inicial* como input externo. A la hora de entrenar al agente de forma general (durante los miles de timesteps), ¿deberíamos exponerle distribuciones variadas de layouts iniciales sobre diferentes circuitos, o dejarlo entrenar primero con *layouts 1:1* ruidosos/adversariales para forzar su robustez al routing independientemente del productor aguas arriba? La orquestación de un futuro handoff MO -> RL pertenece a `src/integration/`.

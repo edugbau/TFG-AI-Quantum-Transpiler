@@ -14,6 +14,8 @@ La solución actual separa dos conceptos:
 - **Frontier**: conjunto de puertas visibles que el agente debe considerar en el
   estado actual
 
+Sobre esa base, el routing enmascarado introduce una restricción de candidatos al estilo SABRE sin alterar el action space público: el espacio discreto sigue siendo fijo sobre todas las aristas del coupling map, y `action_masks()` aplica una hard mask determinista y frontier-aware para desactivar swaps que no deben muestrearse en el estado actual.
+
 ## Tensores de observación
 
 El entorno expone ahora los siguientes campos en la observación:
@@ -81,6 +83,14 @@ El entorno soporta dos modos de frontera:
 - La frontera visible se basa en `dag.front_layer()`.
 - Permite exponer paralelismo real entre puertas independientes.
 - La ejecución puede consumir varias puertas de la front layer a la vez.
+
+## Relación con `masked routing`
+
+La máscara de acciones reutiliza exactamente esta información de frontera. No construye un catálogo variable de acciones ni reasigna índices por episodio; solo decide qué aristas del coupling map permanecen habilitadas en cada paso.
+
+Esto hace que el régimen de **masked routing** sea compatible con la idea clásica de SABRE-style candidate restriction: restringir swaps candidatos con una heurística determinista basada en la frontera visible, manteniendo estable la codificación de acciones del entorno.
+
+Para checkpoints nuevos de este régimen, `MaskablePPO` es el trainer estándar. Los checkpoints legacy de `PPO` y `DQN` siguen existiendo fuera de este contrato enmascarado y se evalúan con los contratos legacy/default o unmasked correspondientes.
 
 ## Comportamiento de `reset()`
 

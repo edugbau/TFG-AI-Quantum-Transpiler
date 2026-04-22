@@ -19,6 +19,16 @@ class StubAgent:
         return self.action, None
 
 
+class StubMaskableAgent:
+    def __init__(self, action: int = 0) -> None:
+        self.action = action
+        self.calls: list[tuple[object, object, bool]] = []
+
+    def predict(self, obs, action_masks=None, deterministic: bool = False):
+        self.calls.append((obs, action_masks, deterministic))
+        return self.action, None
+
+
 def test_create_routing_env_forwards_frontier_mode(monkeypatch) -> None:
     from src.integration.routing_evaluator import _create_routing_env
 
@@ -172,6 +182,147 @@ def test_evaluate_routing_episode_uses_deterministic_predict(monkeypatch) -> Non
     assert summary.truncated is False
     assert summary.total_swaps == 1
     assert summary.gates_executed_count == 2
+
+
+def test_evaluate_routing_episode_passes_action_masks_for_masked_contract(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+
+    expected_mask = np.array([True, False, True], dtype=bool)
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [0, 1]
+            self.total_swaps = 1
+
+        def reset(self, *, seed=None, options=None):
+            return {"obs": "reset"}, {"already_completed_at_reset": False}
+
+        def action_masks(self):
+            return expected_mask
+
+        def step(self, action):
+            return {"obs": "done"}, 1.25, True, False, {"gates_executed": 2}
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+    agent = StubMaskableAgent(action=0)
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(2),
+        coupling_edges=[(0, 1)],
+        agent=agent,
+        seed=5,
+        initial_layout=None,
+        frontier_mode="sequential",
+        max_steps=3,
+        lookahead_window=2,
+        masked=True,
+    )
+
+    assert len(agent.calls) == 1
+    call_obs, call_masks, call_deterministic = agent.calls[0]
+    assert call_obs == {"obs": "reset"}
+    assert call_deterministic is True
+    assert np.array_equal(call_masks, expected_mask)
+    assert summary.steps_executed == 1
+
+
+def test_evaluate_routing_episode_supports_real_quantum_rl_agent_wrapper_for_masks(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+    from src.rl_module.agent import QuantumRLAgent
+
+    expected_mask = np.array([True, False, True], dtype=bool)
+    model_calls = []
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [0, 1]
+            self.total_swaps = 1
+
+        def reset(self, *, seed=None, options=None):
+            return {"obs": "reset"}, {"already_completed_at_reset": False}
+
+        def action_masks(self):
+            return expected_mask
+
+        def step(self, action):
+            return {"obs": "done"}, 1.25, True, False, {"gates_executed": 2}
+
+    class FakeModel:
+        def predict(self, observation, deterministic=False, action_masks=None):
+            model_calls.append((observation, deterministic, action_masks))
+            return 0, None
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+
+    agent = object.__new__(QuantumRLAgent)
+    agent.model = FakeModel()
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(2),
+        coupling_edges=[(0, 1)],
+        agent=agent,
+        seed=5,
+        initial_layout=None,
+        frontier_mode="sequential",
+        max_steps=3,
+        lookahead_window=2,
+        masked=True,
+    )
+
+    assert len(model_calls) == 1
+    call_obs, call_deterministic, call_masks = model_calls[0]
+    assert call_obs == {"obs": "reset"}
+    assert call_deterministic is True
+    assert np.array_equal(call_masks, expected_mask)
+    assert summary.steps_executed == 1
+
+
+def test_evaluate_routing_episode_does_not_pass_action_masks_for_legacy_contract(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [0, 1]
+            self.total_swaps = 1
+
+        def reset(self, *, seed=None, options=None):
+            return {"obs": "reset"}, {"already_completed_at_reset": False}
+
+        def action_masks(self):
+            raise AssertionError("legacy evaluation should not query action masks")
+
+        def step(self, action):
+            return {"obs": "done"}, 1.25, True, False, {"gates_executed": 2}
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+    agent = StubAgent(action=0)
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(2),
+        coupling_edges=[(0, 1)],
+        agent=agent,
+        seed=5,
+        initial_layout=None,
+        frontier_mode="sequential",
+        max_steps=3,
+        lookahead_window=2,
+        masked=False,
+    )
+
+    assert agent.calls == [({"obs": "reset"}, True)]
+    assert summary.steps_executed == 1
 
 
 def test_evaluate_routing_episode_handles_already_completed_reset_without_predict(monkeypatch) -> None:

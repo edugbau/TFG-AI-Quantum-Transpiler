@@ -5,6 +5,8 @@ from typing import Any, Optional
 
 _METADATA_FILENAME = "run_metadata.json"
 _SCHEMA_VERSION = "rl_run_metadata.v1"
+_MASKED_ROUTING_SCHEMA_VERSION = "rl_run_metadata.masked_routing.v1"
+_DEFAULT_MASK_SEMANTICS = "frontier_restricted_edges.v1"
 
 
 def metadata_path_for_model(model_path: Path | str) -> Path:
@@ -20,8 +22,9 @@ def build_run_metadata(
     lookahead_window: int,
     max_steps: int,
     basis_gates: Optional[list[str]],
+    mask_semantics: Optional[str] = None,
 ) -> dict[str, Any]:
-    return {
+    metadata = {
         "schema_version": _SCHEMA_VERSION,
         "mode": mode,
         "algorithm": algorithm,
@@ -33,6 +36,15 @@ def build_run_metadata(
             "basis_gates": list(basis_gates) if basis_gates is not None else None,
         },
     }
+
+    if mode == "routing" and algorithm == "MaskablePPO":
+        metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION
+        metadata["routing_policy"] = {
+            "masked": True,
+            "mask_semantics": mask_semantics or _DEFAULT_MASK_SEMANTICS,
+        }
+
+    return metadata
 
 
 def save_run_metadata(run_dir: Path | str, metadata: dict[str, Any]) -> Path:

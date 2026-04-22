@@ -62,6 +62,23 @@ def test_execute_ready_cascade_optionally_appends_executed_gate_trace():
     assert list(frontier.pending_gates) == [("cx", 0, 2)]
 
 
+def test_sequential_frontier_execute_ready_front_layer_leaves_successor_pending_when_requested():
+    frontier = SequentialFrontier(
+        [("h", 0, 0), ("cx", 0, 1), ("cx", 1, 2)]
+    )
+    layout = np.array([0, 1, 2], dtype=np.int32)
+    coupling_set = {(0, 1), (1, 0), (1, 2), (2, 1)}
+
+    executed = frontier.execute_ready_cascade(
+        current_layout=layout,
+        is_connected=lambda a, b: (a, b) in coupling_set,
+        cascade_successors=False,
+    )
+
+    assert executed == 1
+    assert list(frontier.pending_gates) == [("cx", 0, 1), ("cx", 1, 2)]
+
+
 def test_pending_gates_preserves_deque_compatibility():
     frontier = SequentialFrontier(deque([("cx", 0, 2)]))
 

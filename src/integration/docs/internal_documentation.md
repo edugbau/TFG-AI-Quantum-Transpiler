@@ -98,7 +98,7 @@ Contiene la lógica de composición de los cuatro escenarios soportados.
 
 - **`_load_circuit()`**: carga circuitos mediante `qiskit_interface.load_circuit(...)`, resolviendo tanto `library` como `qasm_file` y propagando la metadata normalizada de entrada.
 - **`_load_agent()`**: carga el modelo RL usando `QuantumRLAgent.load(...)`, con importación perezosa.
-- **`resolve_routing_model_contract()`**: entrypoint definido en `rl_model_contract.py` y llamado desde `scenarios.py`; intenta leer el sidecar `run_metadata.json` del checkpoint RL y usa ese saved routing contract cuando está disponible; si no existe, aplica legacy defaults para mantener compatibilidad con checkpoints previos.
+- **`resolve_routing_model_contract()`**: entrypoint definido en `rl_model_contract.py` y llamado desde `scenarios.py`; intenta leer el sidecar `run_metadata.json` del checkpoint RL y usa ese saved routing contract cuando está disponible; si el sidecar trae versioned masked routing metadata, `integration` consume esa variante explícita del contrato; si no existe, aplica legacy defaults para mantener compatibilidad con checkpoints previos.
 - **`_require_scenario()`**: evita ejecutar el runner equivocado para un `ScenarioRequest` dado.
 - **`_validate_selected_layout()`**: valida ancho, duplicados, negatividad y rango físico del layout seleccionado por MO antes de entregarlo a Qiskit o RL.
 - **`_run_mo()`**: encapsula la elección entre `optimize_layout_quick()` y `optimize_layout()`.
@@ -115,7 +115,7 @@ Funciones principales:
   - devuelve `selected_layout`, `transpilation_metrics` y `transpilation_artifact`.
 - **`run_rl_only_scenario()`**
   - carga modelo RL;
-  - resuelve el contrato de routing mediante `resolve_routing_model_contract()` desde `run_metadata.json` cuando está presente o desde legacy defaults cuando falta el sidecar;
+  - resuelve el contrato de routing mediante `resolve_routing_model_contract()` desde `run_metadata.json` cuando está presente, incluyendo versioned masked routing metadata para checkpoints nuevos de `MaskablePPO`, o desde legacy defaults cuando falta el sidecar;
   - evalúa el episodio con el layout inicial proporcionado por el llamador o el layout trivial del entorno;
   - devuelve `routing_summary` y publica el fallback mediante `ScenarioResult.notes` cuando falta el sidecar.
 - **`run_mo_rl_scenario()`**
@@ -151,7 +151,7 @@ Funciones principales:
 1. Crear `ScenarioRequest` con `rl_model_path`.
 2. Resolver backend.
 3. Cargar circuito y agente RL.
-4. Resolver el contrato de routing con `resolve_routing_model_contract()` desde `run_metadata.json` si existe; en caso contrario, aplicar legacy defaults.
+4. Resolver el contrato de routing con `resolve_routing_model_contract()` desde `run_metadata.json` si existe, consumiendo versioned masked routing metadata cuando aparezca; en caso contrario, aplicar legacy defaults.
 5. Ejecutar `evaluate_routing_episode()`.
 6. Devolver `ScenarioResult` con `routing_summary` y una nota adicional si hubo fallback.
 
@@ -163,7 +163,7 @@ Funciones principales:
 4. Ejecutar MO y seleccionar layout.
 5. Validar el layout seleccionado.
 6. Cargar agente RL.
-7. Resolver el contrato de routing con `resolve_routing_model_contract()` desde el sidecar cuando esté disponible y conservar el fallback a legacy defaults cuando falte.
+7. Resolver el contrato de routing con `resolve_routing_model_contract()` desde el sidecar cuando esté disponible, incluyendo versioned masked routing metadata para checkpoints nuevos de `MaskablePPO`, y conservar el fallback a legacy defaults cuando falte.
 8. Ejecutar `evaluate_routing_episode()` con ese layout como `initial_layout`.
 9. Devolver `ScenarioResult` con `selected_layout`, `routing_summary` y una nota adicional si hubo fallback.
 
@@ -234,7 +234,7 @@ Dos decisiones de desacoplamiento importantes:
 - `QuantumRLAgent.load()` para cargar modelos ya entrenados.
 - `QuantumTranspilationEnv` en `mode="routing"` para ejecutar episodios.
 - Soporte de `initial_layout` vía `reset(options=...)` como contrato de handoff.
-- Sidecar `run_metadata.json` para persistir el contrato de evaluación de routing; si falta, `integration` conserva legacy defaults y reporta el fallback mediante una entrada adicional en `ScenarioResult.notes`.
+- Sidecar `run_metadata.json` para persistir el contrato de evaluación de routing; cuando el sidecar incluye versioned masked routing metadata, `integration` consume esa variante para checkpoints nuevos de `MaskablePPO`; si falta, `integration` conserva legacy defaults y reporta el fallback mediante una entrada adicional en `ScenarioResult.notes`.
 
 ## Limitaciones Conocidas de la v1
 
@@ -258,6 +258,8 @@ La v1 ya acepta `qasm_file` para `Baseline` y `MO_Only`. Ese soporte no se extie
 
 ### 5. Fallback para metadata ausente en checkpoints antiguos
 Cuando un checkpoint RL no trae `run_metadata.json`, `integration` sigue evaluándolo con legacy defaults. Ese fallback se reporta mediante una nota pública en `ScenarioResult.notes`, por ejemplo `Legacy RL evaluation defaults were used because no run metadata sidecar was found.`.
+
+Esta compatibilidad también cubre la coexistencia entre checkpoints nuevos de masked routing y checkpoints legacy de `PPO`/`DQN`: `MaskablePPO` queda reservado como estándar para el régimen enmascarado nuevo, mientras que los modelos legacy siguen entrando por los contratos legacy/default o por flujos unmasked sin cambiar la ownership pública del módulo.
 
 ## Evolución Futura
 

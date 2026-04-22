@@ -1,3 +1,5 @@
+from numbers import Integral
+
 import src.mo_module as mo_module
 import src.qiskit_interface as qiskit_interface
 from src.integration.backend_adapter import resolve_backend_bundle
@@ -159,6 +161,8 @@ def _require_scenario(request: ScenarioRequest, expected: str) -> None:
 def _validate_selected_layout(layout: list[int], num_qubits: int, backend) -> list[int]:
     if len(layout) != num_qubits:
         raise ValueError("selected layout width must match request.num_qubits")
+    if any(not isinstance(entry, Integral) or isinstance(entry, bool) for entry in layout):
+        raise ValueError("selected layout must contain integer physical qubits")
     if any(entry < 0 for entry in layout):
         raise ValueError("selected layout cannot contain negative entries")
     if len(set(layout)) != len(layout):
@@ -239,6 +243,8 @@ def run_mo_only_scenario(request: ScenarioRequest) -> ScenarioResult:
 
 def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     _require_scenario(request, "RL_Only")
+    if request.rl_model_path is None:
+        raise ValueError("rl_model_path is required for RL scenarios")
     circuit = _load_circuit(request)
     _validate_request_initial_layout(request, circuit)
     backend_bundle = resolve_backend_bundle(request.backend_name)
@@ -253,6 +259,7 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
         frontier_mode=contract.frontier_mode,
         max_steps=contract.max_steps,
         lookahead_window=contract.lookahead_window,
+        masked=contract.masked,
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,
@@ -270,6 +277,8 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
 
 def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
     _require_scenario(request, "MO+RL")
+    if request.rl_model_path is None:
+        raise ValueError("rl_model_path is required for RL scenarios")
     circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
     mo_result = _run_mo(request, circuit, backend_bundle)
@@ -293,6 +302,7 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         frontier_mode=contract.frontier_mode,
         max_steps=contract.max_steps,
         lookahead_window=contract.lookahead_window,
+        masked=contract.masked,
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,

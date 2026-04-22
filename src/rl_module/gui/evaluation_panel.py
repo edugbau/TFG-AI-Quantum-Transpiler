@@ -29,6 +29,9 @@ class EvaluationStepRecord:
     residual_distance_before: float = 0.0
     residual_distance_after: float = 0.0
     residual_distance_delta: float = 0.0
+    candidate_edges: list[tuple[int, int]] = field(default_factory=list)
+    action_mask: list[bool] = field(default_factory=list)
+    valid_action_indices: list[int] = field(default_factory=list)
 
 
 def frontier_entry_to_dict(entry: Any) -> dict[str, Any]:
@@ -52,6 +55,9 @@ def _has_routing_metadata(record: "EvaluationStepRecord") -> bool:
         or record.visible_frontier_before
         or record.repeated_layout
         or record.undo_swap
+        or record.candidate_edges
+        or record.action_mask
+        or record.valid_action_indices
     )
 
 
@@ -79,6 +85,13 @@ def _format_routing_record(record: "EvaluationStepRecord") -> list[str]:
                 f"physical=({entry.get('physical_q1')}, {entry.get('physical_q2')}) "
                 f"executable={entry.get('executable')}"
             )
+
+    if record.candidate_edges:
+        lines.append(f"candidate_edges: {record.candidate_edges}")
+    if record.action_mask:
+        lines.append(f"action_mask: {record.action_mask}")
+    if record.valid_action_indices:
+        lines.append(f"valid_action_indices: {record.valid_action_indices}")
 
     lines.extend(
         [
