@@ -52,7 +52,6 @@ Guarantee compatibility with Qiskit >= 2.0 (project currently at 2.3.0) while av
 - Use FakeBackend for topology, native gate set, and coupling map.
 
 ## Project References
-- `docs/agents.md`
 - `docs/ENVIRONMENT.md`
 - `src/qiskit_interface/README.md`
 - `src/qiskit_interface/docs/internal_documentation.md`

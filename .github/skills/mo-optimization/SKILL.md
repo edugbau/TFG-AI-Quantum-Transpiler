@@ -50,6 +50,5 @@ Standardize the design and evaluation of multi-objective evolutionary algorithms
 - Objective: maximize mean HV or minimize penalties.
 
 ## Project References
-- `docs/agents.md`
 - `src/mo_module/docs/internal_documentation.md`
 - `src/mo_module/docs/tuning.md`

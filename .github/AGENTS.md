@@ -6,7 +6,7 @@ Hybrid Quantum Transpilation: Multi-Objective Layout Optimization and Reinforcem
 
 - **Language**: Python 3.10+
 - **Format**: Follow PEP 8; use type hints where practical.
-- **Qiskit Compatibility**: Enforce Qiskit >= 2.0. Load the `qiskit-2x-compliance` skill for any Qiskit code changes. See [docs/agents.md](../docs/agents.md) for complete Qiskit 2.x rules.
+- **Qiskit Compatibility**: Enforce Qiskit >= 2.0. Load the `qiskit-2x-compliance` skill for any Qiskit code changes.
 - **Reproducibility**: Set deterministic seeds (numpy, torch, random) in all experiments. Reference the `experimentation-logging` skill for seed-setting patterns.
 
 ## Architecture
@@ -17,8 +17,6 @@ The project has 4 interconnected modules:
 2. **`src/mo_module/`** — Multi-objective evolutionary algorithms (NSGA-II) for quantum layout optimization. Use the `mo-optimization` skill when modifying fitness, operators, or Pareto analysis.
 3. **`src/rl_module/`** — Gymnasium-based RL environment and Stable-Baselines3 agent for circuit synthesis. Use the `rl-quantum-synthesis` skill for environment and reward design.
 4. **`src/integration/`** — Orchestration of handoff and benchmark scenarios across modules. Use the `mo-rl-pipeline` skill for handoff logic and benchmark scenarios (Baseline, MO_Only, RL_Only, MO+RL).
-
-See [docs/agents.md](../docs/agents.md) for detailed module descriptions.
 
 ## Build, Test & Experiments
 

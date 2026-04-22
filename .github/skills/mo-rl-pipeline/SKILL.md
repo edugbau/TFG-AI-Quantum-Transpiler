@@ -40,6 +40,5 @@ Standardize the transfer of genotypic information from the optimization module (
 - Initialize RL `state` consistently with initial assignment and routing/synthesis actions.
 
 ## Project References
-- `docs/agents.md`
 - `src/rl_module/docs/synthesis_mode_status.md`
 - `src/mo_module/docs/internal_documentation.md`

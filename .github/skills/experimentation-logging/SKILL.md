@@ -62,5 +62,4 @@ def set_seed(seed=42):
 - Include titles, legends, axis units, and export at 300 DPI to `experiments/plots/`.
 
 ## Project References
-- `docs/agents.md`
 - `docs/ENVIRONMENT.md`

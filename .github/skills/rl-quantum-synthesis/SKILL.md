@@ -47,6 +47,5 @@ Standardize implementation of the reinforcement learning environment for Cliffor
 - Evaluation and logging: `EvalCallback`, `CheckpointCallback`, and `tensorboard_log`.
 
 ## Project References
-- `docs/agents.md`
 - `src/rl_module/docs/internal_documentation.md`
 - `src/rl_module/docs/synthesis_mode_status.md`
