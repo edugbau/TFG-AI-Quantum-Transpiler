@@ -22,7 +22,7 @@ Los modelos de routing guardados por `rl_module` pueden incluir un sidecar `run_
 
 `MaskablePPO` pasa a ser el estándar para checkpoints nuevos de masked routing. Los checkpoints legacy de `PPO` y `DQN` siguen soportados mediante contratos legacy/default o flujos unmasked, por lo que ambos regímenes coexisten durante la transición.
 
-En el estado actual de integration v1, los escenarios basados en RL devuelven `episode summaries`, not final circuits. Reconstructing/exporting the final circuit from RL is left for a future iteration. QASM input is available for `Baseline` and `MO_Only` through `qasm_file`, mientras que los escenarios basados en RL todavía no exponen una entrada QASM equivalente en su superficie pública.
+En el estado actual de integration v1, `RL_Only` sigue devolviendo `episode summaries`, not final circuits. `MO+RL`, en cambio, ya reconstruye el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas y `swap_trace` para materializar los swaps físicos, con `total_swaps == len(swap_trace)` como contador de swaps realmente materializados, y después ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing; si no completa, devuelve un resultado controlado sin artefacto de transpilación. QASM input is available for `Baseline` and `MO_Only` through `qasm_file`, mientras que los escenarios basados en RL todavía no exponen una entrada QASM equivalente en su superficie pública. Para comparar layouts dispersos en los artefactos/resultados de Qiskit, `trans_num_qubits`/`trans_width` siguen representando anchura física materializada, mientras que `trans_active_qubits` refleja los qubits físicamente activos del circuito transpìlado.
 
 ## Instalación
 
@@ -72,7 +72,10 @@ layout[i] = physical_qubit_for_logical_qubit_i
 - `src/integration/` implementa la orquestación v1 de `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` para evaluación de routing.
 - `src/rl_module/` soporta routing y un primer modo de `synthesis` entrenable restringido a circuitos Clifford.
 - `mo_module` y `rl_module` deben permanecer testeables de forma independiente.
-- Los escenarios basados en RL devuelven `episode summaries`, no circuitos finales. La reconstrucción/exportación del circuito final desde RL queda para una iteración futura.
+- `RL_Only` devuelve `episode summaries`, no circuitos finales.
+- `MO+RL` reconstruye el circuito ruteado desde la traza RL (`executed_gate_trace` + `swap_trace`) y ejecuta post-routing de Qiskit cuando el episodio completa el routing; si no, devuelve un resultado controlado sin transpilación final.
+- En `RoutingEpisodeSummary`, `total_swaps == len(swap_trace)` y representa swaps realmente materializados/reproducibles.
+- En métricas Qiskit, `trans_num_qubits`/`trans_width` siguen siendo anchura física materializada; usar `trans_active_qubits` para comparar ocupación física real cuando el layout es disperso.
 - QASM input está disponible para `Baseline` y `MO_Only` mediante `qasm_file`; los escenarios RL aún no exponen una entrada QASM equivalente.
 
 ## Entorno Tecnológico

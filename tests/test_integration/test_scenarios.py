@@ -48,6 +48,18 @@ def _make_transpilation_result(**overrides):
             "trans_depth": 12,
             "trans_two_qubit_gates": 4,
         },
+        to_artifact_dict=lambda: {
+            "artifact_version": "transpilation_result.v1",
+            "baseline_name": None,
+            "transpilation": {
+                "optimization_level": 1,
+                "seed": 17,
+                "elapsed_time_s": 0.1,
+                "baseline_name": None,
+                "initial_layout": [2, 0, 1],
+                "final_layout": [1, 0, 2],
+            },
+        },
         **overrides,
     )
 
@@ -538,6 +550,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
         truncated=False,
         total_swaps=1,
         gates_executed_count=3,
+        swap_trace=[(0, 1)],
     )
     eval_calls = []
 
@@ -891,8 +904,12 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
         truncated=False,
         total_swaps=2,
         gates_executed_count=4,
+        swap_trace=[(0, 1), (1, 2)],
+        executed_gate_trace=[("h", 0, 0), ("cx", 0, 1), ("cx", 1, 2), ("measure", 2, 2)],
     )
     eval_calls = []
+    rebuild_calls = []
+    post_calls = []
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
@@ -916,15 +933,30 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
         "evaluate_routing_episode",
         lambda **kwargs: eval_calls.append(kwargs) or summary,
     )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: rebuild_calls.append(kwargs) or ("routed-circuit", [1, 0, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: post_calls.append((args, kwargs)) or _make_transpilation_result(),
+    )
 
     result = scenarios.run_mo_rl_scenario(request)
 
     assert result.success is True
     assert result.selected_layout == [2, 0, 1]
-    assert result.transpilation_metrics is None
+    assert result.transpilation_metrics == {
+        "backend_name": "fake_backend",
+        "trans_depth": 12,
+        "trans_two_qubit_gates": 4,
+    }
+    assert result.transpilation_artifact["artifact_version"] == "transpilation_result.v1"
     assert result.routing_summary is summary
     assert result.notes == [
-        "RL outputs are episode summaries, not final circuits.",
+        "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
         "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
     assert eval_calls == [
@@ -940,6 +972,217 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
             "masked": False,
         }
     ]
+    assert rebuild_calls == [
+        {
+            "circuit": circuit,
+            "coupling_edges": [(0, 1), (1, 2)],
+            "initial_layout": [2, 0, 1],
+            "swap_trace": [(0, 1), (1, 2)],
+            "frontier_mode": "sequential",
+            "executed_gate_trace": [("h", 0, 0), ("cx", 0, 1), ("cx", 1, 2), ("measure", 2, 2)],
+        }
+    ]
+    assert post_calls == [
+        (
+            ("routed-circuit",),
+            {
+                "backend": "backend-object",
+                "backend_name": "fake_backend",
+                "optimization_level": 1,
+                "seed": 17,
+                "reference_circuit": circuit,
+                "initial_layout": [2, 0, 1],
+                "final_layout": [1, 0, 2],
+            },
+        )
+    ]
+
+
+def test_run_mo_rl_scenario_returns_controlled_result_when_routing_episode_is_truncated(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend="backend-object",
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+    summary = RoutingEpisodeSummary(
+        initial_layout=[2, 0, 1],
+        final_layout=[1, 0, 2],
+        steps_executed=12,
+        total_reward=-2.0,
+        completed=False,
+        truncated=True,
+        total_swaps=1,
+        gates_executed_count=1,
+        swap_trace=[(0, 1)],
+    )
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: summary,
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("build_routed_circuit should not be called")),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("transpile_post_routing should not be called")),
+    )
+
+    result = scenarios.run_mo_rl_scenario(request)
+
+    assert result.success is False
+    assert result.selected_layout == [2, 0, 1]
+    assert result.routing_summary is summary
+    assert result.transpilation_metrics is None
+    assert result.transpilation_artifact is None
+    assert result.errors == ["MO+RL routing episode did not complete; skipping routed-circuit reconstruction."]
+    assert result.notes == [
+        "MO+RL routing episode was incomplete; routed-circuit reconstruction and post-routing transpilation were skipped.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
+    ]
+
+
+def test_run_mo_rl_scenario_rejects_mismatched_reconstructed_final_layout(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend="backend-object",
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+    summary = RoutingEpisodeSummary(
+        initial_layout=[2, 0, 1],
+        final_layout=[1, 0, 2],
+        steps_executed=3,
+        total_reward=2.0,
+        completed=True,
+        truncated=False,
+        total_swaps=1,
+        gates_executed_count=3,
+        swap_trace=[(0, 1)],
+    )
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: summary,
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: ("routed-circuit", [0, 1, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("transpile_post_routing should not be called")),
+    )
+
+    with pytest.raises(ValueError, match="final_layout"):
+        scenarios.run_mo_rl_scenario(request)
+
+
+def test_run_mo_rl_scenario_rejects_mismatched_routing_summary_initial_layout(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend="backend-object",
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+    summary = RoutingEpisodeSummary(
+        initial_layout=[0, 2, 1],
+        final_layout=[1, 0, 2],
+        steps_executed=3,
+        total_reward=2.0,
+        completed=True,
+        truncated=False,
+        total_swaps=1,
+        gates_executed_count=3,
+        swap_trace=[(0, 1)],
+    )
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: summary,
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("build_routed_circuit should not be called")),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("transpile_post_routing should not be called")),
+    )
+
+    with pytest.raises(ValueError, match="initial_layout"):
+        scenarios.run_mo_rl_scenario(request)
 
 
 def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
@@ -964,6 +1207,16 @@ def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
     request = _make_request("MO+RL", rl_model_path=str(model_path))
     load_calls = []
     eval_calls = []
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: ("routed-circuit", [1, 0, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
+    )
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(
@@ -998,6 +1251,7 @@ def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
             truncated=False,
             total_swaps=0,
             gates_executed_count=2,
+            swap_trace=[],
         ),
     )
 
@@ -1020,7 +1274,9 @@ def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
     assert eval_calls[0]["masked"] is False
-    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+    assert result.notes == [
+        "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
+    ]
 
 
 def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_path) -> None:
@@ -1046,6 +1302,16 @@ def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_pat
     request = _make_request("MO+RL", rl_model_path=str(model_path))
     load_calls = []
     eval_calls = []
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: ("routed-circuit", [1, 0, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
+    )
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(
@@ -1080,6 +1346,7 @@ def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_pat
             truncated=False,
             total_swaps=0,
             gates_executed_count=2,
+            swap_trace=[],
         ),
     )
 
@@ -1102,7 +1369,9 @@ def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_pat
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
     assert eval_calls[0]["masked"] is True
-    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+    assert result.notes == [
+        "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
+    ]
 
 
 def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monkeypatch) -> None:
@@ -1116,6 +1385,7 @@ def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monk
         coupling_edges=[(0, 1), (1, 2)],
     )
     eval_calls = []
+    rebuild_calls = []
 
     monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
@@ -1147,7 +1417,18 @@ def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monk
             truncated=False,
             total_swaps=0,
             gates_executed_count=2,
+            swap_trace=[],
         ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: rebuild_calls.append(kwargs) or ("routed-circuit", [1, 0, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
     )
 
     result = scenarios.run_mo_rl_scenario(request)
@@ -1156,6 +1437,8 @@ def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monk
     assert all(type(entry) is int for entry in result.selected_layout)
     assert eval_calls[0]["initial_layout"] == [2, 0, 1]
     assert all(type(entry) is int for entry in eval_calls[0]["initial_layout"])
+    assert rebuild_calls[0]["initial_layout"] == [2, 0, 1]
+    assert all(type(entry) is int for entry in rebuild_calls[0]["initial_layout"])
 
 
 def test_run_mo_rl_scenario_requires_rl_model_path_before_contract_resolution(monkeypatch) -> None:
@@ -1294,7 +1577,18 @@ def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypa
             truncated=False,
             total_swaps=1,
             gates_executed_count=3,
+            swap_trace=[(0, 1)],
         ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: ("routed-circuit", [1, 0, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
     )
 
     payload = runner.run_from_args(
@@ -1317,10 +1611,15 @@ def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypa
     assert mo_invoked == [True]
     assert payload["success"] is True
     assert payload["selected_layout"] == selected_layout
+    assert payload["transpilation_metrics"] == {
+        "backend_name": "fake_backend",
+        "trans_depth": 12,
+        "trans_two_qubit_gates": 4,
+    }
     assert payload["routing_summary"] is not None
     assert payload["routing_summary"]["initial_layout"] == selected_layout
     assert payload["notes"] == [
-        "RL outputs are episode summaries, not final circuits.",
+        "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
         "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
     assert payload["routing_summary"]["final_layout"] == [1, 0, 2]

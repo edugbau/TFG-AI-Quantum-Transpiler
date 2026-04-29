@@ -20,88 +20,41 @@ graph LR
 | **MOO → Layout** | ✅ HECHO | `mo_module.optimize_layout_quick()` → `result.get_compromise_layout()` |
 | **Layout → RL env** | ✅ HECHO | `QuantumTranspilationEnv.reset(options={"initial_layout": [...]})` acepta layouts externos |
 | **RL Routing episodio** | ✅ HECHO | `routing_evaluator.evaluate_routing_episode()` ejecuta un episodio completo y devuelve `RoutingEpisodeSummary` |
-| **RL → circuito transpilado** | ❌ **FALTA** | El RL env ejecuta SWAPs internamente pero **NO reconstruye un `QuantumCircuit`** con los SWAPs insertados |
-| **Fases restantes Qiskit** | ❌ **FALTA** | Una vez reconstruido el circuito con SWAPs, falta pasar por translation/optimization de Qiskit |
-| **Benchmark comparativo** | ⚠️ PARCIAL | `benchmark_gui.py` compara MO vs Qiskit, pero NO incluye la ruta RL |
-| **Escenario MO+RL completo** | ⚠️ PARCIAL | `scenarios.py: run_mo_rl_scenario` existe pero solo devuelve `RoutingEpisodeSummary` (sin métricas de transpilación) |
+| **RL → circuito transpilado** | ✅ HECHO | `routing_evaluator.build_routed_circuit()` reconstruye el circuito físico desde `executed_gate_trace` + `swap_trace` (con fallback al replay por frontier si no hay traza exacta) |
+| **Fases restantes Qiskit** | ✅ HECHO | `qiskit_interface.transpile_post_routing()` ejecuta translation/optimization sin rehacer layout/routing |
+| **Benchmark comparativo** | ⚠️ PARCIAL | La ruta `MO+RL` ya devuelve métricas comparables; para layouts dispersos la comparación debe preferir `trans_active_qubits` frente a la anchura materializada `trans_num_qubits`/`trans_width`, y la capa de benchmarking/documentación comparativa todavía no está completamente alineada |
+| **Escenario MO+RL completo** | ✅ HECHO | `scenarios.py: run_mo_rl_scenario` ya reconstruye, valida `final_layout` y devuelve métricas/artefacto cuando RL completa el routing |
 
 ---
 
-## Las 3 GAPS concretas que faltan
+## Gaps mínimos que todavía quedan
 
-### GAP 1 — Reconstruir el circuito ruteado desde el RL env ⭐ CRÍTICA
+### GAP 1 — Comparativa/benchmarking homogéneo sobre la nueva ruta MO+RL
 
-> [!IMPORTANT]
-> Esta es la pieza central que falta. El RL env hace routing (SWAPs) pero no materializa el circuito resultante.
+La reconstrucción exacta y el post-routing ya existen. Lo que sigue pendiente es explotar esa ruta de forma homogénea en los benchmarks y análisis comparativos de alto nivel.
 
-**Qué falta:** Una función que, dado el historial de SWAPs que el agente RL ejecutó durante un episodio y el layout final, reconstruya un `QuantumCircuit` válido con:
-- Las puertas SWAP insertadas en las posiciones correctas.
-- Las puertas originales remapeadas al layout actual.
+**Qué falta:**
+- incorporar `MO+RL` de forma consistente en los scripts/tablas de benchmarking;
+- revisar documentación comparativa que aún asume que RL no materializa circuito final;
+- añadir validaciones de regresión más amplias si el benchmark depende de artefactos persistidos.
 
-**Dónde implementar:** `src/rl_module/` o `src/integration/` — nueva función tipo `reconstruct_routed_circuit(circuit, swap_history, initial_layout, coupling_map) → QuantumCircuit`.
+### GAP 2 — Extender la misma reconstrucción exacta a `RL_Only` si se quiere comparabilidad total
 
-**Enfoque mínimo viable:**
-1. Extender `QuantumTranspilationEnv` (o un wrapper) para **registrar** cada SWAP y cada puerta ejecutada en orden.
-2. Crear una función que recorra ese log y construya un `QuantumCircuit` con layout final incluido.
+`RL_Only` sigue exponiendo solo `RoutingEpisodeSummary`. Si se quisiera compararlo directamente con `Baseline`, `MO_Only` y `MO+RL`, habría que decidir si también debe reconstruir circuito final y pasar por `transpile_post_routing()`.
 
-**Alternativa aún más simple (sin tocar el env):** Como el env ya devuelve `total_swaps`, `initial_layout`, y `final_layout`, se puede usar **Qiskit directamente**: pasar el `initial_layout` de MOO al `generate_preset_pass_manager` con `layout_method` fijado y dejar que Qiskit haga el routing estándar. Esto NO usa el routing del RL pero sí demuestra el pipeline completo (MO layout → Qiskit routing+translation+optimization → métricas). **Pero** pierde el sentido del RL routing.
+### GAP 3 — Verificación más amplia con casos reales/benchmarks persistidos
 
-**Enfoque recomendado (mínimo verdadero):**
-- Modificar `evaluate_routing_episode()` para que **también** capture la secuencia ordenada de (swap_edges, executed_gates).
-- Crear `build_routed_circuit(target_circuit, initial_layout, action_log) → QuantumCircuit` que reconstruya el circuito.
-- El circuito resultante ya tiene el routing hecho → luego se pasa a Qiskit solo para translation + optimization.
-
-**Estimación:** ~100-150 líneas de código.
-
-### GAP 2 — Transpilación post-routing con Qiskit (translation + optimization)
-
-> [!NOTE]
-> Qiskit separa la transpilación en stages: `init → layout → routing → translation → optimization → scheduling`. Si el RL ya hizo el routing, hay que saltar layout y routing y hacer solo las fases restantes.
-
-**Qué falta:** Una función que tome el circuito ya ruteado por RL y lo pase por las fases de `translation` (descomposición a basis gates) y `optimization` de Qiskit.
-
-**Enfoque mínimo:**
-```python
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-
-pm = generate_preset_pass_manager(
-    optimization_level=1,
-    backend=backend,
-    initial_layout=initial_layout,  # layout del MOO/RL
-)
-# Eliminar las stages de layout y routing ya hechas por RL
-pm.layout = None  # No re-hacer layout
-pm.routing = None  # No re-hacer routing
-result = pm.run(routed_circuit)
-```
-
-**Dónde implementar:** `src/qiskit_interface/transpiler.py` — nueva función `transpile_post_routing(routed_circuit, backend, optimization_level) → TranspilationResult`.
-
-**Estimación:** ~30-50 líneas de código.
-
-### GAP 3 — Cerrar el escenario MO+RL con métricas comparables
-
-> [!NOTE]
-> `run_mo_rl_scenario` ya existe pero devuelve `transpilation_metrics=None`. Hay que conectar GAP 1 + GAP 2 para que devuelva métricas reales.
-
-**Qué falta:** Actualizar `scenarios.py: run_mo_rl_scenario` para:
-1. Obtener el circuito ruteado de GAP 1.
-2. Pasarlo por post-routing de GAP 2.
-3. Devolver `transpilation_metrics` y `transpilation_artifact` reales (depth, 2Q gates, etc.)
-4. El benchmark puede entonces comparar directamente con `run_baseline_scenario`.
-
-**Estimación:** ~40-60 líneas modificadas en `scenarios.py`.
+Falta comprobar esta ruta en campañas más grandes o artefactos históricos, no solo en tests dirigidos/unitarios-integration.
 
 ---
 
-## Resumen del trabajo mínimo
+## Resumen del trabajo mínimo restante
 
 | GAP | Qué | Dónde | Estimación |
 |-----|-----|-------|-----------|
-| **1** | Reconstruir circuito ruteado | `rl_module/` + `integration/routing_evaluator.py` | ~100-150 LOC |
-| **2** | Post-routing Qiskit (translation+opt) | `qiskit_interface/transpiler.py` | ~30-50 LOC |
-| **3** | Cerrar `MO+RL` con métricas | `integration/scenarios.py` | ~40-60 LOC |
-| **Total** | | | **~170-260 LOC** |
+| **1** | Unificar benchmarking/comparativas con `MO+RL` | `benchmark_*`, docs, reporting | baja-media |
+| **2** | Decidir si `RL_Only` debe materializar circuito final | `integration/scenarios.py`, contratos/docs | media |
+| **3** | Validar la ruta en campañas más amplias | tests/scripts de benchmark | baja-media |
 
 ---
 
@@ -126,14 +79,20 @@ backend = get_backend("fake_torino")
 mo_result = optimize_layout_quick(circuit, backend, seed=42)
 layout = mo_result.get_compromise_layout()
 
-# 3. RL Routing 
+# 3. RL Routing + reconstrucción exacta
 agent = QuantumRLAgent.load("path/to/model.zip", env=None, algorithm="MaskablePPO")
-routed_circuit, final_layout = run_rl_routing(   # ← GAP 1
-    circuit, layout, backend, agent
+routing_summary = evaluate_routing_episode(...)
+routed_circuit, final_layout = build_routed_circuit(
+    circuit=circuit,
+    coupling_edges=coupling_edges,
+    initial_layout=layout,
+    swap_trace=routing_summary.swap_trace,
+    executed_gate_trace=routing_summary.executed_gate_trace,
+    frontier_mode="sequential",
 )
 
 # 4. Post-routing Qiskit
-result = transpile_post_routing(                  # ← GAP 2
+result = transpile_post_routing(
     routed_circuit, backend, optimization_level=1
 )
 
@@ -147,4 +106,4 @@ print(f"MO+RL:       depth={result.transpiled_metrics.depth}, 2Q={result.transpi
 > Si quieres la ruta **absolutamente mínima** sin reconstruir circuitos: usar `transpile_with_custom_layout(circuit, layout, backend)` ya existente. Esto usa el layout del MOO y deja que Qiskit haga SU propio routing. No es "RL routing" pero demuestra MO layout → Qiskit transpilación → benchmark. Es lo que **ya hace `run_mo_only_scenario`**.
 
 > [!CAUTION]  
-> Para demostrar que el RL aporta valor hay que implementar GAP 1 obligatoriamente. Sin reconstrucción de circuito, el RL solo produce contadores (swap count, reward) que no son comparables con métricas de transpilación real (depth, gate count).
+> La reconstrucción exacta ya existe para `MO+RL`, pero `RL_Only` sigue siendo un resumen de episodio. No conviene mezclar comparativas entre escenarios asumiendo que todos producen hoy un circuito final materializado.

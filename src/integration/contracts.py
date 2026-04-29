@@ -122,6 +122,8 @@ class RoutingEpisodeSummary:
     truncated: bool
     total_swaps: int
     gates_executed_count: int
+    swap_trace: list[tuple[int, int]] = field(default_factory=list)
+    executed_gate_trace: list[tuple[str, int, int]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.steps_executed < 0:
@@ -137,6 +139,12 @@ class RoutingEpisodeSummary:
         if self.initial_layout is not None and self.final_layout is not None:
             if len(self.initial_layout) != len(self.final_layout):
                 raise ValueError("initial_layout and final_layout must have the same length")
+        self.swap_trace = [self._normalize_swap_edge(edge) for edge in self.swap_trace]
+        if self.total_swaps != len(self.swap_trace):
+            raise ValueError("total_swaps must match the number of entries in swap_trace")
+        self.executed_gate_trace = [
+            self._normalize_gate_tuple(gate) for gate in self.executed_gate_trace
+        ]
 
     @staticmethod
     def _validate_layout(layout: list[int] | None, field_name: str) -> None:
@@ -146,6 +154,31 @@ class RoutingEpisodeSummary:
             raise ValueError(f"{field_name} cannot contain negative entries")
         if len(set(layout)) != len(layout):
             raise ValueError(f"{field_name} cannot contain duplicated entries")
+
+    @staticmethod
+    def _normalize_swap_edge(edge: tuple[int, int] | list[int]) -> tuple[int, int]:
+        if len(edge) != 2:
+            raise ValueError("swap_trace entries must contain exactly two physical qubits")
+
+        left = int(edge[0])
+        right = int(edge[1])
+        if left < 0 or right < 0:
+            raise ValueError("swap_trace cannot contain negative physical qubits")
+        if left == right:
+            raise ValueError("swap_trace cannot contain degenerate swaps")
+        return (left, right)
+
+    @staticmethod
+    def _normalize_gate_tuple(gate: tuple[str, int, int] | list[object]) -> tuple[str, int, int]:
+        if len(gate) != 3:
+            raise ValueError("executed_gate_trace entries must contain gate_name, q1, q2")
+
+        gate_name = str(gate[0])
+        logical_q1 = int(gate[1])
+        logical_q2 = int(gate[2])
+        if logical_q1 < 0 or logical_q2 < 0:
+            raise ValueError("executed_gate_trace cannot contain negative logical qubits")
+        return (gate_name, logical_q1, logical_q2)
 
 
 @dataclass(slots=True)

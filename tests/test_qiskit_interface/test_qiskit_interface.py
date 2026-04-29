@@ -60,6 +60,7 @@ from src.qiskit_interface.backend_info import (
 from src.qiskit_interface.transpiler import (
     TranspilationResult,
     transpile_circuit,
+    transpile_post_routing,
     transpile_all_levels,
     transpile_batch,
     compare_transpilation_results,
@@ -765,6 +766,67 @@ class TestTranspilationWithLayout:
                 optimization_level=1,
             )
 
+    def test_transpile_post_routing_skips_layout_and_routing_but_keeps_metrics_reference(
+        self,
+        simple_circuit,
+        backend_torino,
+    ):
+        routed = QuantumCircuit(backend_torino.num_qubits, name="routed")
+        routed.h(10)
+        routed.cx(10, 11)
+        routed.swap(11, 12)
+
+        result = transpile_post_routing(
+            routed,
+            backend=backend_torino,
+            optimization_level=1,
+            seed=42,
+            reference_circuit=simple_circuit,
+            initial_layout=[10, 11, 12],
+            final_layout=[10, 12, 11],
+        )
+
+        assert result.original_circuit is simple_circuit
+        assert result.initial_layout == [10, 11, 12]
+        assert result.final_layout == [10, 12, 11]
+        assert result.transpiled_circuit is not None
+        assert result.transpiled_metrics is not None
+
+    def test_transpile_circuit_reports_final_layout_from_qiskit_final_index_layout(
+        self,
+        simple_circuit,
+        backend_torino,
+    ):
+        result = transpile_circuit(
+            simple_circuit,
+            backend=backend_torino,
+            optimization_level=1,
+            initial_layout=[10, 20, 30],
+            seed=42,
+        )
+
+        layout_obj = result.transpiled_circuit.layout
+        assert layout_obj is not None
+        assert callable(getattr(layout_obj, "final_index_layout", None))
+        assert result.final_layout == layout_obj.final_index_layout()[: simple_circuit.num_qubits]
+
+    def test_transpilation_metrics_distinguish_active_qubits_from_materialized_backend_width(
+        self,
+        simple_circuit,
+        backend_torino,
+    ):
+        result = transpile_with_custom_layout(
+            simple_circuit,
+            layout=[10, 11, 12],
+            backend=backend_torino,
+            optimization_level=1,
+            seed=42,
+        )
+
+        assert result.transpiled_metrics.num_qubits == backend_torino.num_qubits
+        assert result.transpiled_metrics.active_qubits == 3
+        assert result.to_dict()["trans_active_qubits"] == 3
+
 
 class TestTranspilationBatch:
     """Tests de transpilación batch y baseline."""
@@ -1039,6 +1101,8 @@ class TestTranspilationResult:
         assert "avg_t1" in artifact["backend"]
         assert artifact["metrics"]["original"] == result.original_metrics.to_dict()
         assert artifact["metrics"]["transpiled"] == result.transpiled_metrics.to_dict()
+        assert artifact["metrics"]["original"]["active_qubits"] == 3
+        assert artifact["metrics"]["transpiled"]["active_qubits"] >= 3
 
     def test_to_artifact_dict_falls_back_when_backend_summary_cannot_be_extracted(self, simple_circuit, backend_torino, monkeypatch):
         """El artefacto tolera backends sin extracción detallada previa."""

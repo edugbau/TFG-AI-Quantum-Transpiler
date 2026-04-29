@@ -1294,6 +1294,23 @@ class TestQuantumTranspilationEnv:
         assert info["swap_edge"] == (1, 2)
         assert info["executed_gates"] == [("cx", 0, 2)]
 
+    def test_reset_routing_exposes_executed_gate_trace_for_auto_executed_prefix(self):
+        qc = QuantumCircuit(3)
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.cx(1, 2)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2)],
+            mode="routing",
+            max_steps=10,
+        )
+
+        _, info = env.reset(seed=42, options={"initial_layout": [1, 0, 2]})
+
+        assert info["already_completed_at_reset"] is False
+        assert info["executed_gates"] == [("h", 0, 0), ("cx", 0, 1)]
+
     def test_get_visible_frontier_entries_returns_current_gui_projection(self):
         qc = QuantumCircuit(3)
         qc.cx(0, 2)

@@ -260,16 +260,19 @@ class QuantumTranspilationEnv(gym.Env):
         if self.mode == "synthesis":
             self._reset_synthesis_state()
             self.was_completed_at_reset = self._synthesis_state.is_complete()
+            reset_executed_gates: list[GateTuple] = []
         else:
             self._synthesis_state = None
-            self._try_execute_front_layer()
+            reset_executed_gates = []
+            self._try_execute_front_layer(executed_gates=reset_executed_gates)
             self.was_completed_at_reset = self._frontier.remaining_gate_count == 0
 
         obs = self._build_observation(step_progress=0.0)
         info = {
             "initial_layout_loaded": (options is not None and "initial_layout" in options),
             "total_gates": len(extracted_gates),
-            "already_completed_at_reset": self.was_completed_at_reset
+            "already_completed_at_reset": self.was_completed_at_reset,
+            "executed_gates": list(reset_executed_gates),
         }
         
         return obs, info
