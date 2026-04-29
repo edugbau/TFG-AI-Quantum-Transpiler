@@ -4,6 +4,7 @@ from dataclasses import asdict
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from qiskit import QuantumCircuit
 
 from src.integration.contracts import RoutingEpisodeSummary
@@ -155,7 +156,14 @@ def test_evaluate_routing_episode_uses_deterministic_predict(monkeypatch) -> Non
 
         def step(self, action):
             self.step_calls += 1
-            return {"obs": "next"}, 1.25, True, False, {"gates_executed": 2}
+            return {
+                "obs": "next"
+            }, 1.25, True, False, {
+                "gates_executed": 2,
+                "action_type": "swap",
+                "is_valid_action": True,
+                "swap_edge": (1, 2),
+            }
 
     monkeypatch.setattr(
         routing_evaluator,
@@ -182,6 +190,7 @@ def test_evaluate_routing_episode_uses_deterministic_predict(monkeypatch) -> Non
     assert summary.truncated is False
     assert summary.total_swaps == 1
     assert summary.gates_executed_count == 2
+    assert summary.swap_trace == [(1, 2)]
 
 
 def test_evaluate_routing_episode_passes_action_masks_for_masked_contract(monkeypatch) -> None:
@@ -433,3 +442,169 @@ def test_evaluate_routing_episode_counts_gates_executed_during_partial_reset(mon
 
     assert summary.steps_executed == 1
     assert summary.gates_executed_count == 3
+
+
+def test_evaluate_routing_episode_only_records_valid_swaps_in_trace(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [1, 0, 2]
+            self.total_swaps = 3
+            self._step = 0
+
+        def reset(self, *, seed=None, options=None):
+            return {"obs": "reset"}, {"already_completed_at_reset": False}
+
+        def step(self, action):
+            self._step += 1
+            if self._step == 1:
+                return {"obs": "mid"}, 0.1, False, False, {
+                    "gates_executed": 0,
+                    "action_type": "swap",
+                    "is_valid_action": False,
+                    "swap_edge": (0, 1),
+                }
+            if self._step == 2:
+                return {"obs": "mid-2"}, 0.2, False, False, {
+                    "gates_executed": 1,
+                    "action_type": "swap",
+                    "is_valid_action": True,
+                    "swap_edge": (1, 2),
+                }
+            return {"obs": "done"}, 0.3, True, False, {
+                "gates_executed": 1,
+                "action_type": "invalid",
+                "is_valid_action": False,
+                "swap_edge": (2, 3),
+            }
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(3),
+        coupling_edges=[(0, 1), (1, 2)],
+        agent=StubAgent(),
+        seed=29,
+        initial_layout=[0, 1, 2],
+        frontier_mode="sequential",
+        max_steps=5,
+        lookahead_window=2,
+    )
+
+    assert summary.total_swaps == 1
+    assert summary.swap_trace == [(1, 2)]
+
+
+def test_evaluate_routing_episode_records_exact_executed_gate_trace(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [0, 1, 2]
+            self.total_swaps = 1
+            self.remaining_gates = ["gate-2"]
+
+        def reset(self, *, seed=None, options=None):
+            return {
+                "obs": "reset"
+            }, {
+                "already_completed_at_reset": False,
+                "total_gates": 2,
+                "executed_gates": [("h", 0, 0)],
+            }
+
+        def step(self, action):
+            return {
+                "obs": "done"
+            }, 0.5, True, False, {
+                "gates_executed": 1,
+                "executed_gates": [("cx", 0, 1)],
+                "action_type": "swap",
+                "is_valid_action": True,
+                "swap_edge": (1, 2),
+            }
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(3),
+        coupling_edges=[(0, 1), (1, 2)],
+        agent=StubAgent(),
+        seed=31,
+        initial_layout=[0, 1, 2],
+        frontier_mode="sequential",
+        max_steps=4,
+        lookahead_window=2,
+    )
+
+    assert summary.executed_gate_trace == [("h", 0, 0), ("cx", 0, 1)]
+
+
+def test_build_routed_circuit_replays_swap_trace_into_physical_circuit() -> None:
+    from src.integration.routing_evaluator import build_routed_circuit
+
+    circuit = QuantumCircuit(3)
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.cx(1, 2)
+
+    routed_circuit, final_layout = build_routed_circuit(
+        circuit=circuit,
+        coupling_edges=[(0, 1), (1, 2)],
+        initial_layout=[0, 2, 1],
+        swap_trace=[(1, 2)],
+        frontier_mode="sequential",
+    )
+
+    assert routed_circuit.num_qubits == 3
+    assert final_layout == [0, 1, 2]
+    assert routed_circuit.count_ops().get("swap", 0) == 1
+    assert routed_circuit.count_ops().get("cx", 0) == 2
+
+
+def test_build_routed_circuit_rejects_operations_with_more_than_two_qubits() -> None:
+    from src.integration.routing_evaluator import build_routed_circuit
+
+    circuit = QuantumCircuit(3)
+    circuit.ccx(0, 1, 2)
+
+    with pytest.raises(ValueError, match=">2 qubits"):
+        build_routed_circuit(
+            circuit=circuit,
+            coupling_edges=[(0, 1), (1, 2)],
+            initial_layout=[0, 1, 2],
+            swap_trace=[],
+            frontier_mode="sequential",
+        )
+
+
+def test_build_routed_circuit_prefers_exact_executed_gate_trace_when_provided() -> None:
+    from src.integration.routing_evaluator import build_routed_circuit
+
+    circuit = QuantumCircuit(3)
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.cx(1, 2)
+
+    routed_circuit, final_layout = build_routed_circuit(
+        circuit=circuit,
+        coupling_edges=[(0, 1), (1, 2)],
+        initial_layout=[0, 2, 1],
+        swap_trace=[(1, 2)],
+        frontier_mode="sequential",
+        executed_gate_trace=[("h", 0, 0), ("cx", 0, 1), ("cx", 1, 2)],
+    )
+
+    assert final_layout == [0, 1, 2]
+    assert routed_circuit.count_ops().get("swap", 0) == 1
+    assert routed_circuit.count_ops().get("h", 0) == 1
+    assert routed_circuit.count_ops().get("cx", 0) == 2

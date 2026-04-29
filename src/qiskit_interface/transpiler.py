@@ -384,12 +384,16 @@ def transpile_circuit(
         # de transpilación del circuito
         if hasattr(transpiled, "layout") and transpiled.layout is not None:
             layout_obj = transpiled.layout
-            # Extraer el mapeo inicial del TranspileLayout
-            if hasattr(layout_obj, "initial_layout") and layout_obj.initial_layout is not None:
-                il = layout_obj.initial_layout
-                # Obtener la lista de qubits lógicos → físicos
+            if callable(getattr(layout_obj, "final_index_layout", None)):
                 final_layout = [
-                    il[circuit.qubits[i]]
+                    int(entry)
+                    for entry in layout_obj.final_index_layout()[: circuit.num_qubits]
+                ]
+            # Fallback para layouts sin helper de índice final
+            elif hasattr(layout_obj, "initial_layout") and layout_obj.initial_layout is not None:
+                il = layout_obj.initial_layout
+                final_layout = [
+                    int(il[circuit.qubits[i]])
                     for i in range(circuit.num_qubits)
                 ]
     except Exception as e:
@@ -643,6 +647,57 @@ def transpile_with_custom_layout(
         seed=seed,
         # No forzamos layout_method para permitir que Qiskit
         # aplique routing (SABRE) sobre el layout dado
+    )
+
+
+def transpile_post_routing(
+    routed_circuit: QuantumCircuit,
+    *,
+    backend=None,
+    backend_name: str = "fake_torino",
+    optimization_level: int = 1,
+    seed: int = DEFAULT_SEED,
+    reference_circuit: Optional[QuantumCircuit] = None,
+    initial_layout: Optional[list[int]] = None,
+    final_layout: Optional[list[int]] = None,
+) -> TranspilationResult:
+    """Ejecuta solo translation + optimization sobre un circuito ya ruteado.
+
+    Se usa cuando el routing lo ha materializado previamente otro módulo
+    (por ejemplo RL) y Qiskit solo debe adaptar el circuito al backend y
+    aplicar sus optimizaciones posteriores.
+    """
+    if backend is None:
+        backend = get_backend(backend_name)
+
+    actual_backend_name = getattr(backend, "name", backend_name)
+    original_circuit = reference_circuit if reference_circuit is not None else routed_circuit
+    original_metrics = extract_metrics(original_circuit)
+
+    t_start = time.perf_counter()
+    pm = generate_preset_pass_manager(
+        optimization_level=optimization_level,
+        backend=backend,
+        seed_transpiler=seed,
+    )
+    pm.layout = None
+    pm.routing = None
+    transpiled = pm.run(routed_circuit)
+    t_end = time.perf_counter()
+
+    transpiled_metrics = extract_metrics(transpiled)
+    return TranspilationResult(
+        original_circuit=original_circuit,
+        transpiled_circuit=transpiled,
+        original_metrics=original_metrics,
+        transpiled_metrics=transpiled_metrics,
+        optimization_level=optimization_level,
+        backend_name=actual_backend_name,
+        initial_layout=initial_layout,
+        final_layout=final_layout,
+        elapsed_time_s=t_end - t_start,
+        seed=seed,
+        _backend=backend,
     )
 
 

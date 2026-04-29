@@ -163,6 +163,11 @@ class CircuitMetrics:
             Anchura del circuito (qubits + bits clásicos).
         num_clbits:
             Número de bits clásicos.
+        active_qubits:
+            Número de qubits cuánticos que participan realmente en alguna
+            instrucción del circuito. Permite distinguir entre la anchura
+            materializada del registro físico y los qubits activos usados
+            por el programa.
     """
 
     depth: int = 0
@@ -174,6 +179,7 @@ class CircuitMetrics:
     gate_counts: dict[str, int] = field(default_factory=dict)
     width: int = 0
     num_clbits: int = 0
+    active_qubits: int = 0
 
     # ----- Utilidades de serialización -----
 
@@ -192,9 +198,19 @@ class CircuitMetrics:
             f"  Puertas no-loc.:   {self.nonlocal_gates}",
             f"  Ancho (q+c):       {self.width}",
             f"  Bits clásicos:     {self.num_clbits}",
+            f"  Qubits activos:    {self.active_qubits}",
             f"  Desglose puertas:  {dict(self.gate_counts)}",
         ]
         return "\n".join(lines)
+
+
+def count_active_qubits(circuit: QuantumCircuit) -> int:
+    """Cuenta los qubits cuánticos que aparecen en al menos una instrucción."""
+    active_indices: set[int] = set()
+    for instruction in circuit.data:
+        for qubit in instruction.qubits:
+            active_indices.add(circuit.find_bit(qubit).index)
+    return len(active_indices)
 
 
 # ===========================================================================
@@ -648,6 +664,7 @@ def extract_metrics(circuit: QuantumCircuit) -> CircuitMetrics:
         gate_counts=gate_counts,
         width=circuit.width(),
         num_clbits=circuit.num_clbits,
+        active_qubits=count_active_qubits(circuit),
     )
 
     logger.debug("Métricas extraídas:\n%s", metrics.summary())

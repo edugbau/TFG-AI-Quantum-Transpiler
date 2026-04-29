@@ -6,10 +6,14 @@ from src.integration.backend_adapter import resolve_backend_bundle
 from src.integration.contracts import ScenarioRequest, ScenarioResult
 from src.integration.layout_policy import select_layout_from_mo_result
 from src.integration.rl_model_contract import resolve_routing_model_contract
-from src.integration.routing_evaluator import evaluate_routing_episode
+from src.integration.routing_evaluator import build_routed_circuit, evaluate_routing_episode
 
 
 _RL_NOTE = "RL outputs are episode summaries, not final circuits."
+_MO_RL_NOTE = "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
+_MO_RL_INCOMPLETE_NOTE = (
+    "MO+RL routing episode was incomplete; routed-circuit reconstruction and post-routing transpilation were skipped."
+)
 _RL_METADATA_FALLBACK_NOTE = (
     "Legacy RL evaluation defaults were used because no run metadata sidecar was found."
 )
@@ -149,6 +153,54 @@ def _build_rl_notes(metadata_source: str) -> list[str]:
     if metadata_source == "defaults":
         notes.append(_RL_METADATA_FALLBACK_NOTE)
     return notes
+
+
+def _build_mo_rl_notes(metadata_source: str) -> list[str]:
+    notes = [_MO_RL_NOTE]
+    if metadata_source == "defaults":
+        notes.append(_RL_METADATA_FALLBACK_NOTE)
+    return notes
+
+
+def _build_incomplete_mo_rl_notes(metadata_source: str) -> list[str]:
+    notes = [_MO_RL_INCOMPLETE_NOTE]
+    if metadata_source == "defaults":
+        notes.append(_RL_METADATA_FALLBACK_NOTE)
+    return notes
+
+
+def _validate_reconstructed_final_layout(
+    routing_summary,
+    reconstructed_final_layout: list[int],
+) -> list[int]:
+    normalized_reconstructed_layout = [int(entry) for entry in reconstructed_final_layout]
+    expected_final_layout = routing_summary.final_layout
+    if expected_final_layout is None:
+        return normalized_reconstructed_layout
+
+    normalized_expected_layout = [int(entry) for entry in expected_final_layout]
+    if normalized_expected_layout != normalized_reconstructed_layout:
+        raise ValueError(
+            "reconstructed final_layout does not match routing_summary.final_layout"
+        )
+    return normalized_reconstructed_layout
+
+
+def _validate_routing_summary_initial_layout(
+    routing_summary,
+    selected_layout: list[int],
+) -> list[int]:
+    normalized_selected_layout = [int(entry) for entry in selected_layout]
+    reported_initial_layout = routing_summary.initial_layout
+    if reported_initial_layout is None:
+        return normalized_selected_layout
+
+    normalized_reported_layout = [int(entry) for entry in reported_initial_layout]
+    if normalized_reported_layout != normalized_selected_layout:
+        raise ValueError(
+            "routing_summary.initial_layout does not match the selected initial_layout"
+        )
+    return normalized_selected_layout
 
 
 def _require_scenario(request: ScenarioRequest, expected: str) -> None:
@@ -304,6 +356,40 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         lookahead_window=contract.lookahead_window,
         masked=contract.masked,
     )
+    if not routing_summary.completed or routing_summary.truncated:
+        return ScenarioResult(
+            scenario_name=request.scenario_name,
+            circuit_name=_get_result_circuit_name(request, circuit),
+            backend_name=request.backend_name,
+            seed=request.seed,
+            success=False,
+            selected_layout=selected_layout,
+            transpilation_metrics=None,
+            transpilation_artifact=None,
+            routing_summary=routing_summary,
+            errors=["MO+RL routing episode did not complete; skipping routed-circuit reconstruction."],
+            notes=_build_incomplete_mo_rl_notes(contract.metadata_source),
+        )
+    selected_layout = _validate_routing_summary_initial_layout(routing_summary, selected_layout)
+    routed_circuit, final_layout = build_routed_circuit(
+        circuit=circuit,
+        coupling_edges=backend_bundle.coupling_edges,
+        initial_layout=selected_layout,
+        swap_trace=routing_summary.swap_trace,
+        frontier_mode=contract.frontier_mode,
+        executed_gate_trace=routing_summary.executed_gate_trace,
+    )
+    final_layout = _validate_reconstructed_final_layout(routing_summary, final_layout)
+    transpilation_result = qiskit_interface.transpile_post_routing(
+        routed_circuit,
+        backend=backend_bundle.backend,
+        backend_name=backend_bundle.backend_name,
+        optimization_level=1,
+        seed=request.seed,
+        reference_circuit=circuit,
+        initial_layout=selected_layout,
+        final_layout=final_layout,
+    )
     return ScenarioResult(
         scenario_name=request.scenario_name,
         circuit_name=_get_result_circuit_name(request, circuit),
@@ -311,8 +397,8 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         seed=request.seed,
         success=True,
         selected_layout=selected_layout,
-        transpilation_metrics=None,
-        transpilation_artifact=None,
+        transpilation_metrics=transpilation_result.to_dict(),
+        transpilation_artifact=transpilation_result.to_artifact_dict(),
         routing_summary=routing_summary,
-        notes=_build_rl_notes(contract.metadata_source),
+        notes=_build_mo_rl_notes(contract.metadata_source),
     )

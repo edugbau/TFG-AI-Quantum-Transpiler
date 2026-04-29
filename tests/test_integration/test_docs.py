@@ -13,15 +13,22 @@ def test_integration_docs_describe_routing_evaluation_v1_scope_and_known_limits(
     integration_readme_text = read_text("src/integration/README.md")
     internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
 
+    assert "RL_Only" in repo_readme_text
     assert "episode summaries" in repo_readme_text
-    assert "not final circuits" in repo_readme_text
+    assert "MO+RL" in repo_readme_text
+    assert "swap_trace" in repo_readme_text
+    assert "executed_gate_trace" in repo_readme_text
     assert "QASM input is available for `Baseline` and `MO_Only`" in repo_readme_text
+    assert "trans_active_qubits" in repo_readme_text
+    assert "total_swaps == len(swap_trace)" in repo_readme_text
     assert "QASM input is also deferred" not in repo_readme_text
     assert "stub" not in repo_readme_text.lower()
 
     assert "QASM input is available" in integration_readme_text
     assert "Qiskit-facing scenarios" in integration_readme_text
-    assert "episode summaries, not final circuits" in integration_readme_text
+    assert "`RL_Only` returns episode summaries, not final circuits" in integration_readme_text
+    assert "`MO+RL` now attempts to reconstruct the routed circuit from the RL trace" in integration_readme_text
+    assert "trans_active_qubits" in integration_readme_text
 
     assert "QASM input is available for the Qiskit-facing scenarios" in internal_doc_text
     assert "qiskit_interface.load_circuit(...)" in internal_doc_text
@@ -30,6 +37,9 @@ def test_integration_docs_describe_routing_evaluation_v1_scope_and_known_limits(
     assert "--circuit-format" in internal_doc_text
     assert "Baseline" in internal_doc_text and "MO_Only" in internal_doc_text
     assert "backend catalog is intentionally limited" in internal_doc_text
+    assert "executed_gate_trace" in internal_doc_text
+    assert "total_swaps == len(swap_trace)" in internal_doc_text
+    assert "trans_active_qubits" in internal_doc_text
 
 
 def test_integration_docs_describe_rl_metadata_sidecar_contract() -> None:

@@ -1,5 +1,7 @@
 from dataclasses import asdict, fields
 
+import pytest
+
 import src.integration as integration
 from src.integration import (
     LayoutSelectionPolicy,
@@ -391,6 +393,7 @@ def test_routing_episode_summary_captures_episode_level_outputs() -> None:
         truncated=False,
         total_swaps=2,
         gates_executed_count=11,
+        swap_trace=[(4, 6), (6, 8)],
     )
 
     assert asdict(summary) == {
@@ -402,7 +405,40 @@ def test_routing_episode_summary_captures_episode_level_outputs() -> None:
         "truncated": False,
         "total_swaps": 2,
         "gates_executed_count": 11,
+        "swap_trace": [(4, 6), (6, 8)],
+        "executed_gate_trace": [],
     }
+
+
+def test_routing_episode_summary_rejects_invalid_swap_trace_entries() -> None:
+    for swap_trace in ([(-1, 2)], [(3, 3)], [(1, 2, 3)]):
+        with pytest.raises(ValueError, match="swap_trace"):
+            RoutingEpisodeSummary(
+                initial_layout=[0, 1],
+                final_layout=[1, 0],
+                steps_executed=1,
+                total_reward=1.0,
+                completed=True,
+                truncated=False,
+                total_swaps=1,
+                gates_executed_count=2,
+                swap_trace=swap_trace,
+            )
+
+
+def test_routing_episode_summary_rejects_mismatched_total_swaps_and_swap_trace() -> None:
+    with pytest.raises(ValueError, match="total_swaps"):
+        RoutingEpisodeSummary(
+            initial_layout=[0, 1],
+            final_layout=[1, 0],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=2,
+            gates_executed_count=2,
+            swap_trace=[(0, 1)],
+        )
 
 
 def test_routing_episode_summary_rejects_negative_counts() -> None:
@@ -504,6 +540,7 @@ def test_scenario_result_keeps_transpilation_and_routing_results_separate() -> N
         truncated=False,
         total_swaps=1,
         gates_executed_count=9,
+        swap_trace=[(0, 1)],
     )
 
     result = ScenarioResult(

@@ -11,9 +11,9 @@ La versión actual de `integration` implementa únicamente escenarios de evaluac
 - `RL_Only`
 - `MO+RL`
 
-El módulo no implementa entrenamiento RL, no cubre `synthesis` y no reconstruye todavía circuitos finales a partir de la salida del entorno RL. En esta versión, los escenarios basados en RL devuelven resúmenes de episodio (*episode summaries*), no artefactos `QuantumCircuit` finales.
+El módulo no implementa entrenamiento RL ni cubre `synthesis`. En esta versión, `RL_Only` sigue devolviendo resúmenes de episodio (*episode summaries*), mientras que `MO+RL` ya puede reconstruir el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usa `swap_trace` para materializar los swaps físicos y ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing.
 
-QASM input is available for the Qiskit-facing scenarios of this v1, es decir, para `Baseline` y `MO_Only` cuando la petición usa `circuit_source="qasm_file"`. Los escenarios `RL_Only` y `MO+RL` siguen consumiendo la representación de circuito usada por el evaluador de routing y, como todavía no materializan circuitos finales, no exponen una entrada QASM equivalente en la superficie pública actual.
+QASM input is available for the Qiskit-facing scenarios of this v1, es decir, para `Baseline` y `MO_Only` cuando la petición usa `circuit_source="qasm_file"`. Los escenarios `RL_Only` y `MO+RL` no exponen todavía una entrada QASM equivalente en la superficie pública actual.
 
 El backend catalog is intentionally limited a los fake backends actuales (`fake_torino`, `fake_sherbrooke`, `fake_brisbane`). Esta restricción mantiene la evaluación reproducible, evita dependencias de credenciales y refleja el catálogo controlado que publica `qiskit_interface` en esta etapa del proyecto.
 
@@ -44,7 +44,8 @@ Define la superficie propia del módulo para evitar propagar estructuras interna
   - valida `num_qubits`, `initial_layout` y coherencia de parámetros por escenario;
   - obliga a `rl_model_path` en `RL_Only` y `MO+RL`.
 - **`RoutingEpisodeSummary`**: resume el resultado de un episodio RL.
-  - incluye `initial_layout`, `final_layout`, `steps_executed`, `total_reward`, `completed`, `truncated`, `total_swaps` y `gates_executed_count`.
+  - incluye `initial_layout`, `final_layout`, `steps_executed`, `total_reward`, `completed`, `truncated`, `total_swaps`, `gates_executed_count`, `swap_trace` y `executed_gate_trace`;
+  - garantiza `total_swaps == len(swap_trace)`, por lo que `total_swaps` representa swaps realmente materializados y reproducibles.
 - **`ScenarioResult`**: salida unificada de cualquier escenario.
   - separa explícitamente `transpilation_metrics` de `routing_summary`;
   - evita estados imposibles como `success=True` con errores presentes.
@@ -87,7 +88,15 @@ Encapsula la ejecución de un episodio RL en modo `routing`.
   - inyecta `initial_layout` vía `reset(options={"initial_layout": ...})`;
   - ejecuta `agent.predict(..., deterministic=True)` hasta terminación o truncado;
   - normaliza layouts a listas de `int` Python para que sean serializables a JSON;
-  - contabiliza también las puertas ejecutadas durante `reset()` si el entorno ya avanza parcialmente antes del primer `step()`.
+  - contabiliza también las puertas ejecutadas durante `reset()` si el entorno ya avanza parcialmente antes del primer `step()`;
+  - captura `swap_trace` como la secuencia ordenada de swaps válidos materializables;
+  - captura `executed_gate_trace` como la secuencia exacta de puertas lógicas realmente ejecutadas durante `reset()` y `step()`.
+
+- **`build_routed_circuit()`**:
+  - reconstruye un `QuantumCircuit` físico a partir de `initial_layout` y la traza RL;
+  - prefiere `executed_gate_trace` para reproducir exactamente las puertas ejecutadas y usa `swap_trace` para insertar los swaps físicos necesarios;
+  - mantiene un fallback de reconstrucción por frontier replay cuando no se proporciona `executed_gate_trace`;
+  - devuelve también el `final_layout` reconstruido para que `scenarios.py` pueda validarlo antes del post-routing de Qiskit.
 
 La salida de esta capa es siempre un `RoutingEpisodeSummary`. No reconstruye circuitos ni expone detalles de GUI.
 
@@ -123,7 +132,13 @@ Funciones principales:
   - selecciona un layout;
   - lo inyecta en RL como `initial_layout`;
   - reutiliza el mismo contrato de routing persistido y, si falta el sidecar, reporta el fallback mediante `ScenarioResult.notes`;
-  - devuelve `selected_layout`, `routing_summary` y la nota de limitación RL.
+  - si el episodio RL completa el routing, valida que `routing_summary.initial_layout` siga coincidiendo con el layout seleccionado, reconstruye el circuito ruteado desde `executed_gate_trace` + `swap_trace`, valida el `final_layout` reconstruido y ejecuta `qiskit_interface.transpile_post_routing(...)` para devolver métricas comparables y un artefacto de transpilación;
+  - si el episodio RL no completa el routing, devuelve un `ScenarioResult` controlado sin artefacto de transpilación final.
+
+Sobre comparabilidad de métricas Qiskit:
+
+- `trans_num_qubits` y `trans_width` siguen describiendo la anchura física materializada del circuito transpìlado.
+- `trans_active_qubits` describe cuántos qubits físicos quedan realmente activos tras la transpilación y es la métrica adecuada para comparar layouts dispersos.
 
 ## Pipelines (Flujos de Trabajo)
 
@@ -165,7 +180,8 @@ Funciones principales:
 6. Cargar agente RL.
 7. Resolver el contrato de routing con `resolve_routing_model_contract()` desde el sidecar cuando esté disponible, incluyendo versioned masked routing metadata para checkpoints nuevos de `MaskablePPO`, y conservar el fallback a legacy defaults cuando falte.
 8. Ejecutar `evaluate_routing_episode()` con ese layout como `initial_layout`.
-9. Devolver `ScenarioResult` con `selected_layout`, `routing_summary` y una nota adicional si hubo fallback.
+9. Si el episodio completa el routing, reconstruir el circuito final desde `executed_gate_trace` + `swap_trace`, validar el `final_layout` reconstruido y ejecutar `qiskit_interface.transpile_post_routing(...)`.
+10. Si el episodio no completa el routing, devolver un `ScenarioResult` controlado sin reconstrucción ni post-transpilación.
 
 ## CLI y Reproducibilidad
 
@@ -238,20 +254,20 @@ Dos decisiones de desacoplamiento importantes:
 
 ## Limitaciones Conocidas de la v1
 
-### 1. Salida RL no materializada como circuito final
-Los escenarios `RL_Only` y `MO+RL` no devuelven todavía un circuito final reconstruido. La salida pública es un resumen de episodio.
+### 1. Materialización final limitada por escenario RL
+`RL_Only` no devuelve todavía un circuito final reconstruido. `MO+RL` sí lo hace cuando el episodio RL completa el routing.
 
 Consecuencia:
 
-- `Baseline` y `MO_Only` son comparables entre sí mediante métricas Qiskit.
-- `RL_Only` y `MO+RL` son comparables entre sí mediante métricas de episodio.
-- La comparación homogénea entre ambos grupos queda incompleta hasta una iteración futura.
+- `Baseline`, `MO_Only` y `MO+RL` pueden compararse mediante métricas Qiskit cuando `MO+RL` completa el routing.
+- `RL_Only` sigue siendo un escenario de resumen de episodio.
+- Si `MO+RL` no completa el routing, devuelve un resultado controlado sin métricas finales de transpilación.
 
 ### 2. Alcance limitado a `routing`
 La v1 no orquesta todavía `synthesis`.
 
 ### 3. Entrada QASM limitada a escenarios Qiskit-facing
-La v1 ya acepta `qasm_file` para `Baseline` y `MO_Only`. Ese soporte no se extiende todavía a `RL_Only` ni `MO+RL`, porque esos flujos siguen devolviendo `RoutingEpisodeSummary` y no un circuito final materializado.
+La v1 ya acepta `qasm_file` para `Baseline` y `MO_Only`. Ese soporte no se extiende todavía a `RL_Only` ni `MO+RL` en la superficie pública actual.
 
 ### 4. Sin entrenamiento RL desde `integration`
 `integration` consume modelos ya entrenados, pero no invoca el pipeline de entrenamiento.
