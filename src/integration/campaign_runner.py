@@ -15,6 +15,7 @@ from src.integration.campaign_reporting import (
     write_campaign_outputs,
 )
 from src.integration.contracts import LayoutSelectionPolicy, ScenarioRequest
+from src.integration.routing_subgraph import build_path_expanded_subgraph
 from src.integration.scenarios import (
     run_baseline_scenario as _run_baseline_scenario,
     run_mo_only_scenario as _run_mo_only_scenario,
@@ -285,11 +286,18 @@ def run_campaign(
             selected_layout_for_training = list(selected_layout)
             selected_layout_for_mo_rl = list(selected_layout)
             backend_bundle = resolve_backend_bundle(campaign_case.backend_name)
+            routing_subgraph = build_path_expanded_subgraph(
+                circuit=circuit,
+                selected_layout=selected_layout,
+                coupling_edges=backend_bundle.coupling_edges,
+            )
+            coupling_edges_for_training = list(routing_subgraph.coupling_edges)
+            coupling_edges_for_mo_rl = list(routing_subgraph.coupling_edges)
             case_report.training_result = train_case_fn(
                 campaign_case=campaign_case,
                 campaign_config=campaign.config,
                 target_circuit=circuit,
-                coupling_map=list(getattr(backend_bundle, "coupling_edges")),
+                coupling_map=coupling_edges_for_training,
                 case_output_dir=case_output_dir,
                 initial_layout=selected_layout_for_training,
             )
@@ -309,6 +317,8 @@ def run_campaign(
                     mo_rl_request,
                     circuit=circuit,
                     injected_layout=selected_layout_for_mo_rl,
+                    injected_coupling_edges=coupling_edges_for_mo_rl,
+                    injected_routing_graph=routing_subgraph,
                 )
                 if case_report.mo_rl_result.success:
                     case_report.status = "completed"

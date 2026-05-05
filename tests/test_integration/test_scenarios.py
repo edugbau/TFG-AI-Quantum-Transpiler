@@ -1066,6 +1066,145 @@ def test_run_mo_rl_scenario_reuses_injected_layout_without_running_mo(monkeypatc
     assert rebuild_calls[0]["initial_layout"] == selected_layout
 
 
+def test_run_mo_rl_scenario_uses_injected_coupling_edges_for_campaign_internal_seam(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend=SimpleNamespace(num_qubits=4),
+        coupling_edges=[(0, 1), (1, 2), (2, 3)],
+    )
+    injected_coupling_edges = [(0, 2), (2, 3)]
+    injected_routing_graph = SimpleNamespace(
+        mode="path_expanded_subgraph",
+        node_count=3,
+        edge_count=2,
+        added_intermediate_qubits=[2],
+        interacting_pair_count=4,
+        fallback_reason="missing_path:0-3",
+    )
+    eval_calls = []
+    rebuild_calls = []
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=list(kwargs["initial_layout"]),
+            final_layout=[2, 1, 0],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+            swap_trace=[],
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: rebuild_calls.append(kwargs) or ("routed-circuit", [2, 1, 0]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
+    )
+
+    result = scenarios.run_mo_rl_scenario(
+        request,
+        circuit=circuit,
+        injected_layout=[1, 0, 2],
+        injected_coupling_edges=injected_coupling_edges,
+        injected_routing_graph=injected_routing_graph,
+    )
+
+    assert eval_calls[0]["coupling_edges"] == injected_coupling_edges
+    assert rebuild_calls[0]["coupling_edges"] == injected_coupling_edges
+    assert result.notes == [
+        "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
+        "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
+        (
+            "Routing graph: path_expanded_subgraph with 3 nodes, 2 edges, 1 added intermediate qubits, "
+            "4 interacting pairs, fallback_reason=missing_path:0-3."
+        ),
+    ]
+
+
+def test_run_mo_rl_scenario_uses_backend_coupling_edges_when_no_campaign_injection_is_provided(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend=SimpleNamespace(num_qubits=3),
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+    eval_calls = []
+    rebuild_calls = []
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: "mo-result",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: [2, 0, 1],
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=list(kwargs["initial_layout"]),
+            final_layout=[1, 0, 2],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+            swap_trace=[],
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: rebuild_calls.append(kwargs) or ("routed-circuit", [1, 0, 2]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
+    )
+
+    scenarios.run_mo_rl_scenario(request)
+
+    assert eval_calls[0]["coupling_edges"] == [(0, 1), (1, 2)]
+    assert rebuild_calls[0]["coupling_edges"] == [(0, 1), (1, 2)]
+
+
 def test_run_mo_rl_scenario_returns_controlled_result_when_routing_episode_is_truncated(monkeypatch) -> None:
     from src.integration import scenarios
 

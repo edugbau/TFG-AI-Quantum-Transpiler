@@ -20,6 +20,8 @@ La capa de Campaign soporta una Train+Eval Campaign donde cada Campaign Case cor
 
 Dentro de ese flujo guiado, `MO_Only` es el Scenario que selecciona el layout del Campaign Case. El training de Campaign para `MO+RL` arranca desde ese layout exacto, produce el Training Artifact del caso y la evaluación posterior de `MO+RL` reutiliza tanto ese mismo layout como ese artifacto resultante.
 
+Para Campaign `MO+RL`, `integration` sigue siendo dueño del handoff MO -> RL. En la semántica actual por defecto, Campaign conserva el layout exacto seleccionado por `MO_Only`, extrae los pares lógicos que realmente interactúan en el circuito, deriva un path-expanded routing subgraph sobre el coupling map real del backend y usa ese coupling map derivado tanto para el training RL como para la evaluación híbrida del mismo Campaign Case. If subgraph derivation fails, Campaign falls back to the full backend coupling map and records that fallback en `ScenarioResult.notes` y en la salida pública del caso. La comparación final post-routing de Qiskit sigue apuntando al backend real.
+
 El módulo no implementa el entrenamiento RL en sí mismo ni cubre `synthesis` en esta capa pública. `integration` orquesta el training por Campaign Case a través de un seam explícito y consume el Training Artifact resultante, mientras que `rl_module` sigue siendo dueño de cómo se ejecuta el training y de cómo se producen los checkpoints. En esta versión, `RL_Only` sigue devolviendo resúmenes de episodio (*episode summaries*), mientras que `MO+RL` ya puede reconstruir el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usa `swap_trace` para materializar los swaps físicos y ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing.
 
 En términos de ownership:
@@ -70,6 +72,7 @@ Define la capa Campaign sin mover la implementación de training dentro de `inte
 - **`campaign_runner.py`**:
   - ejecuta `Baseline`, `MO_Only`, training RL y `MO+RL` en secuencia por Campaign Case;
   - usa el layout exacto seleccionado por `MO_Only` para lanzar el training RL del camino `MO+RL` y reutiliza ese mismo layout en la evaluación híbrida del caso;
+  - deriva para Campaign `MO+RL` un path-expanded routing subgraph desde los pares lógicos que interactúan y lo pasa tanto al training como a la evaluación híbrida; si la derivación falla, hace fallback al coupling map completo y registra ese modo en las notas del resultado;
   - persiste el estado de la Campaign tras cada caso;
   - marca casos como `failed`, `incomplete` o `cancelled` en los caminos explícitos implementados por el runner, pero la no comparabilidad agregada también puede quedar reflejada solo en `CampaignSummary.incomplete_cases` e incidents aunque el `case_report.status` permanezca `completed`.
 - **`campaign_reporting.py`**:
@@ -195,11 +198,12 @@ Sobre comparabilidad de métricas Qiskit:
 2. Crear una `Campaign` y expandir sus Campaign Cases como combinaciones `circuit x backend`.
 3. Para cada Campaign Case, ejecutar `Baseline` y `MO_Only`.
 4. Tomar el layout exacto seleccionado por `MO_Only` para ese Campaign Case.
-5. Lanzar training RL a través de `training_bridge.py` usando ese layout como `initial_layout`.
-6. Seleccionar el Training Artifact, prefiriendo `best_model.zip` y haciendo fallback a `final_model.zip`.
-7. Ejecutar `MO+RL` reutilizando ese mismo layout y ese Training Artifact en evaluación.
-8. Persistir el estado público de la Campaign en `summary.md`, `campaign.json` y `cases/<case>/result.json`.
-9. Reportar explícitamente casos `failed`, `incomplete` o `cancelled` cuando el runner así lo establezca, y además registrar en agregados e incidents los casos que terminan sin un bundle comparable completo.
+5. Derivar un path-expanded routing subgraph desde los pares lógicos que realmente interactúan sobre el coupling map real del backend; si no puede derivarse, hacer fallback al coupling map completo y registrar el motivo.
+6. Lanzar training RL a través de `training_bridge.py` usando ese layout como `initial_layout` y el coupling map derivado como grafo de routing de Campaign.
+7. Seleccionar el Training Artifact, prefiriendo `best_model.zip` y haciendo fallback a `final_model.zip`.
+8. Ejecutar `MO+RL` reutilizando ese mismo layout y ese mismo grafo de routing derivado en evaluación; la comparación final post-routing de Qiskit sigue midiéndose contra el backend real.
+9. Persistir el estado público de la Campaign en `summary.md`, `campaign.json` y `cases/<case>/result.json`.
+10. Reportar explícitamente casos `failed`, `incomplete` o `cancelled` cuando el runner así lo establezca, y además registrar en agregados e incidents los casos que terminan sin un bundle comparable completo.
 
 #### F. Default Campaign vs Advanced Campaign
 

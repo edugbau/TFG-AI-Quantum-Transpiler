@@ -17,6 +17,8 @@ Integration v1 also owns the Campaign layer used for reproducible `train+eval` c
 
 Within that guided Campaign comparison, `MO_Only` selects the layout for the Campaign Case. Campaign training for `MO+RL` starts from that exact layout, and `MO+RL` evaluation reuses the same layout together with the resulting Training Artifact for the same Campaign Case.
 
+Within Campaign `MO+RL`, `MO_Only` still selects the layout for the Campaign Case. Campaign trains and evaluates RL on that derived routing graph rather than defaulting to the full backend routing graph. Campaign derives a path-expanded routing subgraph from the interacting logical pairs in the circuit while preserving the exact `MO_Only` layout. If derivation fails, Campaign falls back to the full backend coupling map and records that fallback in case output notes, while the final Qiskit post-routing comparison still targets the real backend.
+
 The current implementation now includes campaign contracts, the training bridge, campaign reporting and Summary Document rendering, the sequential Campaign runner, and the guided Campaign CLI, while preserving the shared contracts for routing evaluation.
 
 When an RL routing model has a neighboring `run_metadata.json`, integration uses the saved routing contract from that sidecar when available before falling back to legacy defaults.
@@ -53,6 +55,8 @@ Each Campaign persists a public root with at least:
 The Summary Document records Campaign metadata, aggregate comparison across `Baseline`, `MO_Only`, and `MO+RL`, per-case detail, RL training notes, and recorded incidents. Cases that fail before comparison, or complete without a comparable metric bundle, are reported explicitly through the aggregate comparison and incidents sections. In the current implementation, those sections are the authoritative signal for non-comparable cases; top-level Campaign status can still remain `completed`, and a per-case status can still remain `completed`, when comparability is missing.
 
 For the Campaign hybrid path, the sequence is explicit: `MO_Only` selects the layout, Campaign training produces the Training Artifact starting from that exact layout, and `MO+RL` evaluation uses the same layout and that artifact when it runs the routed comparison.
+
+On top of that Campaign-only layout reuse, Campaign derives a path-expanded routing subgraph from the interacting logical pairs for that same layout, trains and evaluates RL on that derived graph, and falls back to the full backend coupling map with a recorded note if derivation fails.
 
 ## RL scenario semantics
 

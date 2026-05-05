@@ -270,6 +270,12 @@ def _render_selected_layout(case_report: CampaignCaseReport) -> str:
     return "- Selected Layout: unavailable"
 
 
+def _render_scenario_notes(label: str, result: ScenarioResult | None) -> list[str]:
+    if result is None or not result.notes:
+        return []
+    return [f"- {label} Notes: " + " | ".join(result.notes)]
+
+
 def _render_training_summary(training_result: TrainingBridgeResult | None) -> list[str]:
     if training_result is None:
         return ["### RL Training Summary", "- Training: unavailable"]
@@ -306,6 +312,7 @@ def _render_case_detail(report: CampaignReport) -> list[str]:
                 _render_scenario_metric_line("MO+RL", case_report.mo_rl_result),
             ]
         )
+        lines.extend(_render_scenario_notes("MO+RL", case_report.mo_rl_result))
         lines.extend(_render_training_summary(case_report.training_result))
         if case_report.incidents:
             lines.append("- Incidents: " + "; ".join(case_report.incidents))

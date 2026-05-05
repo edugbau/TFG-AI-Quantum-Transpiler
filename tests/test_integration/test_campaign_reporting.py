@@ -732,6 +732,41 @@ def test_summary_markdown_references_case_id_and_training_artifact_path() -> Non
     assert "- Selected Artifact: `campaigns/campaign-010/cases/ghz_bad_3__fake_torino/training/models/run-001/best_model.zip`" in markdown
 
 
+def test_render_campaign_summary_markdown_includes_mo_rl_routing_graph_notes() -> None:
+    case = _build_case("ghz_3__fake_torino", "ghz", 3, "fake_torino")
+    report = build_campaign_report(
+        campaign_id="campaign-001",
+        campaign_status="completed",
+        campaign_config=_build_campaign_config(),
+        case_reports=[
+            CampaignCaseReport(
+                case=case,
+                status="completed",
+                baseline_result=_build_scenario_result("Baseline", case, metrics=_build_metrics(100, 30, 45.0, 1.0)),
+                mo_only_result=_build_scenario_result("MO_Only", case, metrics=_build_metrics(90, 28, 40.0, 1.5)),
+                mo_rl_result=ScenarioResult(
+                    scenario_name="MO+RL",
+                    circuit_name="ghz_3",
+                    backend_name="fake_torino",
+                    seed=42,
+                    success=True,
+                    selected_layout=[2, 0, 1],
+                    transpilation_metrics=_build_metrics(80, 24, 36.0, 2.0),
+                    notes=[
+                        "Campaign routing graph: mode=path_expanded_subgraph, nodes=3, edges=2, interacting_pairs=1, added_intermediate_qubits=[]"
+                    ],
+                ),
+                training_result=_build_training_result(case),
+            )
+        ],
+    )
+
+    markdown = render_campaign_summary_markdown(report)
+
+    assert "MO+RL Notes" in markdown
+    assert "Campaign routing graph: mode=path_expanded_subgraph" in markdown
+
+
 def test_write_campaign_outputs_rewrites_absolute_training_artifact_paths_to_campaign_public_paths(tmp_path) -> None:
     config = _build_campaign_config()
     case = _build_case("ghz_bad_3__fake_torino", "ghz..bad", 3, "fake_torino")

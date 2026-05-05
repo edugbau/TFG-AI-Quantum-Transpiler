@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from qiskit import QuantumCircuit
+
 from src.integration.campaign_contracts import Campaign, CampaignCase, CampaignCircuitSpec, CampaignConfig
 from src.integration.contracts import LayoutSelectionPolicy, ScenarioResult
 from src.integration.training_bridge import TrainingBridgeResult, TrainingConfigSummary
@@ -91,6 +93,13 @@ def _build_training_result(case: CampaignCase, *, status: str = "completed") -> 
     )
 
 
+def _make_case_circuit() -> QuantumCircuit:
+    circuit = QuantumCircuit(3)
+    circuit.cx(0, 1)
+    circuit.cx(1, 2)
+    return circuit
+
+
 def test_run_campaign_executes_cases_in_stable_sequential_order(tmp_path) -> None:
     from src.integration.campaign_runner import run_campaign
 
@@ -107,7 +116,7 @@ def test_run_campaign_executes_cases_in_stable_sequential_order(tmp_path) -> Non
     write_calls: list[int] = []
 
     def fake_load_circuit(case: CampaignCase):
-        circuit = object()
+        circuit = _make_case_circuit()
         loaded_circuits[case.case_id] = circuit
         call_log.append(("load", case.case_id, id(circuit)))
         return circuit
@@ -194,7 +203,7 @@ def test_run_campaign_trains_then_runs_baseline_mo_only_and_mo_rl(tmp_path) -> N
     case = campaign.build_cases()[0]
     call_order: list[str] = []
     write_calls: list[int] = []
-    circuit = object()
+    circuit = _make_case_circuit()
 
     def fake_run_baseline(request, *, circuit):
         assert request.scenario_name == "Baseline"
@@ -274,7 +283,7 @@ def test_run_campaign_trains_mo_rl_cases_from_mo_only_selected_layout(tmp_path) 
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: ScenarioResult(
             scenario_name="MO_Only",
@@ -323,7 +332,7 @@ def test_run_campaign_defensively_copies_selected_layout_across_training_and_mo_
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: ScenarioResult(
             scenario_name="MO_Only",
@@ -348,6 +357,86 @@ def test_run_campaign_defensively_copies_selected_layout_across_training_and_mo_
     assert report.case_reports[0].status == "completed"
 
 
+def test_run_campaign_uses_derived_routing_subgraph_for_training_and_mo_rl(tmp_path, monkeypatch) -> None:
+    from src.integration import campaign_runner
+
+    campaign = _build_campaign()
+    case = campaign.build_cases()[0]
+    circuit = _make_case_circuit()
+    derived_routing_graph = SimpleNamespace(
+        mode="path_expanded_subgraph",
+        coupling_edges=[(0, 2), (2, 3)],
+        node_count=3,
+        edge_count=2,
+        added_intermediate_qubits=[2],
+        interacting_pair_count=1,
+        fallback_reason=None,
+    )
+    captured_training_coupling_maps: list[list[tuple[int, int]]] = []
+    captured_mo_rl_kwargs: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        campaign_runner,
+        "build_path_expanded_subgraph",
+        lambda *, circuit, selected_layout, coupling_edges: derived_routing_graph,
+        raising=False,
+    )
+
+    def fake_train_case(*, campaign_case, campaign_config, target_circuit, coupling_map, case_output_dir, initial_layout=None):
+        del campaign_config, case_output_dir
+        assert campaign_case == case
+        assert target_circuit is circuit
+        assert initial_layout == [2, 1, 0]
+        captured_training_coupling_maps.append(list(coupling_map))
+        return _build_training_result(campaign_case)
+
+    def fake_run_mo_rl(request, *, circuit, injected_layout, injected_coupling_edges, injected_routing_graph):
+        del request
+        captured_mo_rl_kwargs.append(
+            {
+                "circuit": circuit,
+                "injected_layout": list(injected_layout),
+                "injected_coupling_edges": list(injected_coupling_edges),
+                "injected_routing_graph": injected_routing_graph,
+            }
+        )
+        return _build_result("MO+RL", case, metrics=_build_metrics(80))
+
+    report = campaign_runner.run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: circuit,
+        run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
+        run_mo_only=lambda request, *, circuit: ScenarioResult(
+            scenario_name="MO_Only",
+            circuit_name="ghz_3",
+            backend_name="fake_torino",
+            seed=42,
+            success=True,
+            selected_layout=[2, 1, 0],
+            transpilation_metrics=_build_metrics(90),
+        ),
+        train_case_fn=fake_train_case,
+        run_mo_rl=fake_run_mo_rl,
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            coupling_edges=[(0, 1), (1, 2), (2, 3)],
+        ),
+        write_outputs=lambda *, output_dir, report: None,
+    )
+
+    assert captured_training_coupling_maps == [[(0, 2), (2, 3)]]
+    assert captured_mo_rl_kwargs == [
+        {
+            "circuit": circuit,
+            "injected_layout": [2, 1, 0],
+            "injected_coupling_edges": [(0, 2), (2, 3)],
+            "injected_routing_graph": derived_routing_graph,
+        }
+    ]
+    assert report.case_reports[0].status == "completed"
+
+
 def test_run_campaign_fails_case_when_mo_only_result_has_no_selected_layout(tmp_path) -> None:
     from src.integration.campaign_runner import run_campaign
 
@@ -369,7 +458,7 @@ def test_run_campaign_fails_case_when_mo_only_result_has_no_selected_layout(tmp_
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: ScenarioResult(
             scenario_name="MO_Only",
@@ -413,7 +502,7 @@ def test_run_campaign_preserves_legacy_mo_rl_runner_seam_without_injected_layout
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: ScenarioResult(
             scenario_name="MO_Only",
@@ -453,7 +542,7 @@ def test_run_campaign_passes_injected_layout_to_kwargs_aware_mo_rl_runner(tmp_pa
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: ScenarioResult(
             scenario_name="MO_Only",
@@ -508,7 +597,7 @@ def test_run_campaign_forces_baseline_safe_request_defaults(tmp_path) -> None:
     run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=fake_run_baseline,
         run_mo_only=lambda request, *, circuit: _build_result("MO_Only", case, metrics=_build_metrics(90)),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
@@ -551,7 +640,7 @@ def test_run_campaign_rejects_unknown_mo_objective_name(tmp_path) -> None:
         run_campaign(
             campaign,
             output_root=tmp_path / "campaigns",
-            load_case_circuit=lambda campaign_case: object(),
+            load_case_circuit=lambda campaign_case: _make_case_circuit(),
             run_baseline=lambda request, *, circuit: _build_result(
                 "Baseline",
                 campaign.build_cases()[0],
@@ -609,7 +698,7 @@ def test_run_campaign_intermediate_persistence_does_not_mark_campaign_terminal(t
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result(
             "Baseline",
             next(case for case in cases if case.case_id == _case_id_from_request(request)),
@@ -665,7 +754,7 @@ def test_run_campaign_intermediate_persistence_passes_coherent_running_report_to
     run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result(
             "Baseline",
             next(case for case in cases if case.case_id == _case_id_from_request(request)),
@@ -708,7 +797,7 @@ def test_run_campaign_default_scenario_runners_accept_real_public_signatures(tmp
 
     def fake_load_case_circuit(campaign_case: CampaignCase):
         assert campaign_case == case
-        return object()
+        return _make_case_circuit()
 
     def fake_public_run_baseline(request):
         assert request.scenario_name == "Baseline"
@@ -760,7 +849,8 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
 
     campaign = _build_campaign()
     case = campaign.build_cases()[0]
-    circuit = object()
+    circuit = QuantumCircuit(3)
+    circuit.cx(0, 1)
     selected_layout = [2, 1, 0]
     call_log: list[tuple[str, object]] = []
 
@@ -931,7 +1021,7 @@ def test_run_campaign_preserves_baseline_and_mo_only_when_training_fails(tmp_pat
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: fake_result_for_request(request, "Baseline", 100),
         run_mo_only=lambda request, *, circuit: fake_result_for_request(request, "MO_Only", 90),
         train_case_fn=fake_train_case,
@@ -1007,7 +1097,7 @@ def test_run_campaign_marks_case_failed_when_baseline_or_mo_only_fails(tmp_path)
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=fake_baseline,
         run_mo_only=fake_mo_only,
         train_case_fn=fake_train_case,
@@ -1070,7 +1160,7 @@ def test_run_campaign_records_incomplete_mo_rl_without_aborting_remaining_cases(
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: fake_result_for_request(request, "Baseline", 100),
         run_mo_only=lambda request, *, circuit: fake_result_for_request(request, "MO_Only", 90),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
@@ -1116,7 +1206,7 @@ def test_run_campaign_marks_remaining_cases_cancelled_after_explicit_cancellatio
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=fake_baseline,
         run_mo_only=lambda request, *, circuit: _build_result(
             "MO_Only",
@@ -1157,7 +1247,7 @@ def test_run_campaign_marks_interrupted_when_circuit_load_is_interrupted(tmp_pat
     def fake_load_case_circuit(campaign_case: CampaignCase):
         if campaign_case.case_id == first_case.case_id:
             raise KeyboardInterrupt()
-        return object()
+        return _make_case_circuit()
 
     report = run_campaign(
         campaign,
@@ -1211,7 +1301,7 @@ def test_run_campaign_preserves_completed_results_when_persistence_is_interrupte
     report = run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: fake_result_for_case(first_case, "Baseline", 100),
         run_mo_only=lambda request, *, circuit: fake_result_for_case(first_case, "MO_Only", 90),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
@@ -1275,7 +1365,7 @@ def test_run_campaign_aligns_training_case_anchor_with_persisted_case_directory(
     run_campaign(
         campaign,
         output_root=tmp_path / "campaigns",
-        load_case_circuit=lambda campaign_case: object(),
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: _build_result("MO_Only", case, metrics=_build_metrics(90)),
         train_case_fn=fake_train_case,

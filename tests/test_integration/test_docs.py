@@ -73,3 +73,15 @@ def test_integration_docs_lock_campaign_mo_conditioned_layout_reuse_semantics() 
     assert "El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only` y `MO+RL`. `RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign." in internal_doc_text
     assert "Dentro de ese flujo guiado, `MO_Only` es el Scenario que selecciona el layout del Campaign Case. El training de Campaign para `MO+RL` arranca desde ese layout exacto, produce el Training Artifact del caso y la evaluación posterior de `MO+RL` reutiliza tanto ese mismo layout como ese artifacto resultante." in internal_doc_text
     assert "usa el layout exacto seleccionado por `MO_Only` para lanzar el training RL del camino `MO+RL` y reutiliza ese mismo layout en la evaluación híbrida del caso;" in internal_doc_text
+
+
+def test_integration_docs_lock_campaign_path_expanded_subgraph_default() -> None:
+    repo_readme_text = read_text("README.md")
+    integration_readme_text = read_text("src/integration/README.md")
+    internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
+
+    assert "Campaign `MO+RL` uses the exact `MO_Only` layout for the same Campaign Case." in repo_readme_text
+    assert "Campaign `MO+RL` derives a path-expanded routing subgraph from the interacting logical pairs in the circuit" in repo_readme_text
+    assert "Campaign trains and evaluates RL on that derived routing graph" in integration_readme_text
+    assert "final Qiskit post-routing comparison still targets the real backend" in integration_readme_text
+    assert "If subgraph derivation fails, Campaign falls back to the full backend coupling map and records that fallback" in internal_doc_text
