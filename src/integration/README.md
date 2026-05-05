@@ -15,6 +15,8 @@ The scenario layer still preserves `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL`
 
 Integration v1 also owns the Campaign layer used for reproducible `train+eval` comparison across one or more Campaign Cases. The canonical Campaign comparison set is `Baseline`, `MO_Only`, and `MO+RL`; `RL_Only` remains available as a standalone Scenario outside the primary guided Campaign flow.
 
+Within that guided Campaign comparison, `MO_Only` selects the layout for the Campaign Case. Campaign training for `MO+RL` starts from that exact layout, and `MO+RL` evaluation reuses the same layout together with the resulting Training Artifact for the same Campaign Case.
+
 The current implementation now includes campaign contracts, the training bridge, campaign reporting and Summary Document rendering, the sequential Campaign runner, and the guided Campaign CLI, while preserving the shared contracts for routing evaluation.
 
 When an RL routing model has a neighboring `run_metadata.json`, integration uses the saved routing contract from that sidecar when available before falling back to legacy defaults.
@@ -32,7 +34,7 @@ Internal implementation details, contracts and pipelines are documented in `docs
 - `integration` owns Campaign orchestration, Scenario comparison, Campaign persistence, Summary Document generation, and the MO -> RL handoff contract.
 - `rl_module` owns how RL training is implemented and how Training Artifacts are produced.
 - `mo_module` owns layout generation and selection inputs.
-- In the hybrid path, MO still enters evaluation through `initial_layout`; `integration` owns that handoff and `rl_module` consumes it.
+- In the hybrid Campaign path, `MO_Only` selects the layout, `integration` forwards it through `initial_layout` into RL training, and `MO+RL` evaluation reuses that same layout and the resulting Training Artifact; `rl_module` consumes the contract but does not own the handoff.
 
 ## Campaign semantics
 
@@ -49,6 +51,8 @@ Each Campaign persists a public root with at least:
 - `cases/<case>/result.json` for per-case persistence.
 
 The Summary Document records Campaign metadata, aggregate comparison across `Baseline`, `MO_Only`, and `MO+RL`, per-case detail, RL training notes, and recorded incidents. Cases that fail before comparison, or complete without a comparable metric bundle, are reported explicitly through the aggregate comparison and incidents sections. In the current implementation, those sections are the authoritative signal for non-comparable cases; top-level Campaign status can still remain `completed`, and a per-case status can still remain `completed`, when comparability is missing.
+
+For the Campaign hybrid path, the sequence is explicit: `MO_Only` selects the layout, Campaign training produces the Training Artifact starting from that exact layout, and `MO+RL` evaluation uses the same layout and that artifact when it runs the routed comparison.
 
 ## RL scenario semantics
 

@@ -92,6 +92,43 @@ def test_train_case_returns_best_model_when_available(monkeypatch, tmp_path) -> 
     assert result.effective_training_config.seed == 42
 
 
+def test_train_case_forwards_initial_layout_to_setup_training_pipeline(monkeypatch, tmp_path) -> None:
+    config = _build_campaign_config()
+    case = _build_campaign_case()
+    case_output_dir = tmp_path / "cases" / case.case_id
+    captured_kwargs = {}
+
+    class DummyAgent:
+        def __init__(self):
+            self.run_model_dir = case_output_dir / "training" / "models" / "run-001"
+            self.run_log_dir = case_output_dir / "training" / "logs" / "run-001"
+            self.best_model_path = self.run_model_dir / "best_model.zip"
+            self.last_model_path = self.run_model_dir / "final_model.zip"
+
+    def fake_setup_training_pipeline(**kwargs):
+        captured_kwargs.update(kwargs)
+        agent = DummyAgent()
+        agent.run_model_dir.mkdir(parents=True)
+        agent.run_log_dir.mkdir(parents=True)
+        agent.best_model_path.write_bytes(b"best")
+        agent.last_model_path.write_bytes(b"final")
+        return agent
+
+    monkeypatch.setattr("src.integration.training_bridge.setup_training_pipeline", fake_setup_training_pipeline)
+
+    result = train_case(
+        campaign_case=case,
+        campaign_config=config,
+        target_circuit=QuantumCircuit(3),
+        coupling_map=[(0, 1), (1, 2)],
+        case_output_dir=case_output_dir,
+        initial_layout=[2, 1, 0],
+    )
+
+    assert captured_kwargs["initial_layout"] == [2, 1, 0]
+    assert result.status == "completed"
+
+
 def test_train_case_falls_back_to_final_model_when_best_model_is_missing(monkeypatch, tmp_path) -> None:
     config = _build_campaign_config()
     case = _build_campaign_case()
@@ -129,6 +166,43 @@ def test_train_case_falls_back_to_final_model_when_best_model_is_missing(monkeyp
     assert result.final_model_path == final_model_path
     assert result.run_model_dir == actual_run_model_dir
     assert result.run_log_dir == actual_run_log_dir
+
+
+def test_train_case_forwards_none_initial_layout_when_omitted(monkeypatch, tmp_path) -> None:
+    config = _build_campaign_config()
+    case = _build_campaign_case()
+    case_output_dir = tmp_path / "cases" / case.case_id
+    captured_kwargs = {}
+
+    class DummyAgent:
+        def __init__(self):
+            self.run_model_dir = case_output_dir / "training" / "models" / "run-001"
+            self.run_log_dir = case_output_dir / "training" / "logs" / "run-001"
+            self.best_model_path = self.run_model_dir / "best_model.zip"
+            self.last_model_path = self.run_model_dir / "final_model.zip"
+
+    def fake_setup_training_pipeline(**kwargs):
+        captured_kwargs.update(kwargs)
+        agent = DummyAgent()
+        agent.run_model_dir.mkdir(parents=True)
+        agent.run_log_dir.mkdir(parents=True)
+        agent.best_model_path.write_bytes(b"best")
+        agent.last_model_path.write_bytes(b"final")
+        return agent
+
+    monkeypatch.setattr("src.integration.training_bridge.setup_training_pipeline", fake_setup_training_pipeline)
+
+    result = train_case(
+        campaign_case=case,
+        campaign_config=config,
+        target_circuit=QuantumCircuit(3),
+        coupling_map=[(0, 1), (1, 2)],
+        case_output_dir=case_output_dir,
+    )
+
+    assert "initial_layout" in captured_kwargs
+    assert captured_kwargs["initial_layout"] is None
+    assert result.status == "completed"
 
 
 def test_train_case_surfaces_training_failure_with_paths_and_status(monkeypatch, tmp_path) -> None:

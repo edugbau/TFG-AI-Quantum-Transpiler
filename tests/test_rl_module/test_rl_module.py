@@ -2195,6 +2195,139 @@ class TestTrainingUtilities:
 
         assert reset_seeds == [55, 55]
 
+    def test_setup_training_pipeline_keeps_initial_layout_across_subsequent_train_and_eval_resets(
+        self, monkeypatch, tmp_path
+    ):
+        from src.rl_module import training
+
+        reset_calls = []
+
+        class FakeEnv(gym.Env):
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def reset(self, *, seed=None, options=None):
+                reset_calls.append((seed, options))
+                return {}, {}
+
+        class FakeMonitor:
+            def __init__(self, env):
+                self.env = env
+
+            def reset(self, *, seed=None, options=None):
+                if options is None:
+                    return self.env.reset(seed=seed)
+                return self.env.reset(seed=seed, options=options)
+
+        class FakeEvalCallback:
+            def __init__(self, eval_env, *args, **kwargs):
+                self.eval_env = eval_env
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.env = kwargs["env"]
+
+            def train(self, total_timesteps, callbacks):
+                self.env.reset()
+                for callback in callbacks:
+                    eval_env = getattr(callback, "eval_env", None)
+                    if eval_env is not None:
+                        eval_env.reset()
+                return None
+
+            def save(self, path):
+                return None
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", FakeEnv)
+        monkeypatch.setattr(training, "Monitor", FakeMonitor)
+        monkeypatch.setattr(training, "CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr(training, "EvalCallback", FakeEvalCallback)
+        monkeypatch.setattr(training, "QuantumRLAgent", FakeAgent)
+        monkeypatch.setattr(training, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(training, "save_run_metadata", lambda *args, **kwargs: None)
+
+        training.setup_training_pipeline(
+            target_circuit=QuantumCircuit(5),
+            coupling_map=[(0, 1), (1, 2)],
+            algorithm="PPO",
+            total_timesteps=10,
+            seed=42,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+            initial_layout=[4, 3, 2, 1, 0],
+        )
+
+        assert reset_calls == [
+            (42, {"initial_layout": [4, 3, 2, 1, 0]}),
+            (42, {"initial_layout": [4, 3, 2, 1, 0]}),
+            (None, {"initial_layout": [4, 3, 2, 1, 0]}),
+            (None, {"initial_layout": [4, 3, 2, 1, 0]}),
+        ]
+
+    def test_setup_training_pipeline_keeps_default_reset_behavior_across_subsequent_resets_without_initial_layout(
+        self, monkeypatch, tmp_path
+    ):
+        from src.rl_module import training
+
+        reset_calls = []
+
+        class FakeEnv(gym.Env):
+            def __init__(self, **kwargs):
+                pass
+
+            def reset(self, *, seed=None, options=None):
+                reset_calls.append((seed, options))
+                return {}, {}
+
+        class FakeMonitor:
+            def __init__(self, env):
+                self.env = env
+
+            def reset(self, *, seed=None, options=None):
+                if options is None:
+                    return self.env.reset(seed=seed)
+                return self.env.reset(seed=seed, options=options)
+
+        class FakeEvalCallback:
+            def __init__(self, eval_env, *args, **kwargs):
+                self.eval_env = eval_env
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                self.env = kwargs["env"]
+
+            def train(self, total_timesteps, callbacks):
+                self.env.reset()
+                for callback in callbacks:
+                    eval_env = getattr(callback, "eval_env", None)
+                    if eval_env is not None:
+                        eval_env.reset()
+                return None
+
+            def save(self, path):
+                return None
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", FakeEnv)
+        monkeypatch.setattr(training, "Monitor", FakeMonitor)
+        monkeypatch.setattr(training, "CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr(training, "EvalCallback", FakeEvalCallback)
+        monkeypatch.setattr(training, "QuantumRLAgent", FakeAgent)
+        monkeypatch.setattr(training, "set_global_seeds", lambda seed: None)
+        monkeypatch.setattr(training, "save_run_metadata", lambda *args, **kwargs: None)
+
+        training.setup_training_pipeline(
+            target_circuit=QuantumCircuit(5),
+            coupling_map=[(0, 1), (1, 2)],
+            algorithm="PPO",
+            total_timesteps=10,
+            seed=42,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+        )
+
+        assert reset_calls == [(42, None), (42, None), (None, None), (None, None)]
+
     def test_setup_training_pipeline_threads_basis_gates_into_env(
         self, monkeypatch, simple_circuit_3q, linear_coupling_3q, tmp_path
     ):

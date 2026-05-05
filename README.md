@@ -72,6 +72,8 @@ layout[i] = physical_qubit_for_logical_qubit_i
 
 `src/integration/` ya no se limita a Scenarios unitarios. Ahora también soporta una **Train+Eval Campaign** reproducible compuesta por uno o más **Campaign Cases**. Cada Campaign Case corresponde a una combinación `circuit x backend` y ejecuta la comparación canónica `Baseline`, `MO_Only` y `MO+RL`.
 
+Dentro de esa comparación guiada, `MO_Only` es el Scenario que selecciona el layout. El training de Campaign para `MO+RL` arranca desde ese layout exacto y la evaluación posterior de `MO+RL` reutiliza ese mismo layout junto con el Training Artifact producido para el mismo Campaign Case.
+
 `RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign.
 
 La guided CLI ofrece dos caminos:
@@ -94,11 +96,12 @@ Los límites de ownership se mantienen explícitos:
 - `integration` owns Campaign orchestration, scenario comparison, persistence, Summary Document y el handoff MO -> RL.
 - `rl_module` owns how RL training is implemented and how checkpoints are produced.
 - `mo_module` owns layout generation/selection inputs.
-- En el camino híbrido, MO entra en evaluación a través de `initial_layout`.
+- En el camino híbrido de Campaign, `MO_Only` selecciona el layout, `integration` lo reenvía como `initial_layout` al training RL y la evaluación `MO+RL` reutiliza ese mismo layout junto con el Training Artifact del caso.
 
 **Estado actual:**
 - `src/integration/` implementa la orquestación v1 de `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` para evaluación de routing.
 - `src/integration/` implementa Campaign contracts, training bridge, campaign reporting/summary rendering, sequential campaign runner y guided campaign CLI.
+- En la comparación guiada de Campaign, `MO_Only` selecciona el layout y `MO+RL` entrena/evalúa desde ese layout exacto para el mismo Campaign Case usando el Training Artifact resultante.
 - `src/rl_module/` soporta routing y un primer modo de `synthesis` entrenable restringido a circuitos Clifford.
 - `mo_module` y `rl_module` deben permanecer testeables de forma independiente.
 - La comparación canónica de Campaign usa `Baseline`, `MO_Only` y `MO+RL`; `RL_Only` queda fuera del flujo guiado principal.

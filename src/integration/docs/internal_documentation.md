@@ -18,6 +18,8 @@ La capa de Scenarios sigue cubriendo:
 
 La capa de Campaign soporta una Train+Eval Campaign donde cada Campaign Case corresponde a una combinación `circuit x backend`. El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only` y `MO+RL`. `RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign.
 
+Dentro de ese flujo guiado, `MO_Only` es el Scenario que selecciona el layout del Campaign Case. El training de Campaign para `MO+RL` arranca desde ese layout exacto, produce el Training Artifact del caso y la evaluación posterior de `MO+RL` reutiliza tanto ese mismo layout como ese artifacto resultante.
+
 El módulo no implementa el entrenamiento RL en sí mismo ni cubre `synthesis` en esta capa pública. `integration` orquesta el training por Campaign Case a través de un seam explícito y consume el Training Artifact resultante, mientras que `rl_module` sigue siendo dueño de cómo se ejecuta el training y de cómo se producen los checkpoints. En esta versión, `RL_Only` sigue devolviendo resúmenes de episodio (*episode summaries*), mientras que `MO+RL` ya puede reconstruir el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usa `swap_trace` para materializar los swaps físicos y ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing.
 
 En términos de ownership:
@@ -63,9 +65,11 @@ Define la capa Campaign sin mover la implementación de training dentro de `inte
   - enumera Campaign Cases como combinaciones `circuit x backend`.
 - **`training_bridge.py`**:
   - actúa como seam entre Campaign y `src.rl_module.training`;
+  - reenvía el layout seleccionado por `MO_Only` como `initial_layout` cuando el Campaign Case ejecuta el camino `MO+RL`;
   - devuelve el Training Artifact seleccionado, prefiriendo `best_model.zip` y con fallback a `final_model.zip`.
 - **`campaign_runner.py`**:
   - ejecuta `Baseline`, `MO_Only`, training RL y `MO+RL` en secuencia por Campaign Case;
+  - usa el layout exacto seleccionado por `MO_Only` para lanzar el training RL del camino `MO+RL` y reutiliza ese mismo layout en la evaluación híbrida del caso;
   - persiste el estado de la Campaign tras cada caso;
   - marca casos como `failed`, `incomplete` o `cancelled` en los caminos explícitos implementados por el runner, pero la no comparabilidad agregada también puede quedar reflejada solo en `CampaignSummary.incomplete_cases` e incidents aunque el `case_report.status` permanezca `completed`.
 - **`campaign_reporting.py`**:
@@ -190,11 +194,12 @@ Sobre comparabilidad de métricas Qiskit:
 1. Construir una `CampaignConfig` mediante el camino `default` o `advanced`.
 2. Crear una `Campaign` y expandir sus Campaign Cases como combinaciones `circuit x backend`.
 3. Para cada Campaign Case, ejecutar `Baseline` y `MO_Only`.
-4. Lanzar training RL a través de `training_bridge.py`.
-5. Seleccionar el Training Artifact, prefiriendo `best_model.zip` y haciendo fallback a `final_model.zip`.
-6. Ejecutar `MO+RL` reutilizando el layout MO como `initial_layout` en evaluación.
-7. Persistir el estado público de la Campaign en `summary.md`, `campaign.json` y `cases/<case>/result.json`.
-8. Reportar explícitamente casos `failed`, `incomplete` o `cancelled` cuando el runner así lo establezca, y además registrar en agregados e incidents los casos que terminan sin un bundle comparable completo.
+4. Tomar el layout exacto seleccionado por `MO_Only` para ese Campaign Case.
+5. Lanzar training RL a través de `training_bridge.py` usando ese layout como `initial_layout`.
+6. Seleccionar el Training Artifact, prefiriendo `best_model.zip` y haciendo fallback a `final_model.zip`.
+7. Ejecutar `MO+RL` reutilizando ese mismo layout y ese Training Artifact en evaluación.
+8. Persistir el estado público de la Campaign en `summary.md`, `campaign.json` y `cases/<case>/result.json`.
+9. Reportar explícitamente casos `failed`, `incomplete` o `cancelled` cuando el runner así lo establezca, y además registrar en agregados e incidents los casos que terminan sin un bundle comparable completo.
 
 #### F. Default Campaign vs Advanced Campaign
 

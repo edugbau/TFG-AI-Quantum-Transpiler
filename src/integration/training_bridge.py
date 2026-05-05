@@ -75,6 +75,7 @@ def train_case(
     target_circuit: QuantumCircuit,
     coupling_map: Sequence[tuple[int, int]],
     case_output_dir: Path | str,
+    initial_layout: Sequence[int] | None = None,
 ) -> TrainingBridgeResult:
     del campaign_case
 
@@ -96,6 +97,7 @@ def train_case(
             model_save_dir=str(run_model_base_dir),
             lookahead_window=campaign_config.rl_lookahead_window,
             max_steps=campaign_config.rl_max_steps,
+            initial_layout=list(initial_layout) if initial_layout is not None else None,
         )
     except Exception:
         return TrainingBridgeResult(

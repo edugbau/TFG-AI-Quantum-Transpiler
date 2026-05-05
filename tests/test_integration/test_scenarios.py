@@ -998,6 +998,74 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
     ]
 
 
+def test_run_mo_rl_scenario_reuses_injected_layout_without_running_mo(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO+RL", rl_model_path="models/policy.zip")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend=SimpleNamespace(num_qubits=3),
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+    selected_layout = [1, 2, 0]
+    eval_calls = []
+    rebuild_calls = []
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda circuit, backend, seed: (_ for _ in ()).throw(AssertionError("MO should not run when layout is injected")),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda result, *, policy, objective_index=0: (_ for _ in ()).throw(
+            AssertionError("layout selection should not run when layout is injected")
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_load_agent",
+        lambda request, *, algorithm="PPO": "agent-object",
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "evaluate_routing_episode",
+        lambda **kwargs: eval_calls.append(kwargs)
+        or RoutingEpisodeSummary(
+            initial_layout=list(kwargs["initial_layout"]),
+            final_layout=[2, 1, 0],
+            steps_executed=1,
+            total_reward=1.0,
+            completed=True,
+            truncated=False,
+            total_swaps=0,
+            gates_executed_count=2,
+            swap_trace=[],
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: rebuild_calls.append(kwargs) or ("routed-circuit", [2, 1, 0]),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
+    )
+
+    result = scenarios.run_mo_rl_scenario(request, injected_layout=selected_layout)
+
+    assert result.success is True
+    assert result.selected_layout == selected_layout
+    assert eval_calls[0]["initial_layout"] == selected_layout
+    assert rebuild_calls[0]["initial_layout"] == selected_layout
+
+
 def test_run_mo_rl_scenario_returns_controlled_result_when_routing_episode_is_truncated(monkeypatch) -> None:
     from src.integration import scenarios
 

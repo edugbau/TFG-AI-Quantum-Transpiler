@@ -55,3 +55,21 @@ def test_integration_docs_describe_rl_metadata_sidecar_contract() -> None:
     assert "Legacy RL evaluation defaults were used because no run metadata sidecar was found." in internal_doc_text
     assert "metadata_source" not in internal_doc_text
     assert "_load_routing_contract()" not in internal_doc_text
+
+
+def test_integration_docs_lock_campaign_mo_conditioned_layout_reuse_semantics() -> None:
+    repo_readme_text = read_text("README.md")
+    integration_readme_text = read_text("src/integration/README.md")
+    internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
+
+    assert "Cada Campaign Case corresponde a una combinación `circuit x backend` y ejecuta la comparación canónica `Baseline`, `MO_Only` y `MO+RL`." in repo_readme_text
+    assert "`MO_Only` es el Scenario que selecciona el layout. El training de Campaign para `MO+RL` arranca desde ese layout exacto y la evaluación posterior de `MO+RL` reutiliza ese mismo layout junto con el Training Artifact producido para el mismo Campaign Case." in repo_readme_text
+    assert "En el camino híbrido de Campaign, `MO_Only` selecciona el layout, `integration` lo reenvía como `initial_layout` al training RL y la evaluación `MO+RL` reutiliza ese mismo layout junto con el Training Artifact del caso." in repo_readme_text
+
+    assert "The canonical Campaign comparison set is `Baseline`, `MO_Only`, and `MO+RL`; `RL_Only` remains available as a standalone Scenario outside the primary guided Campaign flow." in integration_readme_text
+    assert "Within that guided Campaign comparison, `MO_Only` selects the layout for the Campaign Case. Campaign training for `MO+RL` starts from that exact layout, and `MO+RL` evaluation reuses the same layout together with the resulting Training Artifact for the same Campaign Case." in integration_readme_text
+    assert "For the Campaign hybrid path, the sequence is explicit: `MO_Only` selects the layout, Campaign training produces the Training Artifact starting from that exact layout, and `MO+RL` evaluation uses the same layout and that artifact when it runs the routed comparison." in integration_readme_text
+
+    assert "El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only` y `MO+RL`. `RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign." in internal_doc_text
+    assert "Dentro de ese flujo guiado, `MO_Only` es el Scenario que selecciona el layout del Campaign Case. El training de Campaign para `MO+RL` arranca desde ese layout exacto, produce el Training Artifact del caso y la evaluación posterior de `MO+RL` reutiliza tanto ese mismo layout como ese artifacto resultante." in internal_doc_text
+    assert "usa el layout exacto seleccionado por `MO_Only` para lanzar el training RL del camino `MO+RL` y reutiliza ese mismo layout en la evaluación híbrida del caso;" in internal_doc_text

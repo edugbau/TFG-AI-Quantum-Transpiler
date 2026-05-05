@@ -329,23 +329,30 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
 
 
-def run_mo_rl_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
+def run_mo_rl_scenario(request: ScenarioRequest, *, circuit=None, injected_layout: list[int] | None = None) -> ScenarioResult:
     _require_scenario(request, "MO+RL")
     if request.rl_model_path is None:
         raise ValueError("rl_model_path is required for RL scenarios")
     if circuit is None:
         circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
-    mo_result = _run_mo(request, circuit, backend_bundle)
-    selected_layout = _validate_selected_layout(
-        select_layout_from_mo_result(
-            mo_result,
-            policy=request.layout_policy,
-            objective_index=request.mo_objective_index,
-        ),
-        _get_request_num_qubits(request, circuit),
-        backend_bundle.backend,
-    )
+    if injected_layout is None:
+        mo_result = _run_mo(request, circuit, backend_bundle)
+        selected_layout = _validate_selected_layout(
+            select_layout_from_mo_result(
+                mo_result,
+                policy=request.layout_policy,
+                objective_index=request.mo_objective_index,
+            ),
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
+    else:
+        selected_layout = _validate_selected_layout(
+            injected_layout,
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
     contract = resolve_routing_model_contract(request.rl_model_path)
     agent = _load_agent(request, algorithm=contract.algorithm)
     routing_summary = evaluate_routing_episode(

@@ -123,21 +123,27 @@ def _persist_campaign_state(
     return report
 
 
-def _runner_accepts_circuit_kwarg(run_scenario: Callable[..., object]) -> bool:
+def _runner_accepts_kwarg(run_scenario: Callable[..., object], kwarg_name: str) -> bool:
     try:
         parameters = signature(run_scenario).parameters.values()
     except (TypeError, ValueError):
         return False
     return any(
-        (parameter.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD) and parameter.name == "circuit")
+        (parameter.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD) and parameter.name == kwarg_name)
         or parameter.kind == Parameter.VAR_KEYWORD
         for parameter in parameters
     )
 
 
-def _invoke_scenario_runner(run_scenario: Callable[..., object], request: ScenarioRequest, *, circuit):
-    if _runner_accepts_circuit_kwarg(run_scenario):
-        return run_scenario(request, circuit=circuit)
+def _invoke_scenario_runner(run_scenario: Callable[..., object], request: ScenarioRequest, *, circuit, **kwargs):
+    call_kwargs = {}
+    if _runner_accepts_kwarg(run_scenario, "circuit"):
+        call_kwargs["circuit"] = circuit
+    for key, value in kwargs.items():
+        if _runner_accepts_kwarg(run_scenario, key):
+            call_kwargs[key] = value
+    if call_kwargs:
+        return run_scenario(request, **call_kwargs)
     return run_scenario(request)
 
 
@@ -258,6 +264,26 @@ def run_campaign(
                 )
                 continue
 
+            selected_layout = case_report.mo_only_result.selected_layout
+            if selected_layout is None:
+                case_report.status = "failed"
+                case_report.incidents.append(
+                    "MO_Only did not produce a selected layout for Campaign MO+RL training."
+                )
+                case_reports.append(case_report)
+                case_report_recorded = True
+                _persist_campaign_state(
+                    output_root=output_root,
+                    campaign=campaign,
+                    case_reports=case_reports,
+                    campaign_status="running",
+                    write_outputs=write_outputs,
+                    persist_terminal_state=False,
+                )
+                continue
+
+            selected_layout_for_training = list(selected_layout)
+            selected_layout_for_mo_rl = list(selected_layout)
             backend_bundle = resolve_backend_bundle(campaign_case.backend_name)
             case_report.training_result = train_case_fn(
                 campaign_case=campaign_case,
@@ -265,6 +291,7 @@ def run_campaign(
                 target_circuit=circuit,
                 coupling_map=list(getattr(backend_bundle, "coupling_edges")),
                 case_output_dir=case_output_dir,
+                initial_layout=selected_layout_for_training,
             )
 
             if case_report.training_result.status != "completed" or case_report.training_result.selected_artifact_path is None:
@@ -277,7 +304,12 @@ def run_campaign(
                     scenario_name="MO+RL",
                     rl_model_path=str(case_report.training_result.selected_artifact_path),
                 )
-                case_report.mo_rl_result = _invoke_scenario_runner(run_mo_rl, mo_rl_request, circuit=circuit)
+                case_report.mo_rl_result = _invoke_scenario_runner(
+                    run_mo_rl,
+                    mo_rl_request,
+                    circuit=circuit,
+                    injected_layout=selected_layout_for_mo_rl,
+                )
                 if case_report.mo_rl_result.success:
                     case_report.status = "completed"
                 else:

@@ -30,6 +30,24 @@ except ModuleNotFoundError:
     MaskableEvalCallback = None
 
 
+class _StickyResetOptionsWrapper(gym.Wrapper):
+    """Reapplies reset options on every downstream environment reset."""
+
+    def __init__(self, env: gym.Env, *, reset_options: Optional[dict] = None):
+        super().__init__(env)
+        self._reset_options = dict(reset_options) if reset_options is not None else None
+
+    def reset(self, *, seed=None, options=None):
+        merged_options = options
+        if self._reset_options is not None:
+            merged_options = dict(self._reset_options)
+            if options is not None:
+                merged_options.update(options)
+
+        if merged_options is None:
+            return self.env.reset(seed=seed)
+        return self.env.reset(seed=seed, options=merged_options)
+
 def _make_run_dir(base_dir: str, prefix: str = "run") -> str:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     return os.path.join(base_dir, f"{prefix}_{run_id}")
@@ -63,6 +81,7 @@ def setup_training_pipeline(
     max_steps: int = 1000,
     hyperparams: Optional[dict] = None,
     basis_gates: Optional[List[str]] = None,
+    initial_layout: Optional[List[int]] = None,
 ) -> QuantumRLAgent:
     """
     Configura y lanza el pipeline completo de entrenamiento del agente.
@@ -81,6 +100,7 @@ def setup_training_pipeline(
         max_steps: Máximo de pasos por episodio antes de truncar.
         hyperparams: Diccionario con hiperparámetros para PPO/DQN.
         basis_gates: Base nativa explícita requerida por ``mode="synthesis"``.
+        initial_layout: Layout inicial opcional inyectado en train/eval reset.
         
     Returns:
         El agente entrenado listo para evaluación.
@@ -94,6 +114,10 @@ def setup_training_pipeline(
     
     # 2. Configurar Entorno
     # Usamos Monitor para que SB3 registre las métricas automáticas (rewards, episode lengths)
+    reset_options = None
+    if initial_layout is not None:
+        reset_options = {"initial_layout": list(initial_layout)}
+
     raw_env = QuantumTranspilationEnv(
         target_circuit=target_circuit,
         coupling_map=coupling_map,
@@ -103,8 +127,12 @@ def setup_training_pipeline(
         max_steps=max_steps,
         basis_gates=basis_gates,
     )
-    raw_env.reset(seed=seed)
-    env = Monitor(raw_env)
+    if reset_options is None:
+        raw_env.reset(seed=seed)
+        env = Monitor(raw_env)
+    else:
+        raw_env.reset(seed=seed, options=reset_options)
+        env = Monitor(_StickyResetOptionsWrapper(raw_env, reset_options=reset_options))
     
     # Entorno de Evaluación independiente
     eval_raw_env = QuantumTranspilationEnv(
@@ -116,8 +144,12 @@ def setup_training_pipeline(
         max_steps=max_steps,
         basis_gates=basis_gates,
     )
-    eval_raw_env.reset(seed=seed)
-    eval_env = Monitor(eval_raw_env)
+    if reset_options is None:
+        eval_raw_env.reset(seed=seed)
+        eval_env = Monitor(eval_raw_env)
+    else:
+        eval_raw_env.reset(seed=seed, options=reset_options)
+        eval_env = Monitor(_StickyResetOptionsWrapper(eval_raw_env, reset_options=reset_options))
     
     # 3. Callbacks (Logs y Checkpoints)
     run_log_dir = _make_run_dir(log_dir, prefix="rl")
