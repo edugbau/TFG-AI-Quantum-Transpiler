@@ -1,32 +1,51 @@
 # Documentación Interna del Módulo `integration`
 
-Este documento detalla las responsabilidades, contratos, pipelines y seams de desacoplamiento del módulo `integration`. Este módulo actúa como la capa de orquestación entre `qiskit_interface`, `mo_module` y `rl_module`, y es el dueño del handoff MO -> RL para los escenarios de evaluación definidos en la v1 de `routing`.
+Este documento detalla las responsabilidades, contratos, pipelines y seams de desacoplamiento del módulo `integration`. Este módulo actúa como la capa de orquestación entre `qiskit_interface`, `mo_module` y `rl_module`, y es el dueño tanto del handoff MO -> RL como de la orquestación de Campaigns y de la comparación de Scenarios en la v1 actual.
 
 ## Visión General
 
-La versión actual de `integration` implementa únicamente escenarios de evaluación para `routing`:
+La versión actual de `integration` tiene dos capas públicas complementarias:
+
+1. una capa de Scenarios para evaluación unitaria de `routing`;
+2. una capa de Campaign para orquestar flujos reproducibles de `train+eval` por Campaign Case.
+
+La capa de Scenarios sigue cubriendo:
 
 - `Baseline`
 - `MO_Only`
 - `RL_Only`
 - `MO+RL`
 
-El módulo no implementa entrenamiento RL ni cubre `synthesis`. En esta versión, `RL_Only` sigue devolviendo resúmenes de episodio (*episode summaries*), mientras que `MO+RL` ya puede reconstruir el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usa `swap_trace` para materializar los swaps físicos y ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing.
+La capa de Campaign soporta una Train+Eval Campaign donde cada Campaign Case corresponde a una combinación `circuit x backend`. El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only` y `MO+RL`. `RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign.
+
+El módulo no implementa el entrenamiento RL en sí mismo ni cubre `synthesis` en esta capa pública. `integration` orquesta el training por Campaign Case a través de un seam explícito y consume el Training Artifact resultante, mientras que `rl_module` sigue siendo dueño de cómo se ejecuta el training y de cómo se producen los checkpoints. En esta versión, `RL_Only` sigue devolviendo resúmenes de episodio (*episode summaries*), mientras que `MO+RL` ya puede reconstruir el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usa `swap_trace` para materializar los swaps físicos y ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing.
+
+En términos de ownership:
+
+- `integration` owns Campaign orchestration, Scenario comparison, persistence, Summary Document generation y el handoff MO -> RL.
+- `rl_module` owns RL training implementation and checkpoint production.
+- `mo_module` owns layout generation and selection inputs.
+- En el camino híbrido, MO entra en evaluación a través de `initial_layout`; ese contrato se mantiene explícito y sigue siendo propiedad de `integration`.
 
 QASM input is available for the Qiskit-facing scenarios of this v1, es decir, para `Baseline` y `MO_Only` cuando la petición usa `circuit_source="qasm_file"`. Los escenarios `RL_Only` y `MO+RL` no exponen todavía una entrada QASM equivalente en la superficie pública actual.
 
-El backend catalog is intentionally limited a los fake backends actuales (`fake_torino`, `fake_sherbrooke`, `fake_brisbane`). Esta restricción mantiene la evaluación reproducible, evita dependencias de credenciales y refleja el catálogo controlado que publica `qiskit_interface` en esta etapa del proyecto.
+The backend catalog is intentionally limited. La capa subyacente de `integration` trabaja con el catálogo actual de fake backends publicado por `qiskit_interface` (`fake_torino`, `fake_sherbrooke`, `fake_brisbane`). Sin embargo, la guided Campaign CLI expone hoy una superficie más estrecha y solo ofrece `fake_torino` y `fake_brisbane`. Esta restricción mantiene la ejecución guiada reproducible, evita dependencias de credenciales y refleja la superficie actualmente implementada en `campaign_cli.py`.
 
 ## Estructura del Módulo
 
 ```
 src/integration/
 ├── __init__.py              # API pública mínima del módulo.
+├── campaign_cli.py          # CLI guiada para construir y ejecutar Campaigns.
+├── campaign_contracts.py    # DTOs de Campaign, Campaign Case y resumen agregado.
+├── campaign_reporting.py    # Summary Document, agregados y persistencia pública.
+├── campaign_runner.py       # Orquestación secuencial train+eval por Campaign Case.
 ├── contracts.py            # DTOs y validaciones de entrada/salida.
 ├── backend_adapter.py      # Traducción backend -> datos consumibles por integration.
 ├── layout_policy.py        # Selección de layout único a partir de la salida de MO.
 ├── routing_evaluator.py    # Ejecución de episodios RL de routing.
 ├── scenarios.py            # Orquestación de escenarios Baseline / MO / RL / MO+RL.
+├── training_bridge.py      # Seam Campaign -> rl_module.training.
 ├── runner.py               # CLI reproducible para lanzar escenarios.
 ├── README.md               # Overview breve del alcance de la v1.
 └── docs/
@@ -34,6 +53,28 @@ src/integration/
 ```
 
 ## Funcionalidades Principales
+
+### 0. Campaigns y Resumen Público (`campaign_*`, `training_bridge.py`)
+Define la capa Campaign sin mover la implementación de training dentro de `integration`.
+
+- **`campaign_contracts.py`**:
+  - modela `Campaign`, `CampaignConfig`, `CampaignCase` y `CampaignSummary`;
+  - distingue `Default Campaign` y `Advanced Campaign` mediante `CampaignConfig.mode`;
+  - enumera Campaign Cases como combinaciones `circuit x backend`.
+- **`training_bridge.py`**:
+  - actúa como seam entre Campaign y `src.rl_module.training`;
+  - devuelve el Training Artifact seleccionado, prefiriendo `best_model.zip` y con fallback a `final_model.zip`.
+- **`campaign_runner.py`**:
+  - ejecuta `Baseline`, `MO_Only`, training RL y `MO+RL` en secuencia por Campaign Case;
+  - persiste el estado de la Campaign tras cada caso;
+  - marca casos como `failed`, `incomplete` o `cancelled` en los caminos explícitos implementados por el runner, pero la no comparabilidad agregada también puede quedar reflejada solo en `CampaignSummary.incomplete_cases` e incidents aunque el `case_report.status` permanezca `completed`.
+- **`campaign_reporting.py`**:
+  - genera el Summary Document `summary.md` y el output estructurado `campaign.json`;
+  - persiste también `cases/<case>/result.json`;
+  - resume agregados comparables, detalle por caso, training notes e incidents.
+- **`campaign_cli.py`**:
+  - expone la guided CLI para construir una Campaign reproducible;
+  - ofrece el camino `default` con valores canónicos compartidos y el camino `advanced` con ajuste explícito de MO y RL.
 
 ### 1. Contratos y Validación (`contracts.py`)
 Define la superficie propia del módulo para evitar propagar estructuras internas de otros módulos.
@@ -141,6 +182,25 @@ Sobre comparabilidad de métricas Qiskit:
 - `trans_active_qubits` describe cuántos qubits físicos quedan realmente activos tras la transpilación y es la métrica adecuada para comparar layouts dispersos.
 
 ## Pipelines (Flujos de Trabajo)
+
+### Campaign layer
+
+#### E. Train+Eval Campaign
+
+1. Construir una `CampaignConfig` mediante el camino `default` o `advanced`.
+2. Crear una `Campaign` y expandir sus Campaign Cases como combinaciones `circuit x backend`.
+3. Para cada Campaign Case, ejecutar `Baseline` y `MO_Only`.
+4. Lanzar training RL a través de `training_bridge.py`.
+5. Seleccionar el Training Artifact, prefiriendo `best_model.zip` y haciendo fallback a `final_model.zip`.
+6. Ejecutar `MO+RL` reutilizando el layout MO como `initial_layout` en evaluación.
+7. Persistir el estado público de la Campaign en `summary.md`, `campaign.json` y `cases/<case>/result.json`.
+8. Reportar explícitamente casos `failed`, `incomplete` o `cancelled` cuando el runner así lo establezca, y además registrar en agregados e incidents los casos que terminan sin un bundle comparable completo.
+
+#### F. Default Campaign vs Advanced Campaign
+
+- **Default Campaign**: usa el conjunto canónico de defaults compartidos por la guided CLI para priorizar reproducibilidad y una configuración breve.
+- **Advanced Campaign**: permite elegir explícitamente backend(s), algoritmo RL, timesteps, frontier mode, lookahead, max steps, seed, tamaño de MO y layout policy, dentro de la superficie actualmente expuesta por la guided CLI (`fake_torino`, `fake_brisbane`).
+- En ambos casos, la comparación principal sigue siendo `Baseline`, `MO_Only` y `MO+RL`, y el Summary Document conserva los mismos artefactos públicos.
 
 ### A. Pipeline `Baseline`
 
@@ -250,6 +310,7 @@ Dos decisiones de desacoplamiento importantes:
 - `QuantumRLAgent.load()` para cargar modelos ya entrenados.
 - `QuantumTranspilationEnv` en `mode="routing"` para ejecutar episodios.
 - Soporte de `initial_layout` vía `reset(options=...)` como contrato de handoff.
+- `src.rl_module.training` a través de `training_bridge.py` para ejecutar training por Campaign Case sin mover la implementación del training a `integration`.
 - Sidecar `run_metadata.json` para persistir el contrato de evaluación de routing; cuando el sidecar incluye versioned masked routing metadata, `integration` consume esa variante para checkpoints nuevos de `MaskablePPO`; si falta, `integration` conserva legacy defaults y reporta el fallback mediante una entrada adicional en `ScenarioResult.notes`.
 
 ## Limitaciones Conocidas de la v1
@@ -269,8 +330,8 @@ La v1 no orquesta todavía `synthesis`.
 ### 3. Entrada QASM limitada a escenarios Qiskit-facing
 La v1 ya acepta `qasm_file` para `Baseline` y `MO_Only`. Ese soporte no se extiende todavía a `RL_Only` ni `MO+RL` en la superficie pública actual.
 
-### 4. Sin entrenamiento RL desde `integration`
-`integration` consume modelos ya entrenados, pero no invoca el pipeline de entrenamiento.
+### 4. Entrenamiento RL no implementado dentro de `integration`
+`integration` ya puede orquestar una Train+Eval Campaign y disparar training por Campaign Case, pero no implementa el training RL internamente: ese comportamiento sigue perteneciendo a `rl_module` y se consume a través de `training_bridge.py`.
 
 ### 5. Fallback para metadata ausente en checkpoints antiguos
 Cuando un checkpoint RL no trae `run_metadata.json`, `integration` sigue evaluándolo con legacy defaults. Ese fallback se reporta mediante una nota pública en `ScenarioResult.notes`, por ejemplo `Legacy RL evaluation defaults were used because no run metadata sidecar was found.`.

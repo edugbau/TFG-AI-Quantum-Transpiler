@@ -239,9 +239,10 @@ def _run_mo(request: ScenarioRequest, circuit, backend_bundle):
     )
 
 
-def run_baseline_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_baseline_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
     _require_scenario(request, "Baseline")
-    circuit = _load_circuit(request)
+    if circuit is None:
+        circuit = _load_circuit(request)
     transpilation_metrics, transpilation_artifact = _run_named_baseline_with_artifact(
         request,
         circuit,
@@ -260,9 +261,10 @@ def run_baseline_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
 
 
-def run_mo_only_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_mo_only_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
     _require_scenario(request, "MO_Only")
-    circuit = _load_circuit(request)
+    if circuit is None:
+        circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
     mo_result = _run_mo(request, circuit, backend_bundle)
     selected_layout = _validate_selected_layout(
@@ -327,11 +329,12 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
 
 
-def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_mo_rl_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
     _require_scenario(request, "MO+RL")
     if request.rl_model_path is None:
         raise ValueError("rl_model_path is required for RL scenarios")
-    circuit = _load_circuit(request)
+    if circuit is None:
+        circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
     mo_result = _run_mo(request, circuit, backend_bundle)
     selected_layout = _validate_selected_layout(
