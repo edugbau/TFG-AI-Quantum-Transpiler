@@ -1,6 +1,12 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
+from src.integration.mo_effort import (
+    DEFAULT_MO_N_GENERATIONS,
+    DEFAULT_MO_POPULATION_SIZE,
+    MIN_CUSTOM_MO_POPULATION_SIZE,
+)
+
 
 _ALLOWED_SCENARIO_NAMES = frozenset({"Baseline", "MO_Only", "RL_Only", "MO+RL"})
 
@@ -30,6 +36,8 @@ class ScenarioRequest:
     seed: int = 42
     layout_policy: LayoutSelectionPolicy = LayoutSelectionPolicy.COMPROMISE
     mo_use_quick: bool = True
+    mo_population_size: int = DEFAULT_MO_POPULATION_SIZE
+    mo_n_generations: int = DEFAULT_MO_N_GENERATIONS
     initial_layout: list[int] | None = None
     rl_model_path: str | None = None
     mo_objective_index: int = 0
@@ -40,10 +48,18 @@ class ScenarioRequest:
     def __post_init__(self) -> None:
         self.circuit_source = CircuitSource(self.circuit_source)
         self.circuit_format = CircuitFormat(self.circuit_format)
+        self.layout_policy = LayoutSelectionPolicy(self.layout_policy)
         if self.scenario_name not in _ALLOWED_SCENARIO_NAMES:
             raise ValueError("scenario_name must be one of Baseline, MO_Only, RL_Only, MO+RL")
         if self.mo_objective_index < 0:
             raise ValueError("mo_objective_index must be non-negative")
+        if self.mo_population_size < MIN_CUSTOM_MO_POPULATION_SIZE:
+            raise ValueError(
+                "mo_population_size must be at least "
+                f"{MIN_CUSTOM_MO_POPULATION_SIZE}"
+            )
+        if self.mo_n_generations <= 0:
+            raise ValueError("mo_n_generations must be greater than zero")
         if self.circuit_source is CircuitSource.QASM_FILE:
             if self.circuit_path is None:
                 raise ValueError("circuit_path is required when circuit_source is qasm_file")
@@ -81,6 +97,10 @@ class ScenarioRequest:
                 raise ValueError("Baseline does not accept non-default layout_policy")
             if self.mo_use_quick is not True:
                 raise ValueError("Baseline does not accept non-default mo_use_quick")
+            if self.mo_population_size != DEFAULT_MO_POPULATION_SIZE:
+                raise ValueError("Baseline does not accept non-default mo_population_size")
+            if self.mo_n_generations != DEFAULT_MO_N_GENERATIONS:
+                raise ValueError("Baseline does not accept non-default mo_n_generations")
             if self.mo_objective_index != 0:
                 raise ValueError("Baseline does not accept non-default mo_objective_index")
             return
@@ -99,6 +119,10 @@ class ScenarioRequest:
                 raise ValueError("RL_Only does not accept non-default layout_policy")
             if self.mo_use_quick is not True:
                 raise ValueError("RL_Only does not accept non-default mo_use_quick")
+            if self.mo_population_size != DEFAULT_MO_POPULATION_SIZE:
+                raise ValueError("RL_Only does not accept non-default mo_population_size")
+            if self.mo_n_generations != DEFAULT_MO_N_GENERATIONS:
+                raise ValueError("RL_Only does not accept non-default mo_n_generations")
             if self.mo_objective_index != 0:
                 raise ValueError("RL_Only does not accept non-default mo_objective_index")
             return

@@ -15,6 +15,7 @@ from src.integration.campaign_reporting import (
     write_campaign_outputs,
 )
 from src.integration.contracts import LayoutSelectionPolicy, ScenarioRequest
+from src.integration.mo_effort import resolve_effective_mo_settings
 from src.integration.routing_subgraph import build_path_expanded_subgraph
 from src.integration.scenarios import (
     run_baseline_scenario as _run_baseline_scenario,
@@ -38,6 +39,7 @@ def _build_scenario_request(
     campaign: Campaign,
     campaign_case: CampaignCase,
     scenario_name: str,
+    effective_mo_settings=None,
     rl_model_path: str | None = None,
 ) -> ScenarioRequest:
     if scenario_name == "Baseline":
@@ -49,9 +51,14 @@ def _build_scenario_request(
             seed=campaign.config.seed,
             layout_policy=LayoutSelectionPolicy.COMPROMISE,
             mo_use_quick=True,
+            mo_population_size=30,
+            mo_n_generations=50,
             mo_objective_index=0,
             rl_model_path=rl_model_path,
         )
+
+    if effective_mo_settings is None:
+        raise ValueError("effective_mo_settings is required for non-baseline scenario requests")
 
     mo_objective_index = _resolve_mo_objective_index(campaign)
 
@@ -62,7 +69,9 @@ def _build_scenario_request(
         backend_name=campaign_case.backend_name,
         seed=campaign.config.seed,
         layout_policy=campaign.config.layout_policy,
-        mo_use_quick=campaign.config.mo_use_quick,
+        mo_use_quick=effective_mo_settings.mo_use_quick,
+        mo_population_size=effective_mo_settings.mo_population_size,
+        mo_n_generations=effective_mo_settings.mo_n_generations,
         mo_objective_index=mo_objective_index,
         rl_model_path=rl_model_path,
     )
@@ -222,6 +231,13 @@ def run_campaign(
 
         try:
             circuit = load_case_circuit(campaign_case)
+            effective_mo_settings = resolve_effective_mo_settings(
+                qubit_count=campaign_case.num_qubits,
+                mo_effort_mode=campaign.config.mo_effort_mode,
+                mo_use_quick=campaign.config.mo_use_quick,
+                mo_population_size=campaign.config.mo_population_size,
+                mo_n_generations=campaign.config.mo_n_generations,
+            )
             baseline_request = _build_scenario_request(
                 campaign=campaign,
                 campaign_case=campaign_case,
@@ -231,6 +247,7 @@ def run_campaign(
                 campaign=campaign,
                 campaign_case=campaign_case,
                 scenario_name="MO_Only",
+                effective_mo_settings=effective_mo_settings,
             )
             case_report = CampaignCaseReport(case=campaign_case, status="completed")
             case_report.baseline_result = _invoke_scenario_runner(run_baseline, baseline_request, circuit=circuit)
@@ -310,6 +327,7 @@ def run_campaign(
                     campaign=campaign,
                     campaign_case=campaign_case,
                     scenario_name="MO+RL",
+                    effective_mo_settings=effective_mo_settings,
                     rl_model_path=str(case_report.training_result.selected_artifact_path),
                 )
                 case_report.mo_rl_result = _invoke_scenario_runner(

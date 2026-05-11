@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from src.integration.campaign_contracts import CampaignCircuitSpec
 from src.integration.contracts import LayoutSelectionPolicy
+from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
 
 
 def _make_io(responses: list[str]) -> tuple[callable, list[str]]:
@@ -39,6 +40,7 @@ def test_build_default_campaign_config_uses_canonical_defaults() -> None:
     assert config.mo_use_quick is True
     assert config.mo_population_size == 30
     assert config.mo_n_generations == 50
+    assert config.mo_effort_mode == "auto"
     assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
     assert config.mo_objective_name is None
     assert config.mode == "default"
@@ -59,6 +61,8 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
             "15",
             "300",
             "123",
+            "custom",
+            "false",
             "40",
             "60",
             "compromise",
@@ -80,6 +84,8 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
         output_root=Path("campaigns"),
     )
 
+    rendered = "\n".join(outputs)
+
     assert exit_code == 0
     assert captured["campaign"].campaign_id == "campaign-adv-001"
     assert captured["campaign"].config.backend_names == (
@@ -93,10 +99,68 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
     assert captured["campaign"].config.rl_lookahead_window == 15
     assert captured["campaign"].config.rl_max_steps == 300
     assert captured["campaign"].config.seed == 123
-    assert captured["campaign"].config.mo_use_quick is True
+    assert captured["campaign"].config.mo_effort_mode == "custom"
+    assert captured["campaign"].config.mo_use_quick is False
     assert captured["campaign"].config.mo_population_size == 40
     assert captured["campaign"].config.mo_n_generations == 60
     assert captured["campaign"].config.layout_policy is LayoutSelectionPolicy.COMPROMISE
+    assert "MO Effort Mode: custom" in rendered
+    assert "MO Quick: False" in rendered
+    assert "MO Population Size: 40" in rendered
+    assert "MO Generations: 60" in rendered
+    assert "MO Auto Preview" not in rendered
+
+
+def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prints_preview() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz,qft",
+            "3,8",
+            "advanced",
+            "fake_torino",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "42",
+            "auto",
+            "compromise",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured["campaign"] = campaign
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-auto-001",
+        output_root=Path("campaigns"),
+    )
+
+    rendered = "\n".join(outputs)
+    config = captured["campaign"].config
+
+    assert exit_code == 0
+    assert config.mo_effort_mode == "auto"
+    assert config.mo_use_quick is True
+    assert config.mo_population_size == 30
+    assert config.mo_n_generations == 50
+    assert "MO population size:" not in rendered
+    assert "MO generations:" not in rendered
+    assert "MO Effort Mode: auto" in rendered
+    assert "MO Auto Preview (3q): quick=True, population_size=30, n_generations=50" in rendered
+    assert "MO Auto Preview (8q): quick=False, population_size=60, n_generations=120" in rendered
+    assert "MO Quick:" not in rendered
+    assert "MO Population Size:" not in rendered
+    assert "MO Generations:" not in rendered
 
 
 def test_run_interactive_campaign_cli_collects_best_on_objective_objective_name(monkeypatch) -> None:
@@ -115,6 +179,8 @@ def test_run_interactive_campaign_cli_collects_best_on_objective_objective_name(
             "10",
             "200",
             "42",
+            "custom",
+            "true",
             "30",
             "50",
             "best_on_objective",
@@ -165,6 +231,51 @@ def test_run_interactive_campaign_cli_reprompts_on_invalid_input() -> None:
 
     assert exit_code == 0
     assert run_calls == []
+
+
+def test_run_interactive_campaign_cli_reprompts_when_custom_mo_population_is_below_minimum() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz",
+            "3",
+            "advanced",
+            "fake_torino",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "42",
+            "custom",
+            "false",
+            "3",
+            str(MIN_CUSTOM_MO_POPULATION_SIZE),
+            "60",
+            "compromise",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured["campaign"] = campaign
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-adv-003",
+        output_root=Path("campaigns"),
+    )
+
+    rendered = "\n".join(outputs)
+
+    assert exit_code == 0
+    assert captured["campaign"].config.mo_population_size == MIN_CUSTOM_MO_POPULATION_SIZE
+    assert f"Invalid selection. Enter an integer >= {MIN_CUSTOM_MO_POPULATION_SIZE}." in rendered
 
 
 def test_run_interactive_campaign_cli_default_mode_uses_fake_torino_without_prompt() -> None:

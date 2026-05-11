@@ -245,12 +245,19 @@ def _run_mo(request: ScenarioRequest, circuit, backend_bundle):
         return mo_module.optimize_layout_quick(
             circuit=circuit,
             backend=backend_bundle.backend,
+            population_size=request.mo_population_size,
+            n_generations=request.mo_n_generations,
             seed=request.seed,
         )
     return mo_module.optimize_layout(
         circuit=circuit,
         backend=backend_bundle.backend,
         backend_name=backend_bundle.backend_name,
+        config=mo_module.OptimizerConfig(
+            population_size=request.mo_population_size,
+            n_generations=request.mo_n_generations,
+            seed=request.seed,
+        ),
     )
 
 

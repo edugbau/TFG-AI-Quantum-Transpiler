@@ -6,6 +6,7 @@ from src.integration.campaign_contracts import (
     CampaignSummary,
 )
 from src.integration.contracts import LayoutSelectionPolicy
+from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
 
 
 def test_campaign_builds_stable_cases_from_selected_circuits_and_backends() -> None:
@@ -233,6 +234,88 @@ def test_campaign_config_defaults_to_default_mode_and_accepts_advanced_mode() ->
 
     assert default_config.mode == "default"
     assert advanced_config.mode == "advanced"
+
+
+def test_campaign_config_defaults_to_auto_mo_effort_mode_and_accepts_custom() -> None:
+    default_config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        backend_names=["fake_torino"],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="sequential",
+        rl_lookahead_window=10,
+        rl_max_steps=200,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+    )
+    custom_config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        backend_names=["fake_torino"],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="sequential",
+        rl_lookahead_window=10,
+        rl_max_steps=200,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mo_effort_mode="custom",
+    )
+
+    assert default_config.mo_effort_mode == "auto"
+    assert custom_config.mo_effort_mode == "custom"
+
+
+def test_campaign_config_rejects_unknown_mo_effort_mode() -> None:
+    try:
+        CampaignConfig(
+            circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+            backend_names=["fake_torino"],
+            rl_algorithm="MaskablePPO",
+            rl_total_timesteps=5000,
+            rl_frontier_mode="sequential",
+            rl_lookahead_window=10,
+            rl_max_steps=200,
+            seed=42,
+            mo_use_quick=True,
+            mo_population_size=30,
+            mo_n_generations=50,
+            layout_policy=LayoutSelectionPolicy.COMPROMISE,
+            mo_effort_mode="unexpected",
+        )
+    except ValueError as exc:
+        assert "mo_effort_mode" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for unknown campaign mo_effort_mode")
+
+
+def test_campaign_config_rejects_custom_population_below_shared_minimum() -> None:
+    try:
+        CampaignConfig(
+            circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+            backend_names=["fake_torino"],
+            rl_algorithm="MaskablePPO",
+            rl_total_timesteps=5000,
+            rl_frontier_mode="sequential",
+            rl_lookahead_window=10,
+            rl_max_steps=200,
+            seed=42,
+            mo_use_quick=True,
+            mo_population_size=MIN_CUSTOM_MO_POPULATION_SIZE - 1,
+            mo_n_generations=50,
+            layout_policy=LayoutSelectionPolicy.COMPROMISE,
+            mo_effort_mode="custom",
+        )
+    except ValueError as exc:
+        assert "mo_population_size" in str(exc)
+        assert str(MIN_CUSTOM_MO_POPULATION_SIZE) in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for custom MO population below shared minimum")
 
 
 def test_campaign_config_rejects_unknown_mode() -> None:
@@ -564,6 +647,7 @@ def test_campaign_config_rejects_invalid_rl_and_mo_knobs() -> None:
             "mo_population_size": 30,
             "mo_n_generations": 50,
             "layout_policy": LayoutSelectionPolicy.COMPROMISE,
+            "mo_effort_mode": "auto",
         }
         payload.update(overrides)
 
