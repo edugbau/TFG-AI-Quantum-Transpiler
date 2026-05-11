@@ -29,6 +29,7 @@ def _build_campaign_config() -> CampaignConfig:
         mo_population_size=30,
         mo_n_generations=50,
         layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mo_effort_mode="custom",
         mode="advanced",
     )
 
@@ -321,6 +322,11 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
     assert "Incidents" in markdown
     assert "RL training failed before MO+RL evaluation." in markdown
     assert "Final Campaign Status: `completed`" in markdown
+    assert "MO Effort Mode: `custom`" in markdown
+    assert "MO Quick: `True`" in markdown
+    assert "MO Population Size: `30`" in markdown
+    assert "MO Generations: `50`" in markdown
+    assert "MO Auto Preview" not in markdown
 
 
 def test_summary_markdown_includes_mo_objective_name_for_best_on_objective_policy() -> None:
@@ -333,6 +339,7 @@ def test_summary_markdown_includes_mo_objective_name_for_best_on_objective_polic
         rl_lookahead_window=12,
         rl_max_steps=256,
         seed=42,
+        mo_effort_mode="custom",
         mo_use_quick=False,
         mo_population_size=30,
         mo_n_generations=50,
@@ -368,6 +375,54 @@ def test_summary_markdown_includes_mo_objective_name_for_best_on_objective_polic
 
     assert "Layout Policy: `best_on_objective`" in markdown
     assert "MO Objective: `depth`" in markdown
+
+
+def test_summary_markdown_renders_auto_mo_effort_preview() -> None:
+    config = CampaignConfig(
+        circuit_specs=[
+            CampaignCircuitSpec(family="ghz", num_qubits=3),
+            CampaignCircuitSpec(family="qft", num_qubits=8),
+        ],
+        backend_names=["fake_torino"],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="dag",
+        rl_lookahead_window=12,
+        rl_max_steps=256,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mo_effort_mode="auto",
+        mode="advanced",
+    )
+    case = _build_case("ghz_3__fake_torino", "ghz", 3, "fake_torino")
+
+    report = build_campaign_report(
+        campaign_id="campaign-auto-preview",
+        campaign_status="completed",
+        campaign_config=config,
+        case_reports=[
+            CampaignCaseReport(
+                case=case,
+                status="completed",
+                baseline_result=_build_scenario_result("Baseline", case, metrics=_build_metrics(100, 30, 45.0, 1.0)),
+                mo_only_result=_build_scenario_result("MO_Only", case, metrics=_build_metrics(90, 28, 40.0, 1.5)),
+                mo_rl_result=_build_scenario_result("MO+RL", case, metrics=_build_metrics(80, 24, 36.0, 2.0)),
+                training_result=_build_training_result(case),
+            )
+        ],
+    )
+
+    markdown = render_campaign_summary_markdown(report)
+
+    assert "MO Effort Mode: `auto`" in markdown
+    assert "MO Auto Preview (3q): `quick=True, population_size=30, n_generations=50`" in markdown
+    assert "MO Auto Preview (8q): `quick=False, population_size=60, n_generations=120`" in markdown
+    assert "MO Quick:" not in markdown
+    assert "MO Population Size:" not in markdown
+    assert "MO Generations:" not in markdown
 
 
 def test_running_summary_markdown_does_not_claim_final_campaign_status() -> None:
@@ -433,7 +488,7 @@ def test_completed_non_comparable_cases_are_reported_without_zero_aggregate_valu
     assert report.summary.incomplete_cases == 1
     assert report.summary.failed_cases == 0
     assert report.summary.cancelled_cases == 0
-    assert report.summary.case_results[0].status == "completed"
+    assert report.summary.case_results[0].status == "incomplete"
     assert report.incidents == [
         "ghz_3__fake_torino: completed without a comparable metric bundle across Baseline, MO_Only, and MO+RL."
     ]

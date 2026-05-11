@@ -8,6 +8,7 @@ from typing import Any
 
 from src.integration.campaign_contracts import CampaignCase, CampaignCaseResult, CampaignConfig, CampaignSummary
 from src.integration.contracts import ScenarioResult
+from src.integration.mo_effort import build_auto_mo_effort_preview
 from src.integration.training_bridge import TrainingBridgeResult
 
 
@@ -128,6 +129,12 @@ def _build_incidents(case_reports: list[CampaignCaseReport]) -> list[str]:
     return incidents
 
 
+def _summary_case_status(case_report: CampaignCaseReport) -> str:
+    if case_report.status == "completed" and not _is_comparable(case_report):
+        return "incomplete"
+    return case_report.status
+
+
 def build_campaign_report(
     *,
     campaign_id: str,
@@ -158,7 +165,7 @@ def build_campaign_report(
         incomplete_cases=incomplete_cases,
         cancelled_cases=cancelled_cases,
         case_results=[
-            CampaignCaseResult(case_id=case_report.case.case_id, status=case_report.status)
+            CampaignCaseResult(case_id=case_report.case.case_id, status=_summary_case_status(case_report))
             for case_report in case_reports
         ],
     )
@@ -195,11 +202,23 @@ def _render_config(report: CampaignReport) -> list[str]:
         f"RL Lookahead Window: `{config.rl_lookahead_window}`",
         f"RL Max Steps: `{config.rl_max_steps}`",
         f"Seed: `{config.seed}`",
-        f"MO Quick: `{config.mo_use_quick}`",
-        f"MO Population Size: `{config.mo_population_size}`",
-        f"MO Generations: `{config.mo_n_generations}`",
+        f"MO Effort Mode: `{config.mo_effort_mode}`",
         f"Layout Policy: `{config.layout_policy.value}`",
     ]
+    if config.mo_effort_mode == "auto":
+        for qubit_count, settings in build_auto_mo_effort_preview(spec.num_qubits for spec in config.circuit_specs):
+            lines.append(
+                f"MO Auto Preview ({qubit_count}q): `quick={settings.mo_use_quick}, "
+                f"population_size={settings.mo_population_size}, n_generations={settings.mo_n_generations}`"
+            )
+    else:
+        lines.extend(
+            [
+                f"MO Quick: `{config.mo_use_quick}`",
+                f"MO Population Size: `{config.mo_population_size}`",
+                f"MO Generations: `{config.mo_n_generations}`",
+            ]
+        )
     if config.layout_policy.value == "best_on_objective":
         lines.append(f"MO Objective: `{config.mo_objective_name}`")
     return lines

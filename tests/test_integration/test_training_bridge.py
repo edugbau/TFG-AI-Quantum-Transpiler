@@ -21,6 +21,7 @@ def _build_campaign_config() -> CampaignConfig:
         mo_population_size=30,
         mo_n_generations=50,
         layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mo_effort_mode="custom",
     )
 
 

@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.integration.contracts import LayoutSelectionPolicy
+from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
 
 
 _ALLOWED_CASE_RESULT_STATUSES = frozenset({"completed", "failed", "incomplete", "cancelled"})
 _ALLOWED_CAMPAIGN_MODES = frozenset({"default", "advanced"})
+_ALLOWED_MO_EFFORT_MODES = frozenset({"auto", "custom"})
 _ALLOWED_CAMPAIGN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled", "interrupted"})
 _TERMINAL_CAMPAIGN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _SUMMARY_CAMPAIGN_STATUSES = _TERMINAL_CAMPAIGN_STATUSES | {"running"}
@@ -104,6 +106,7 @@ class CampaignConfig:
     mo_population_size: int
     mo_n_generations: int
     layout_policy: LayoutSelectionPolicy
+    mo_effort_mode: str = "auto"
     mo_objective_name: str | None = None
     mode: str = "default"
 
@@ -114,6 +117,8 @@ class CampaignConfig:
             raise ValueError("Campaign requires at least one backend_names entry")
         if self.mode not in _ALLOWED_CAMPAIGN_MODES:
             raise ValueError("Campaign mode must be one of default, advanced")
+        if self.mo_effort_mode not in _ALLOWED_MO_EFFORT_MODES:
+            raise ValueError("CampaignConfig mo_effort_mode must be one of auto, custom")
         normalized_rl_algorithm = self.rl_algorithm.strip()
         if not normalized_rl_algorithm:
             raise ValueError("CampaignConfig rl_algorithm cannot be blank")
@@ -132,6 +137,11 @@ class CampaignConfig:
             raise ValueError("CampaignConfig mo_use_quick must be a boolean")
         if self.mo_population_size <= 0:
             raise ValueError("CampaignConfig mo_population_size must be greater than zero")
+        if self.mo_effort_mode == "custom" and self.mo_population_size < MIN_CUSTOM_MO_POPULATION_SIZE:
+            raise ValueError(
+                "CampaignConfig mo_population_size must be at least "
+                f"{MIN_CUSTOM_MO_POPULATION_SIZE} when mo_effort_mode is custom"
+            )
         if self.mo_n_generations <= 0:
             raise ValueError("CampaignConfig mo_n_generations must be greater than zero")
         normalized_layout_policy = LayoutSelectionPolicy(self.layout_policy)

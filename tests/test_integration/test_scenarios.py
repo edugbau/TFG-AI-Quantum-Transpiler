@@ -286,7 +286,7 @@ def test_run_mo_only_scenario_returns_selected_layout_and_transpilation_metrics(
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: mo_calls.append((circuit, backend, seed)) or "mo-result",
+        lambda **kwargs: mo_calls.append(kwargs) or "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -341,7 +341,15 @@ def test_run_mo_only_scenario_returns_selected_layout_and_transpilation_metrics(
         "initial_layout": [2, 0, 1],
     }
     assert result.transpilation_artifact == artifact
-    assert mo_calls == [(circuit, "backend-object", 17)]
+    assert mo_calls == [
+        {
+            "circuit": circuit,
+            "backend": "backend-object",
+            "population_size": 30,
+            "n_generations": 50,
+            "seed": 17,
+        }
+    ]
     assert select_calls == [("mo-result", request.layout_policy, request.mo_objective_index)]
     assert baseline_calls == [
         {
@@ -433,13 +441,13 @@ def test_run_mo_only_scenario_uses_non_quick_optimizer_when_requested(monkeypatc
     scenarios.run_mo_only_scenario(request)
 
     assert quick_calls == []
-    assert optimize_calls == [
-        {
-            "circuit": circuit,
-            "backend": "backend-object",
-            "backend_name": "fake_backend",
-        }
-    ]
+    assert len(optimize_calls) == 1
+    assert optimize_calls[0]["circuit"] is circuit
+    assert optimize_calls[0]["backend"] == "backend-object"
+    assert optimize_calls[0]["backend_name"] == "fake_backend"
+    assert optimize_calls[0]["config"].population_size == 30
+    assert optimize_calls[0]["config"].n_generations == 50
+    assert optimize_calls[0]["config"].seed == 17
     assert baseline_calls == [
         {
             "baseline_name": "custom_layout_level_1",
@@ -450,6 +458,71 @@ def test_run_mo_only_scenario_uses_non_quick_optimizer_when_requested(monkeypatc
             "include_artifact": True,
         }
     ]
+
+
+def test_run_mo_passes_effective_settings_to_quick_optimizer(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request(
+        "MO_Only",
+        mo_use_quick=True,
+        mo_population_size=77,
+        mo_n_generations=123,
+    )
+    backend_bundle = SimpleNamespace(backend="backend-object", backend_name="fake_backend")
+    quick_calls = []
+
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout_quick",
+        lambda **kwargs: quick_calls.append(kwargs) or "mo-result",
+    )
+
+    result = scenarios._run_mo(request, circuit, backend_bundle)
+
+    assert result == "mo-result"
+    assert quick_calls == [
+        {
+            "circuit": circuit,
+            "backend": "backend-object",
+            "population_size": 77,
+            "n_generations": 123,
+            "seed": 17,
+        }
+    ]
+
+
+def test_run_mo_passes_effective_settings_to_full_optimizer_config(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request(
+        "MO_Only",
+        mo_use_quick=False,
+        mo_population_size=88,
+        mo_n_generations=144,
+        seed=23,
+    )
+    backend_bundle = SimpleNamespace(backend="backend-object", backend_name="fake_backend")
+    optimize_calls = []
+
+    monkeypatch.setattr(
+        scenarios.mo_module,
+        "optimize_layout",
+        lambda **kwargs: optimize_calls.append(kwargs) or "mo-result",
+    )
+
+    result = scenarios._run_mo(request, circuit, backend_bundle)
+
+    assert result == "mo-result"
+    assert len(optimize_calls) == 1
+    assert optimize_calls[0]["circuit"] is circuit
+    assert optimize_calls[0]["backend"] == "backend-object"
+    assert optimize_calls[0]["backend_name"] == "fake_backend"
+    assert optimize_calls[0]["config"].population_size == 88
+    assert optimize_calls[0]["config"].n_generations == 144
+    assert optimize_calls[0]["config"].seed == 23
 
 
 def test_run_baseline_scenario_rejects_row_artifact_baseline_drift(monkeypatch) -> None:
@@ -498,7 +571,7 @@ def test_run_mo_only_scenario_rejects_row_artifact_layout_drift(monkeypatch) -> 
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -916,7 +989,7 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1160,7 +1233,7 @@ def test_run_mo_rl_scenario_uses_backend_coupling_edges_when_no_campaign_injecti
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1232,7 +1305,7 @@ def test_run_mo_rl_scenario_returns_controlled_result_when_routing_episode_is_tr
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1301,7 +1374,7 @@ def test_run_mo_rl_scenario_rejects_mismatched_reconstructed_final_layout(monkey
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1360,7 +1433,7 @@ def test_run_mo_rl_scenario_rejects_mismatched_routing_summary_initial_layout(mo
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1438,7 +1511,7 @@ def test_run_mo_rl_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1533,7 +1606,7 @@ def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_pat
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1599,7 +1672,7 @@ def test_run_mo_rl_scenario_normalizes_numpy_selected_layout_before_handoff(monk
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda **kwargs: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1664,7 +1737,7 @@ def test_run_mo_rl_scenario_requires_rl_model_path_before_contract_resolution(mo
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda circuit, backend, population_size, n_generations, seed: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1697,7 +1770,7 @@ def test_mo_layout_validation_rejects_non_integer_entries_before_contract_resolu
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda circuit, backend, population_size, n_generations, seed: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1760,7 +1833,7 @@ def test_run_mo_rl_smoke_through_runner_exercises_real_mo_to_rl_handoff(monkeypa
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: mo_invoked.append(True) or object(),
+        lambda circuit, backend, population_size, n_generations, seed: mo_invoked.append(True) or object(),
     )
     monkeypatch.setattr(
         scenarios,
@@ -1867,7 +1940,7 @@ def test_mo_layout_validation_fails_before_deeper_dependencies(monkeypatch, sele
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda circuit, backend, population_size, n_generations, seed: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,
@@ -1902,7 +1975,7 @@ def test_mo_layout_validation_rejects_physical_qubits_outside_backend_range(monk
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: "mo-result",
+        lambda circuit, backend, population_size, n_generations, seed: "mo-result",
     )
     monkeypatch.setattr(
         scenarios,

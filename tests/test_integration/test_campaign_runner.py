@@ -93,10 +93,12 @@ def _build_training_result(case: CampaignCase, *, status: str = "completed") -> 
     )
 
 
-def _make_case_circuit() -> QuantumCircuit:
-    circuit = QuantumCircuit(3)
-    circuit.cx(0, 1)
-    circuit.cx(1, 2)
+def _make_case_circuit(num_qubits: int = 3) -> QuantumCircuit:
+    circuit = QuantumCircuit(num_qubits)
+    if num_qubits >= 2:
+        circuit.cx(0, 1)
+    if num_qubits >= 3:
+        circuit.cx(1, 2)
     return circuit
 
 
@@ -615,6 +617,114 @@ def test_run_campaign_forces_baseline_safe_request_defaults(tmp_path) -> None:
     assert captured_baseline_request.mo_objective_index == 0
 
 
+def test_run_campaign_resolves_effective_mo_settings_per_campaign_case(monkeypatch, tmp_path) -> None:
+    from src.integration import campaign_runner
+
+    campaign = _build_campaign(
+        circuit_specs=[
+            CampaignCircuitSpec(family="ghz", num_qubits=3),
+            CampaignCircuitSpec(family="ghz", num_qubits=8),
+        ]
+    )
+    cases = campaign.build_cases()
+    baseline_requests = {}
+    mo_only_requests = {}
+    mo_rl_requests = {}
+
+    monkeypatch.setattr(
+        campaign_runner,
+        "build_path_expanded_subgraph",
+        lambda *, circuit, selected_layout, coupling_edges: SimpleNamespace(coupling_edges=list(coupling_edges)),
+        raising=False,
+    )
+
+    def fake_load_case_circuit(campaign_case: CampaignCase):
+        return _make_case_circuit(campaign_case.num_qubits)
+
+    def fake_run_baseline(request, *, circuit):
+        del circuit
+        baseline_requests[_case_id_from_request(request)] = request
+        case = next(case for case in cases if case.case_id == _case_id_from_request(request))
+        return _build_result("Baseline", case, metrics=_build_metrics(100))
+
+    def fake_run_mo_only(request, *, circuit):
+        del circuit
+        mo_only_requests[_case_id_from_request(request)] = request
+        case = next(case for case in cases if case.case_id == _case_id_from_request(request))
+        return ScenarioResult(
+            scenario_name="MO_Only",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(range(case.num_qubits)),
+            transpilation_metrics=_build_metrics(90),
+        )
+
+    def fake_train_case(*, campaign_case, campaign_config, target_circuit, coupling_map, case_output_dir, initial_layout=None):
+        del campaign_config, target_circuit, case_output_dir
+        assert initial_layout == list(range(campaign_case.num_qubits))
+        assert coupling_map
+        return _build_training_result(campaign_case)
+
+    def fake_run_mo_rl(request, *, circuit, injected_layout, injected_coupling_edges, injected_routing_graph):
+        del circuit, injected_coupling_edges, injected_routing_graph
+        mo_rl_requests[_case_id_from_request(request)] = request
+        case = next(case for case in cases if case.case_id == _case_id_from_request(request))
+        assert injected_layout == list(range(case.num_qubits))
+        return ScenarioResult(
+            scenario_name="MO+RL",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(range(case.num_qubits)),
+            transpilation_metrics=_build_metrics(80),
+        )
+
+    report = campaign_runner.run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=fake_load_case_circuit,
+        run_baseline=fake_run_baseline,
+        run_mo_only=fake_run_mo_only,
+        train_case_fn=fake_train_case,
+        run_mo_rl=fake_run_mo_rl,
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            coupling_edges=[(index, index + 1) for index in range(7)],
+        ),
+        write_outputs=lambda *, output_dir, report: None,
+    )
+
+    case_3q, case_8q = cases
+
+    assert baseline_requests[case_3q.case_id].mo_use_quick is True
+    assert baseline_requests[case_3q.case_id].mo_population_size == 30
+    assert baseline_requests[case_3q.case_id].mo_n_generations == 50
+    assert baseline_requests[case_3q.case_id].layout_policy is LayoutSelectionPolicy.COMPROMISE
+    assert baseline_requests[case_8q.case_id].mo_use_quick is True
+    assert baseline_requests[case_8q.case_id].mo_population_size == 30
+    assert baseline_requests[case_8q.case_id].mo_n_generations == 50
+    assert baseline_requests[case_8q.case_id].layout_policy is LayoutSelectionPolicy.COMPROMISE
+
+    assert mo_only_requests[case_3q.case_id].mo_use_quick is True
+    assert mo_only_requests[case_3q.case_id].mo_population_size == 30
+    assert mo_only_requests[case_3q.case_id].mo_n_generations == 50
+    assert mo_only_requests[case_8q.case_id].mo_use_quick is False
+    assert mo_only_requests[case_8q.case_id].mo_population_size == 60
+    assert mo_only_requests[case_8q.case_id].mo_n_generations == 120
+
+    assert mo_rl_requests[case_3q.case_id].mo_use_quick is True
+    assert mo_rl_requests[case_3q.case_id].mo_population_size == 30
+    assert mo_rl_requests[case_3q.case_id].mo_n_generations == 50
+    assert mo_rl_requests[case_8q.case_id].mo_use_quick is False
+    assert mo_rl_requests[case_8q.case_id].mo_population_size == 60
+    assert mo_rl_requests[case_8q.case_id].mo_n_generations == 120
+    assert report.case_reports[0].status == "completed"
+    assert report.case_reports[1].status == "completed"
+
+
 def test_run_campaign_rejects_unknown_mo_objective_name(tmp_path) -> None:
     from src.integration.campaign_runner import run_campaign
 
@@ -921,7 +1031,7 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
     monkeypatch.setattr(
         scenarios.mo_module,
         "optimize_layout_quick",
-        lambda circuit, backend, seed: call_log.append(("mo", circuit)) or "mo-result",
+        lambda circuit, backend, population_size, n_generations, seed: call_log.append(("mo", circuit)) or "mo-result",
     )
     monkeypatch.setattr(
         scenarios,

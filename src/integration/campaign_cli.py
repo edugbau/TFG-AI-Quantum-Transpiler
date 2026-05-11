@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from src.integration.campaign_contracts import Campaign, CampaignCircuitSpec, CampaignConfig
+from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE, build_auto_mo_effort_preview
 from src.integration.campaign_runner import run_campaign
 from src.integration.contracts import LayoutSelectionPolicy
 from src.mo_module.fitness import get_preset_objectives
@@ -31,6 +32,7 @@ _DEFAULT_SEED = 42
 _DEFAULT_MO_USE_QUICK = True
 _DEFAULT_MO_POPULATION_SIZE = 30
 _DEFAULT_MO_N_GENERATIONS = 50
+_MO_EFFORT_MODES = ("auto", "custom")
 _DEFAULT_LAYOUT_POLICY = LayoutSelectionPolicy.COMPROMISE
 _DEFAULT_BACKEND = "fake_torino"
 
@@ -60,6 +62,7 @@ def build_default_campaign_config(
         mo_use_quick=_DEFAULT_MO_USE_QUICK,
         mo_population_size=_DEFAULT_MO_POPULATION_SIZE,
         mo_n_generations=_DEFAULT_MO_N_GENERATIONS,
+        mo_effort_mode="auto",
         layout_policy=_DEFAULT_LAYOUT_POLICY,
         mode="default",
     )
@@ -149,6 +152,16 @@ def _prompt_int(input_fn, output_fn, *, prompt: str, minimum: int = 0) -> int:
         return value
 
 
+def _prompt_mo_effort_mode(input_fn, output_fn) -> str:
+    return _prompt_csv_choices(
+        input_fn,
+        output_fn,
+        prompt=f"Choose MO effort mode ({', '.join(_MO_EFFORT_MODES)}): ",
+        valid_values=_MO_EFFORT_MODES,
+        allow_multiple=False,
+    )[0]
+
+
 def _prompt_bool(input_fn, output_fn, *, prompt: str) -> bool:
     while True:
         raw = input_fn(prompt).strip().lower()
@@ -199,8 +212,19 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
     rl_lookahead = _prompt_int(input_fn, output_fn, prompt="RL lookahead window: ", minimum=1)
     rl_max_steps = _prompt_int(input_fn, output_fn, prompt="RL max steps: ", minimum=1)
     seed = _prompt_int(input_fn, output_fn, prompt="Seed: ", minimum=0)
-    mo_population_size = _prompt_int(input_fn, output_fn, prompt="MO population size: ", minimum=1)
-    mo_n_generations = _prompt_int(input_fn, output_fn, prompt="MO generations: ", minimum=1)
+    mo_effort_mode = _prompt_mo_effort_mode(input_fn, output_fn)
+    mo_use_quick = _DEFAULT_MO_USE_QUICK
+    mo_population_size = _DEFAULT_MO_POPULATION_SIZE
+    mo_n_generations = _DEFAULT_MO_N_GENERATIONS
+    if mo_effort_mode == "custom":
+        mo_use_quick = _prompt_bool(input_fn, output_fn, prompt="MO quick: ")
+        mo_population_size = _prompt_int(
+            input_fn,
+            output_fn,
+            prompt="MO population size: ",
+            minimum=MIN_CUSTOM_MO_POPULATION_SIZE,
+        )
+        mo_n_generations = _prompt_int(input_fn, output_fn, prompt="MO generations: ", minimum=1)
     layout_policy_name = _prompt_csv_choices(
         input_fn,
         output_fn,
@@ -229,9 +253,10 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         rl_lookahead_window=rl_lookahead,
         rl_max_steps=rl_max_steps,
         seed=seed,
-        mo_use_quick=_DEFAULT_MO_USE_QUICK,
+        mo_use_quick=mo_use_quick,
         mo_population_size=mo_population_size,
         mo_n_generations=mo_n_generations,
+        mo_effort_mode=mo_effort_mode,
         layout_policy=layout_policy,
         mo_objective_name=mo_objective_name,
         mode="advanced",
@@ -269,11 +294,21 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
         f"frontier_mode={config.rl_frontier_mode}, lookahead={config.rl_lookahead_window}, "
         f"max_steps={config.rl_max_steps}, seed={config.seed}"
     )
-    output_fn(
-        "MO: "
-        f"quick={config.mo_use_quick}, population_size={config.mo_population_size}, "
-        f"n_generations={config.mo_n_generations}, layout_policy={config.layout_policy.value}"
-    )
+    output_fn(f"MO Effort Mode: {config.mo_effort_mode}")
+    if config.mo_effort_mode == "auto":
+        for qubit_count, settings in build_auto_mo_effort_preview(
+            spec.num_qubits for spec in config.circuit_specs
+        ):
+            output_fn(
+                f"MO Auto Preview ({qubit_count}q): "
+                f"quick={settings.mo_use_quick}, population_size={settings.mo_population_size}, "
+                f"n_generations={settings.mo_n_generations}"
+            )
+    else:
+        output_fn(f"MO Quick: {config.mo_use_quick}")
+        output_fn(f"MO Population Size: {config.mo_population_size}")
+        output_fn(f"MO Generations: {config.mo_n_generations}")
+    output_fn(f"Layout Policy: {config.layout_policy.value}")
     if config.mo_objective_name is not None:
         output_fn(f"MO Objective: {config.mo_objective_name}")
 

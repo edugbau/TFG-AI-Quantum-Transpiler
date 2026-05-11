@@ -10,6 +10,11 @@ from src.integration import (
     ScenarioResult,
 )
 from src.integration.contracts import CircuitFormat, CircuitSource
+from src.integration.mo_effort import (
+    DEFAULT_MO_N_GENERATIONS,
+    DEFAULT_MO_POPULATION_SIZE,
+    MIN_CUSTOM_MO_POPULATION_SIZE,
+)
 
 
 def test_scenario_request_defaults_for_routing_v1() -> None:
@@ -24,6 +29,8 @@ def test_scenario_request_defaults_for_routing_v1() -> None:
     assert request.scenario_name == "MO_Only"
     assert request.layout_policy is LayoutSelectionPolicy.COMPROMISE
     assert request.mo_use_quick is True
+    assert request.mo_population_size == DEFAULT_MO_POPULATION_SIZE
+    assert request.mo_n_generations == DEFAULT_MO_N_GENERATIONS
     assert request.initial_layout is None
     assert request.rl_model_path is None
     assert request.mo_objective_index == 0
@@ -39,6 +46,8 @@ def test_scenario_request_defaults_for_routing_v1() -> None:
         "seed",
         "layout_policy",
         "mo_use_quick",
+        "mo_population_size",
+        "mo_n_generations",
         "initial_layout",
         "rl_model_path",
         "mo_objective_index",
@@ -46,6 +55,18 @@ def test_scenario_request_defaults_for_routing_v1() -> None:
         "circuit_path",
         "circuit_format",
     ]
+
+
+def test_scenario_request_normalizes_string_layout_policy_to_enum() -> None:
+    request = ScenarioRequest(
+        scenario_name="MO_Only",
+        circuit_name="ghz_5",
+        num_qubits=5,
+        backend_name="fake_backend",
+        layout_policy="compromise",
+    )
+
+    assert request.layout_policy is LayoutSelectionPolicy.COMPROMISE
 
 
 def test_public_integration_contracts_do_not_export_scenario_name() -> None:
@@ -153,6 +174,8 @@ def test_baseline_request_rejects_integration_specific_inputs() -> None:
         {"rl_model_path": "models/policy.zip"},
         {"layout_policy": LayoutSelectionPolicy.BEST_ON_OBJECTIVE},
         {"mo_use_quick": False},
+        {"mo_population_size": DEFAULT_MO_POPULATION_SIZE + 1},
+        {"mo_n_generations": DEFAULT_MO_N_GENERATIONS + 1},
         {"mo_objective_index": 1},
     ):
         try:
@@ -167,6 +190,37 @@ def test_baseline_request_rejects_integration_specific_inputs() -> None:
             assert "Baseline" in str(exc)
         else:
             raise AssertionError(f"Expected ValueError for Baseline kwargs: {kwargs}")
+
+
+def test_rl_only_request_rejects_non_default_mo_effort_inputs() -> None:
+    for kwargs in (
+        {"mo_population_size": DEFAULT_MO_POPULATION_SIZE + 1},
+        {"mo_n_generations": DEFAULT_MO_N_GENERATIONS + 1},
+    ):
+        try:
+            ScenarioRequest(
+                scenario_name="RL_Only",
+                circuit_name="ghz",
+                num_qubits=3,
+                backend_name="fake_torino",
+                rl_model_path="models/policy.zip",
+                **kwargs,
+            )
+        except ValueError as exc:
+            assert "RL_Only" in str(exc)
+        else:
+            raise AssertionError(f"Expected ValueError for RL_Only kwargs: {kwargs}")
+
+
+def test_scenario_request_rejects_population_below_shared_minimum() -> None:
+    with pytest.raises(ValueError, match=f"{MIN_CUSTOM_MO_POPULATION_SIZE}"):
+        ScenarioRequest(
+            scenario_name="MO_Only",
+            circuit_name="ghz",
+            num_qubits=3,
+            backend_name="fake_torino",
+            mo_population_size=MIN_CUSTOM_MO_POPULATION_SIZE - 1,
+        )
 
 
 def test_mo_only_request_rejects_rl_model_path() -> None:
