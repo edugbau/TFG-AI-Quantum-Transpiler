@@ -12,9 +12,9 @@ Proyecto de transpilación cuántica organizado en cuatro módulos: `qiskit_inte
 
 - **Optimización Multiobjetivo (MO)** — Algoritmos evolutivos (NSGA-II) para explorar layouts iniciales según múltiples métricas de calidad.
 - **Aprendizaje por Refuerzo (RL)** — Entorno y agentes para routing/síntesis, con soporte para consumir un `initial_layout` genérico sin acoplarse a un productor concreto.
-- **Integración** — `integration` posee el handoff MO -> RL y la orquestación de escenarios de evaluación `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` en `src/integration/`.
+- **Integración** — `integration` posee el handoff MO -> RL, la orquestación de Scenarios `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`, y la orquestación de Campaigns `train+eval` en `src/integration/`.
 
-El objetivo es superar las limitaciones de heurísticas como SABRE. MO y RL evolucionan como módulos separados mientras la integración define y evalua los flujos `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
+El objetivo es superar las limitaciones de heurísticas como SABRE. MO y RL evolucionan como módulos separados mientras la integración define y compara los Scenarios `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`, y además ejecuta Campaigns reproducibles de `train+eval` sobre Campaign Cases `circuit x backend`.
 
 En routing, `rl_module` mantiene un espacio de acción discreto fijo (`fixed`) sobre las aristas del coupling map y añade un nuevo régimen de **masked routing**. Este régimen no cambia el catálogo base de acciones: aplica `action_masks()` como una hard mask determinista y frontier-aware para restringir, al estilo SABRE, qué swaps candidatos puede muestrear la política en cada estado.
 
@@ -54,9 +54,9 @@ src/
 | Módulo | Responsabilidad | No Responsable De |
 | --- | --- | --- |
 | `src/qiskit_interface/` | Backends, transpilación, métricas y baselines | Orquestación MO -> RL |
-| `src/rl_module/` | Entorno Gymnasium, recompensas, entrenamiento del agente e ingestión genérica de `initial_layout` | Producir layouts u orquestar experimentos |
+| `src/rl_module/` | Entorno Gymnasium, recompensas, entrenamiento del agente e ingestión genérica de `initial_layout` | Producir layouts u orquestar Campaigns |
 | `src/mo_module/` | Búsqueda multiobjetivo de layouts, frentes de Pareto y evaluación de layouts | Dirigir RL directamente |
-| `src/integration/` | Orquestación de `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` | Reimplementar internos de los módulos |
+| `src/integration/` | Orquestación de Scenarios, Campaign orchestration, scenario comparison, persistence, Summary Document y handoff MO -> RL | Reimplementar internos de los módulos |
 
 **Convención de layout compartido:**
 
@@ -68,10 +68,47 @@ layout[i] = physical_qubit_for_logical_qubit_i
 - `rl_module` puede ingerirlo a través de `env.reset(options={"initial_layout": layout})`.
 - `integration` posee el proceso que conecta productor y consumidor.
 
+### Campaigns de Integración
+
+`src/integration/` ya no se limita a Scenarios unitarios. Ahora también soporta una **Train+Eval Campaign** reproducible compuesta por uno o más **Campaign Cases**. Cada Campaign Case corresponde a una combinación `circuit x backend` y ejecuta la comparación canónica `Baseline`, `MO_Only` y `MO+RL`.
+
+Dentro de esa comparación guiada, `MO_Only` es el Scenario que selecciona el layout. El training de Campaign para `MO+RL` arranca desde ese layout exacto y la evaluación posterior de `MO+RL` reutiliza ese mismo layout junto con el Training Artifact producido para el mismo Campaign Case.
+
+Campaign `MO+RL` uses the exact `MO_Only` layout for the same Campaign Case. Campaign `MO+RL` derives a path-expanded routing subgraph from the interacting logical pairs in the circuit sobre el coupling map real del backend, entrena y evalúa RL sobre ese grafo derivado y, si la derivación falla, cae al coupling map completo del backend y registra ese fallback en la salida del caso. La comparación final post-routing de Qiskit sigue apuntando al backend real.
+
+`RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign.
+
+La guided CLI ofrece dos caminos:
+
+- **Default Campaign**: usa valores canónicos compartidos para RL y MO, con un flujo breve y reproducible.
+- **Advanced Campaign**: permite ajustar explícitamente backend(s), configuración RL, parámetros MO y política de selección de layout.
+
+La capa subyacente de `integration` puede trabajar con el catálogo actual de fake backends publicado por `qiskit_interface`, pero la guided Campaign CLI hoy expone un subconjunto más estrecho: `fake_torino` y `fake_brisbane`.
+
+Cada Campaign persiste al menos:
+
+- `summary.md` como Summary Document con metadata, aggregate comparison, per-case detail, training notes e incidents;
+- `campaign.json` como salida estructurada de la Campaign;
+- `cases/<case>/result.json` como persistencia por caso.
+
+Para el estado de comparación, las secciones agregadas del Summary Document y los incidents son la referencia principal para detectar Campaign Cases no comparables. En la implementación actual, el Campaign status superior puede seguir siendo `completed` y un case status puede seguir siendo `completed` aunque falte un bundle comparable completo de métricas.
+
+Los límites de ownership se mantienen explícitos:
+
+- `integration` owns Campaign orchestration, scenario comparison, persistence, Summary Document y el handoff MO -> RL.
+- `rl_module` owns how RL training is implemented and how checkpoints are produced.
+- `mo_module` owns layout generation/selection inputs.
+- En el camino híbrido de Campaign, `MO_Only` selecciona el layout, `integration` lo reenvía como `initial_layout` al training RL y la evaluación `MO+RL` reutiliza ese mismo layout junto con el Training Artifact del caso.
+- En ese mismo camino híbrido, Campaign deriva un path-expanded routing subgraph desde los pares lógicos que realmente interactúan, entrena y evalúa RL sobre ese grafo derivado, y si la derivación falla hace fallback al coupling map completo dejando constancia en las notas del caso.
+
 **Estado actual:**
 - `src/integration/` implementa la orquestación v1 de `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` para evaluación de routing.
+- `src/integration/` implementa Campaign contracts, training bridge, campaign reporting/summary rendering, sequential campaign runner y guided campaign CLI.
+- En la comparación guiada de Campaign, `MO_Only` selecciona el layout y `MO+RL` entrena/evalúa desde ese layout exacto para el mismo Campaign Case usando el Training Artifact resultante.
+- En Campaign `MO+RL`, el grafo de routing por defecto se deriva como un subgrafo path-expanded desde el layout de `MO_Only` y los pares lógicos que interactúan, con fallback explícito al backend completo si la derivación falla.
 - `src/rl_module/` soporta routing y un primer modo de `synthesis` entrenable restringido a circuitos Clifford.
 - `mo_module` y `rl_module` deben permanecer testeables de forma independiente.
+- La comparación canónica de Campaign usa `Baseline`, `MO_Only` y `MO+RL`; `RL_Only` queda fuera del flujo guiado principal.
 - `RL_Only` devuelve `episode summaries`, no circuitos finales.
 - `MO+RL` reconstruye el circuito ruteado desde la traza RL (`executed_gate_trace` + `swap_trace`) y ejecuta post-routing de Qiskit cuando el episodio completa el routing; si no, devuelve un resultado controlado sin transpilación final.
 - En `RoutingEpisodeSummary`, `total_swaps == len(swap_trace)` y representa swaps realmente materializados/reproducibles.

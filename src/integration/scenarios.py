@@ -169,6 +169,21 @@ def _build_incomplete_mo_rl_notes(metadata_source: str) -> list[str]:
     return notes
 
 
+def _build_routing_graph_note(routing_graph) -> str:
+    note_parts = [
+        f"Routing graph: {routing_graph.mode} with {routing_graph.node_count} nodes",
+        f"{routing_graph.edge_count} edges",
+        f"{len(routing_graph.added_intermediate_qubits)} added intermediate qubits",
+    ]
+    interacting_pair_count = getattr(routing_graph, "interacting_pair_count", None)
+    if interacting_pair_count is not None:
+        note_parts.append(f"{interacting_pair_count} interacting pairs")
+    fallback_reason = getattr(routing_graph, "fallback_reason", None)
+    if fallback_reason:
+        note_parts.append(f"fallback_reason={fallback_reason}")
+    return f"{', '.join(note_parts)}."
+
+
 def _validate_reconstructed_final_layout(
     routing_summary,
     reconstructed_final_layout: list[int],
@@ -239,9 +254,10 @@ def _run_mo(request: ScenarioRequest, circuit, backend_bundle):
     )
 
 
-def run_baseline_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_baseline_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
     _require_scenario(request, "Baseline")
-    circuit = _load_circuit(request)
+    if circuit is None:
+        circuit = _load_circuit(request)
     transpilation_metrics, transpilation_artifact = _run_named_baseline_with_artifact(
         request,
         circuit,
@@ -260,9 +276,10 @@ def run_baseline_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
 
 
-def run_mo_only_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_mo_only_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
     _require_scenario(request, "MO_Only")
-    circuit = _load_circuit(request)
+    if circuit is None:
+        circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
     mo_result = _run_mo(request, circuit, backend_bundle)
     selected_layout = _validate_selected_layout(
@@ -327,27 +344,45 @@ def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
     )
 
 
-def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_mo_rl_scenario(
+    request: ScenarioRequest,
+    *,
+    circuit=None,
+    injected_layout: list[int] | None = None,
+    injected_coupling_edges: list[tuple[int, int]] | None = None,
+    injected_routing_graph=None,
+) -> ScenarioResult:
     _require_scenario(request, "MO+RL")
     if request.rl_model_path is None:
         raise ValueError("rl_model_path is required for RL scenarios")
-    circuit = _load_circuit(request)
+    if circuit is None:
+        circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
-    mo_result = _run_mo(request, circuit, backend_bundle)
-    selected_layout = _validate_selected_layout(
-        select_layout_from_mo_result(
-            mo_result,
-            policy=request.layout_policy,
-            objective_index=request.mo_objective_index,
-        ),
-        _get_request_num_qubits(request, circuit),
-        backend_bundle.backend,
-    )
+    if injected_layout is None:
+        mo_result = _run_mo(request, circuit, backend_bundle)
+        selected_layout = _validate_selected_layout(
+            select_layout_from_mo_result(
+                mo_result,
+                policy=request.layout_policy,
+                objective_index=request.mo_objective_index,
+            ),
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
+    else:
+        selected_layout = _validate_selected_layout(
+            injected_layout,
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
     contract = resolve_routing_model_contract(request.rl_model_path)
     agent = _load_agent(request, algorithm=contract.algorithm)
+    coupling_edges = (
+        list(injected_coupling_edges) if injected_coupling_edges is not None else backend_bundle.coupling_edges
+    )
     routing_summary = evaluate_routing_episode(
         circuit=circuit,
-        coupling_edges=backend_bundle.coupling_edges,
+        coupling_edges=coupling_edges,
         agent=agent,
         seed=request.seed,
         initial_layout=selected_layout,
@@ -356,6 +391,9 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         lookahead_window=contract.lookahead_window,
         masked=contract.masked,
     )
+    notes = _build_incomplete_mo_rl_notes(contract.metadata_source)
+    if injected_routing_graph is not None:
+        notes.append(_build_routing_graph_note(injected_routing_graph))
     if not routing_summary.completed or routing_summary.truncated:
         return ScenarioResult(
             scenario_name=request.scenario_name,
@@ -368,12 +406,12 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
             transpilation_artifact=None,
             routing_summary=routing_summary,
             errors=["MO+RL routing episode did not complete; skipping routed-circuit reconstruction."],
-            notes=_build_incomplete_mo_rl_notes(contract.metadata_source),
+            notes=notes,
         )
     selected_layout = _validate_routing_summary_initial_layout(routing_summary, selected_layout)
     routed_circuit, final_layout = build_routed_circuit(
         circuit=circuit,
-        coupling_edges=backend_bundle.coupling_edges,
+        coupling_edges=coupling_edges,
         initial_layout=selected_layout,
         swap_trace=routing_summary.swap_trace,
         frontier_mode=contract.frontier_mode,
@@ -400,5 +438,9 @@ def run_mo_rl_scenario(request: ScenarioRequest) -> ScenarioResult:
         transpilation_metrics=transpilation_result.to_dict(),
         transpilation_artifact=transpilation_result.to_artifact_dict(),
         routing_summary=routing_summary,
-        notes=_build_mo_rl_notes(contract.metadata_source),
+        notes=(
+            [*_build_mo_rl_notes(contract.metadata_source), _build_routing_graph_note(injected_routing_graph)]
+            if injected_routing_graph is not None
+            else _build_mo_rl_notes(contract.metadata_source)
+        ),
     )

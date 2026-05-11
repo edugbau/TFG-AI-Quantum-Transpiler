@@ -28,6 +28,7 @@ def _make_result(scenario_name: str, *, with_routing_summary: bool = False) -> S
                 truncated=False,
                 total_swaps=1,
                 gates_executed_count=2,
+                swap_trace=[(0, 1)],
             )
             if with_routing_summary
             else None
