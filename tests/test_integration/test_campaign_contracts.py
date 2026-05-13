@@ -237,6 +237,10 @@ def test_campaign_config_defaults_to_default_mode_and_accepts_advanced_mode() ->
     assert advanced_config.mode == "advanced"
     assert default_config.topology_source == "backend"
     assert default_config.synthetic_topology is None
+    assert default_config.rl_learning_rate == 1e-4
+    assert default_config.rl_clip_range == 0.1
+    assert default_config.rl_target_kl == 0.03
+    assert default_config.rl_n_eval_episodes == 5
 
 
 def test_campaign_config_accepts_synthetic_topology_in_advanced_mode() -> None:
@@ -701,6 +705,10 @@ def test_campaign_config_rejects_invalid_rl_and_mo_knobs() -> None:
         {"rl_frontier_mode": "   "},
         {"rl_lookahead_window": 0},
         {"rl_max_steps": 0},
+        {"rl_learning_rate": 0},
+        {"rl_clip_range": 0},
+        {"rl_target_kl": 0},
+        {"rl_n_eval_episodes": 0},
         {"seed": -1},
         {"mo_use_quick": "yes"},
         {"mo_population_size": 0},

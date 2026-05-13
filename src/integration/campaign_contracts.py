@@ -108,6 +108,10 @@ class CampaignConfig:
     mo_population_size: int
     mo_n_generations: int
     layout_policy: LayoutSelectionPolicy
+    rl_learning_rate: float = 1e-4
+    rl_clip_range: float = 0.1
+    rl_target_kl: float = 0.03
+    rl_n_eval_episodes: int = 5
     mo_effort_mode: str = "auto"
     mo_objective_name: str | None = None
     mode: str = "default"
@@ -138,6 +142,14 @@ class CampaignConfig:
             raise ValueError("CampaignConfig rl_lookahead_window must be greater than zero")
         if self.rl_max_steps <= 0:
             raise ValueError("CampaignConfig rl_max_steps must be greater than zero")
+        if self.rl_learning_rate <= 0:
+            raise ValueError("CampaignConfig rl_learning_rate must be greater than zero")
+        if self.rl_clip_range <= 0:
+            raise ValueError("CampaignConfig rl_clip_range must be greater than zero")
+        if self.rl_target_kl <= 0:
+            raise ValueError("CampaignConfig rl_target_kl must be greater than zero")
+        if self.rl_n_eval_episodes <= 0:
+            raise ValueError("CampaignConfig rl_n_eval_episodes must be greater than zero")
         if self.seed < 0:
             raise ValueError("CampaignConfig seed cannot be negative")
         if not isinstance(self.mo_use_quick, bool):

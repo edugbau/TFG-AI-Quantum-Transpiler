@@ -18,6 +18,10 @@ class TrainingConfigSummary:
     lookahead_window: int
     max_steps: int
     seed: int
+    learning_rate: float = 1e-4
+    clip_range: float = 0.1
+    target_kl: float = 0.03
+    n_eval_episodes: int = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +43,21 @@ def _build_training_config_summary(campaign_config: CampaignConfig) -> TrainingC
         lookahead_window=campaign_config.rl_lookahead_window,
         max_steps=campaign_config.rl_max_steps,
         seed=campaign_config.seed,
+        learning_rate=campaign_config.rl_learning_rate,
+        clip_range=campaign_config.rl_clip_range,
+        target_kl=campaign_config.rl_target_kl,
+        n_eval_episodes=campaign_config.rl_n_eval_episodes,
     )
+
+
+def _build_training_hyperparams(campaign_config: CampaignConfig) -> dict[str, float]:
+    if campaign_config.rl_algorithm not in {"PPO", "MaskablePPO"}:
+        return {}
+    return {
+        "learning_rate": campaign_config.rl_learning_rate,
+        "clip_range": campaign_config.rl_clip_range,
+        "target_kl": campaign_config.rl_target_kl,
+    }
 
 
 def _normalize_optional_path(value: str | Path | None) -> Path | None:
@@ -97,7 +115,9 @@ def train_case(
             model_save_dir=str(run_model_base_dir),
             lookahead_window=campaign_config.rl_lookahead_window,
             max_steps=campaign_config.rl_max_steps,
+            hyperparams=_build_training_hyperparams(campaign_config),
             initial_layout=list(initial_layout) if initial_layout is not None else None,
+            n_eval_episodes=campaign_config.rl_n_eval_episodes,
         )
     except Exception:
         return TrainingBridgeResult(

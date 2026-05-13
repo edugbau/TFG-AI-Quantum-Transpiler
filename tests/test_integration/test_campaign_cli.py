@@ -36,6 +36,10 @@ def test_build_default_campaign_config_uses_canonical_defaults() -> None:
     assert config.rl_frontier_mode == "dag"
     assert config.rl_lookahead_window == 10
     assert config.rl_max_steps == 200
+    assert config.rl_learning_rate == 1e-4
+    assert config.rl_clip_range == 0.1
+    assert config.rl_target_kl == 0.03
+    assert config.rl_n_eval_episodes == 5
     assert config.seed == 42
     assert config.mo_use_quick is True
     assert config.mo_population_size == 30
@@ -101,6 +105,10 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
     assert captured["campaign"].config.rl_frontier_mode == "dag"
     assert captured["campaign"].config.rl_lookahead_window == 15
     assert captured["campaign"].config.rl_max_steps == 300
+    assert captured["campaign"].config.rl_learning_rate == 1e-4
+    assert captured["campaign"].config.rl_clip_range == 0.1
+    assert captured["campaign"].config.rl_target_kl == 0.03
+    assert captured["campaign"].config.rl_n_eval_episodes == 5
     assert captured["campaign"].config.seed == 123
     assert captured["campaign"].config.mo_effort_mode == "custom"
     assert captured["campaign"].config.mo_use_quick is False

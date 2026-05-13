@@ -23,6 +23,8 @@ def build_run_metadata(
     max_steps: int,
     basis_gates: Optional[list[str]],
     mask_semantics: Optional[str] = None,
+    training_hyperparams: Optional[dict[str, Any]] = None,
+    evaluation_config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     metadata = {
         "schema_version": _SCHEMA_VERSION,
@@ -36,6 +38,10 @@ def build_run_metadata(
             "basis_gates": list(basis_gates) if basis_gates is not None else None,
         },
     }
+    if training_hyperparams is not None:
+        metadata["training"] = {"hyperparams": dict(training_hyperparams)}
+    if evaluation_config is not None:
+        metadata["evaluation"] = dict(evaluation_config)
 
     if mode == "routing" and algorithm == "MaskablePPO":
         metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION

@@ -69,6 +69,39 @@ def test_build_run_metadata_uses_explicit_masked_routing_schema_when_requested()
     }
 
 
+def test_build_run_metadata_records_training_and_evaluation_config():
+    metadata = build_run_metadata(
+        mode="routing",
+        algorithm="PPO",
+        seed=17,
+        frontier_mode="dag",
+        lookahead_window=7,
+        max_steps=256,
+        basis_gates=None,
+        training_hyperparams={
+            "learning_rate": 1e-4,
+            "clip_range": 0.1,
+            "target_kl": 0.03,
+        },
+        evaluation_config={
+            "eval_freq": 5000,
+            "n_eval_episodes": 5,
+            "deterministic": True,
+        },
+    )
+
+    assert metadata["training"]["hyperparams"] == {
+        "learning_rate": 1e-4,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+    }
+    assert metadata["evaluation"] == {
+        "eval_freq": 5000,
+        "n_eval_episodes": 5,
+        "deterministic": True,
+    }
+
+
 def test_importing_model_metadata_does_not_import_stable_baselines3(monkeypatch):
     for module_name in list(sys.modules):
         if module_name == "src.rl_module" or module_name.startswith("src.rl_module."):

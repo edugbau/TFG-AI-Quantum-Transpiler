@@ -29,6 +29,10 @@ _DEFAULT_RL_TIMESTEPS = 5000
 _DEFAULT_RL_FRONTIER_MODE = "dag"
 _DEFAULT_RL_LOOKAHEAD = 10
 _DEFAULT_RL_MAX_STEPS = 200
+_DEFAULT_RL_LEARNING_RATE = 1e-4
+_DEFAULT_RL_CLIP_RANGE = 0.1
+_DEFAULT_RL_TARGET_KL = 0.03
+_DEFAULT_RL_N_EVAL_EPISODES = 5
 _DEFAULT_SEED = 42
 _DEFAULT_MO_USE_QUICK = True
 _DEFAULT_MO_POPULATION_SIZE = 30
@@ -60,6 +64,10 @@ def build_default_campaign_config(
         rl_frontier_mode=_DEFAULT_RL_FRONTIER_MODE,
         rl_lookahead_window=_DEFAULT_RL_LOOKAHEAD,
         rl_max_steps=_DEFAULT_RL_MAX_STEPS,
+        rl_learning_rate=_DEFAULT_RL_LEARNING_RATE,
+        rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
+        rl_target_kl=_DEFAULT_RL_TARGET_KL,
+        rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
         seed=_DEFAULT_SEED,
         mo_use_quick=_DEFAULT_MO_USE_QUICK,
         mo_population_size=_DEFAULT_MO_POPULATION_SIZE,
@@ -318,6 +326,10 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         rl_frontier_mode=rl_frontier_mode,
         rl_lookahead_window=rl_lookahead,
         rl_max_steps=rl_max_steps,
+        rl_learning_rate=_DEFAULT_RL_LEARNING_RATE,
+        rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
+        rl_target_kl=_DEFAULT_RL_TARGET_KL,
+        rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
         seed=seed,
         mo_use_quick=mo_use_quick,
         mo_population_size=mo_population_size,
@@ -366,7 +378,9 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
         "RL: "
         f"algorithm={config.rl_algorithm}, timesteps={config.rl_total_timesteps}, "
         f"frontier_mode={config.rl_frontier_mode}, lookahead={config.rl_lookahead_window}, "
-        f"max_steps={config.rl_max_steps}, seed={config.seed}"
+        f"max_steps={config.rl_max_steps}, learning_rate={config.rl_learning_rate}, "
+        f"clip_range={config.rl_clip_range}, target_kl={config.rl_target_kl}, "
+        f"n_eval_episodes={config.rl_n_eval_episodes}, seed={config.seed}"
     )
     output_fn(f"MO Effort Mode: {config.mo_effort_mode}")
     if config.mo_effort_mode == "auto":
