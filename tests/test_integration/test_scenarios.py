@@ -13,6 +13,7 @@ from src.integration.contracts import (
     RoutingEpisodeSummary,
     ScenarioRequest,
 )
+from src.integration.synthetic_topology import SyntheticTopologySpec
 from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
 
 
@@ -218,6 +219,78 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
             "seed": 17,
             "layout": None,
             "include_artifact": True,
+        }
+    ]
+
+
+def test_run_baseline_scenario_uses_synthetic_backend_bundle(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=3)
+    circuit = QuantumCircuit(3)
+    circuit.name = "ghz_3"
+    resolve_calls = []
+    transpile_calls = []
+
+    class FakeTranspilationResult:
+        baseline_name = None
+
+        def to_dict(self):
+            return {
+                "backend_name": synthetic_topology.backend_name,
+                "baseline_name": self.baseline_name,
+                "optimization_level": 1,
+                "seed": 17,
+                "trans_depth": 12,
+            }
+
+        def to_artifact_dict(self):
+            return {
+                "artifact_version": "transpilation_result.v1",
+                "baseline_name": self.baseline_name,
+                "backend": {"backend_name": synthetic_topology.backend_name, "backend_kind": "synthetic"},
+                "transpilation": {"baseline_name": self.baseline_name, "initial_layout": None},
+            }
+
+    def fake_resolve_backend_bundle(backend_name, *, synthetic_topology=None):
+        resolve_calls.append((backend_name, synthetic_topology))
+        return SimpleNamespace(
+            backend_name=backend_name,
+            backend="synthetic-backend",
+            coupling_edges=[(0, 1), (1, 2)],
+        )
+
+    monkeypatch.setattr(scenarios, "_load_circuit", lambda request: circuit)
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", fake_resolve_backend_bundle)
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "run_named_baseline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected named baseline")),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_circuit",
+        lambda **kwargs: transpile_calls.append(kwargs) or FakeTranspilationResult(),
+    )
+
+    result = scenarios.run_baseline_scenario(
+        _make_request(
+            "Baseline",
+            backend_name=synthetic_topology.backend_name,
+            synthetic_topology=synthetic_topology,
+        )
+    )
+
+    assert result.success is True
+    assert result.transpilation_metrics["backend_name"] == "synthetic_line_3q"
+    assert resolve_calls == [("synthetic_line_3q", synthetic_topology)]
+    assert transpile_calls == [
+        {
+            "circuit": circuit,
+            "backend": "synthetic-backend",
+            "backend_name": "synthetic_line_3q",
+            "optimization_level": 1,
+            "seed": 17,
         }
     ]
 

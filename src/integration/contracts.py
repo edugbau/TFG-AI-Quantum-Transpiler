@@ -6,6 +6,7 @@ from src.integration.mo_effort import (
     DEFAULT_MO_POPULATION_SIZE,
     MIN_CUSTOM_MO_POPULATION_SIZE,
 )
+from src.integration.synthetic_topology import SyntheticTopologySpec
 
 
 _ALLOWED_SCENARIO_NAMES = frozenset({"Baseline", "MO_Only", "RL_Only", "MO+RL"})
@@ -44,6 +45,7 @@ class ScenarioRequest:
     circuit_source: CircuitSource = CircuitSource.LIBRARY
     circuit_path: str | None = None
     circuit_format: CircuitFormat = CircuitFormat.AUTO
+    synthetic_topology: SyntheticTopologySpec | None = None
 
     def __post_init__(self) -> None:
         self.circuit_source = CircuitSource(self.circuit_source)
@@ -78,6 +80,8 @@ class ScenarioRequest:
                 raise ValueError("library circuit_source does not accept non-default circuit_format")
         if self.num_qubits is not None and self.num_qubits <= 0:
             raise ValueError("num_qubits must be greater than zero")
+        if self.synthetic_topology is not None and self.backend_name != self.synthetic_topology.backend_name:
+            raise ValueError("backend_name must match synthetic_topology.backend_name")
         if self.initial_layout is not None:
             if self.num_qubits is not None and len(self.initial_layout) != self.num_qubits:
                 raise ValueError("initial_layout length must match num_qubits")

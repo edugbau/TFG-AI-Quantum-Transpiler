@@ -137,6 +137,8 @@ class BackendInfo:
     gate_errors_1q: dict[int, float] = field(default_factory=dict)
     gate_errors_2q: dict[tuple[int, int], float] = field(default_factory=dict)
     dt: Optional[float] = None
+    backend_kind: str = "backend"
+    topology_metadata: Optional[dict[str, object]] = None
 
     def to_summary_dict(self) -> dict[str, object]:
         """Devuelve un resumen serializable del backend para artefactos."""
@@ -144,8 +146,9 @@ class BackendInfo:
         t1_vals = list(self.qubit_t1.values())
         t2_vals = list(self.qubit_t2.values())
 
-        return {
+        summary = {
             "backend_name": self.name,
+            "backend_kind": self.backend_kind,
             "num_qubits": self.num_qubits,
             "two_qubit_gate": self.two_qubit_gate,
             "basis_gates": list(self.basis_gates),
@@ -156,6 +159,9 @@ class BackendInfo:
             "avg_t1": sum(t1_vals) / len(t1_vals) if t1_vals else 0.0,
             "avg_t2": sum(t2_vals) / len(t2_vals) if t2_vals else 0.0,
         }
+        if self.topology_metadata is not None:
+            summary["topology"] = dict(self.topology_metadata)
+        return summary
 
     def summary(self) -> str:
         """Devuelve un resumen legible de la información del backend."""
@@ -262,7 +268,7 @@ def get_coupling_edges(backend) -> list[tuple[int, int]]:
         Lista de tuplas ``(qubit_i, qubit_j)`` que representan
         conexiones bidireccionales.
     """
-    return backend.coupling_map.get_edges()
+    return [tuple(edge) for edge in backend.coupling_map.get_edges()]
 
 
 def get_basis_gates(backend) -> list[str]:
@@ -278,6 +284,9 @@ def get_basis_gates(backend) -> list[str]:
     Returns:
         Lista de nombres de las puertas nativas.
     """
+    if not hasattr(backend, "target"):
+        return list(getattr(backend, "basis_gates", []))
+
     target = backend.target
     # Filtramos operaciones que no son «puertas» propiamente dichas
     # (control flow, reset, measure, delay no cuentan como basis gates
@@ -307,6 +316,16 @@ def _detect_two_qubit_gate(backend) -> str:
     Raises:
         RuntimeError: Si no se encuentra ninguna puerta de 2 qubits.
     """
+    if not hasattr(backend, "target"):
+        basis_gates = set(get_basis_gates(backend))
+        for gate_name in ("cx", "cz", "ecr"):
+            if gate_name in basis_gates:
+                return gate_name
+        raise RuntimeError(
+            f"No se encontrÃ³ ninguna puerta de 2 qubits en el backend "
+            f"'{getattr(backend, 'name', 'unknown')}'"
+        )
+
     target = backend.target
     for op_name in target.operation_names:
         qargs = target.qargs_for_operation_name(op_name)
@@ -337,6 +356,13 @@ def get_qubit_properties(backend) -> dict[str, dict[int, Optional[float]]]:
         Diccionario con claves ``"t1"``, ``"t2"``, ``"frequency"``,
         cada una mapeando ``{qubit_index: valor}``.
     """
+    if not hasattr(backend, "target"):
+        return {
+            "t1": {index: None for index in range(backend.num_qubits)},
+            "t2": {index: None for index in range(backend.num_qubits)},
+            "frequency": {index: None for index in range(backend.num_qubits)},
+        }
+
     target = backend.target
     qubit_props = target.qubit_properties
 
@@ -381,6 +407,9 @@ def get_gate_errors(backend) -> dict[str, dict]:
         ``{"cz": {(0, 1): 0.005, (1, 0): 0.005, ...},
           "sx": {(0,): 0.0003, (1,): 0.0004, ...}}``
     """
+    if not hasattr(backend, "target"):
+        return {}
+
     target = backend.target
     errors: dict[str, dict] = {}
 
@@ -413,6 +442,9 @@ def get_gate_durations(backend) -> dict[str, dict]:
     Returns:
         Diccionario ``{op_name: {qargs_tuple: duration_seconds}}``.
     """
+    if not hasattr(backend, "target"):
+        return {}
+
     target = backend.target
     durations: dict[str, dict] = {}
 
@@ -525,6 +557,8 @@ def extract_backend_info(backend) -> BackendInfo:
         gate_errors_1q=gate_errors_1q,
         gate_errors_2q=gate_errors_2q,
         dt=dt,
+        backend_kind=getattr(backend, "backend_kind", "backend"),
+        topology_metadata=getattr(backend, "topology_metadata", None),
     )
 
     logger.info("Información extraída del backend '%s':\n%s", backend_name, info.summary())

@@ -7,6 +7,7 @@ from src.integration.campaign_contracts import (
 )
 from src.integration.contracts import LayoutSelectionPolicy
 from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
+from src.integration.synthetic_topology import SyntheticTopologySpec
 
 
 def test_campaign_builds_stable_cases_from_selected_circuits_and_backends() -> None:
@@ -234,6 +235,88 @@ def test_campaign_config_defaults_to_default_mode_and_accepts_advanced_mode() ->
 
     assert default_config.mode == "default"
     assert advanced_config.mode == "advanced"
+    assert default_config.topology_source == "backend"
+    assert default_config.synthetic_topology is None
+
+
+def test_campaign_config_accepts_synthetic_topology_in_advanced_mode() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="grid", rows=2, cols=2)
+    config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        backend_names=[synthetic_topology.backend_name],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="sequential",
+        rl_lookahead_window=10,
+        rl_max_steps=200,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mode="advanced",
+        topology_source="synthetic",
+        synthetic_topology=synthetic_topology,
+    )
+
+    campaign = Campaign.from_config(campaign_id="campaign-synthetic", config=config)
+
+    assert config.topology_source == "synthetic"
+    assert config.backend_names == ("synthetic_grid_2x2",)
+    assert campaign.build_cases()[0].case_id == "ghz_3__synthetic_grid_2x2"
+
+
+def test_campaign_config_rejects_synthetic_topology_without_enough_physical_qubits() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=2)
+
+    try:
+        CampaignConfig(
+            circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+            backend_names=[synthetic_topology.backend_name],
+            rl_algorithm="MaskablePPO",
+            rl_total_timesteps=5000,
+            rl_frontier_mode="sequential",
+            rl_lookahead_window=10,
+            rl_max_steps=200,
+            seed=42,
+            mo_use_quick=True,
+            mo_population_size=30,
+            mo_n_generations=50,
+            layout_policy=LayoutSelectionPolicy.COMPROMISE,
+            mode="advanced",
+            topology_source="synthetic",
+            synthetic_topology=synthetic_topology,
+        )
+    except ValueError as exc:
+        assert "physical qubits" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for undersized synthetic topology")
+
+
+def test_campaign_config_rejects_synthetic_topology_in_default_mode() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=3)
+
+    try:
+        CampaignConfig(
+            circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+            backend_names=[synthetic_topology.backend_name],
+            rl_algorithm="MaskablePPO",
+            rl_total_timesteps=5000,
+            rl_frontier_mode="sequential",
+            rl_lookahead_window=10,
+            rl_max_steps=200,
+            seed=42,
+            mo_use_quick=True,
+            mo_population_size=30,
+            mo_n_generations=50,
+            layout_policy=LayoutSelectionPolicy.COMPROMISE,
+            topology_source="synthetic",
+            synthetic_topology=synthetic_topology,
+        )
+    except ValueError as exc:
+        assert "advanced" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for synthetic topology in default mode")
 
 
 def test_campaign_config_defaults_to_auto_mo_effort_mode_and_accepts_custom() -> None:

@@ -1,3 +1,4 @@
+from inspect import Parameter, signature
 from numbers import Integral
 
 import src.mo_module as mo_module
@@ -7,6 +8,7 @@ from src.integration.contracts import ScenarioRequest, ScenarioResult
 from src.integration.layout_policy import select_layout_from_mo_result
 from src.integration.rl_model_contract import resolve_routing_model_contract
 from src.integration.routing_evaluator import build_routed_circuit, evaluate_routing_episode
+from src.qiskit_interface.transpiler import NAMED_BASELINES
 
 
 _RL_NOTE = "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
@@ -102,15 +104,43 @@ def _run_named_baseline_with_artifact(
     *,
     layout: list[int] | None = None,
 ):
-    transpilation_rows = qiskit_interface.run_named_baseline(
-        baseline_name,
-        circuit=circuit,
-        layout=layout,
-        backend_names=[request.backend_name],
-        seed=request.seed,
-        include_artifact=True,
-    )
-    row, artifact = transpilation_rows[0]
+    if request.synthetic_topology is not None:
+        backend_bundle = _resolve_backend_bundle_for_request(request)
+        baseline_config = NAMED_BASELINES[baseline_name]
+        optimization_level = int(baseline_config["optimization_level"])
+        if baseline_config["kind"] == "custom_layout":
+            if layout is None:
+                raise ValueError(f"Baseline '{baseline_name}' requires a layout")
+            result = qiskit_interface.transpile_with_custom_layout(
+                circuit=circuit,
+                layout=layout,
+                backend=backend_bundle.backend,
+                backend_name=backend_bundle.backend_name,
+                optimization_level=optimization_level,
+                seed=request.seed,
+            )
+        else:
+            result = qiskit_interface.transpile_circuit(
+                circuit=circuit,
+                backend=backend_bundle.backend,
+                backend_name=backend_bundle.backend_name,
+                optimization_level=optimization_level,
+                seed=request.seed,
+            )
+        result.baseline_name = baseline_name
+        row = {"circuit_name": circuit.name or "unnamed"}
+        row.update(result.to_dict())
+        artifact = result.to_artifact_dict()
+    else:
+        transpilation_rows = qiskit_interface.run_named_baseline(
+            baseline_name,
+            circuit=circuit,
+            layout=layout,
+            backend_names=[request.backend_name],
+            seed=request.seed,
+            include_artifact=True,
+        )
+        row, artifact = transpilation_rows[0]
     row = dict(row)
     artifact = dict(artifact)
     _validate_named_baseline_result(
@@ -120,6 +150,24 @@ def _run_named_baseline_with_artifact(
         expected_initial_layout=layout,
     )
     return row, artifact
+
+
+def _callable_accepts_kwarg(callable_obj, kwarg_name: str) -> bool:
+    try:
+        parameters = signature(callable_obj).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        (parameter.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD) and parameter.name == kwarg_name)
+        or parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _resolve_backend_bundle_for_request(request: ScenarioRequest):
+    if request.synthetic_topology is not None and _callable_accepts_kwarg(resolve_backend_bundle, "synthetic_topology"):
+        return resolve_backend_bundle(request.backend_name, synthetic_topology=request.synthetic_topology)
+    return resolve_backend_bundle(request.backend_name)
 
 
 def _validate_request_initial_layout(request: ScenarioRequest, circuit) -> None:
@@ -377,7 +425,7 @@ def run_mo_only_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioR
     _require_scenario(request, "MO_Only")
     if circuit is None:
         circuit = _load_circuit(request)
-    backend_bundle = resolve_backend_bundle(request.backend_name)
+    backend_bundle = _resolve_backend_bundle_for_request(request)
     mo_result = _run_mo(request, circuit, backend_bundle)
     selected_layout = _validate_selected_layout(
         select_layout_from_mo_result(
@@ -420,7 +468,7 @@ def run_rl_only_scenario(
         raise ValueError("rl_model_path is required for RL scenarios")
     if circuit is None:
         circuit = _load_circuit(request)
-    backend_bundle = resolve_backend_bundle(request.backend_name)
+    backend_bundle = _resolve_backend_bundle_for_request(request)
     if injected_layout is not None:
         selected_layout = _validate_selected_layout(
             injected_layout,
@@ -472,7 +520,7 @@ def run_mo_rl_scenario(
         raise ValueError("rl_model_path is required for RL scenarios")
     if circuit is None:
         circuit = _load_circuit(request)
-    backend_bundle = resolve_backend_bundle(request.backend_name)
+    backend_bundle = _resolve_backend_bundle_for_request(request)
     if injected_layout is None:
         mo_result = _run_mo(request, circuit, backend_bundle)
         selected_layout = _validate_selected_layout(

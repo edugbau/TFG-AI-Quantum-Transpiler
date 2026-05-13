@@ -105,6 +105,33 @@ NAMED_BASELINES: dict[str, dict[str, object]] = {
 }
 
 
+def _is_synthetic_backend(backend) -> bool:
+    return getattr(backend, "backend_kind", None) == "synthetic"
+
+
+def _build_preset_pass_manager(
+    *,
+    backend,
+    optimization_level: int,
+    initial_layout: Optional[list[int]] = None,
+    seed: int = DEFAULT_SEED,
+):
+    if _is_synthetic_backend(backend):
+        return generate_preset_pass_manager(
+            optimization_level=optimization_level,
+            coupling_map=backend.coupling_map,
+            basis_gates=list(backend.basis_gates),
+            initial_layout=initial_layout,
+            seed_transpiler=seed,
+        )
+    return generate_preset_pass_manager(
+        optimization_level=optimization_level,
+        backend=backend,
+        initial_layout=initial_layout,
+        seed_transpiler=seed,
+    )
+
+
 # ===========================================================================
 #  Dataclass para resultados de transpilación
 # ===========================================================================
@@ -362,11 +389,11 @@ def transpile_circuit(
 
     # --- Generar y ejecutar PassManager ---
     t_start = time.perf_counter()
-    pm = generate_preset_pass_manager(
-        optimization_level=optimization_level,
+    pm = _build_preset_pass_manager(
         backend=backend,
+        optimization_level=optimization_level,
         initial_layout=initial_layout,
-        seed_transpiler=seed,
+        seed=seed,
     )
     # Personalizar métodos si se especificaron
     if routing_method is not None:
@@ -698,10 +725,10 @@ def transpile_post_routing(
     original_metrics = extract_metrics(original_circuit)
 
     t_start = time.perf_counter()
-    pm = generate_preset_pass_manager(
-        optimization_level=optimization_level,
+    pm = _build_preset_pass_manager(
         backend=backend,
-        seed_transpiler=seed,
+        optimization_level=optimization_level,
+        seed=seed,
     )
     pm.layout = None
     pm.routing = None

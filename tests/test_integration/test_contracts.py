@@ -15,6 +15,7 @@ from src.integration.mo_effort import (
     DEFAULT_MO_POPULATION_SIZE,
     MIN_CUSTOM_MO_POPULATION_SIZE,
 )
+from src.integration.synthetic_topology import SyntheticTopologySpec
 
 
 def test_scenario_request_defaults_for_routing_v1() -> None:
@@ -54,6 +55,7 @@ def test_scenario_request_defaults_for_routing_v1() -> None:
         "circuit_source",
         "circuit_path",
         "circuit_format",
+        "synthetic_topology",
     ]
 
 
@@ -67,6 +69,33 @@ def test_scenario_request_normalizes_string_layout_policy_to_enum() -> None:
     )
 
     assert request.layout_policy is LayoutSelectionPolicy.COMPROMISE
+
+
+def test_scenario_request_accepts_matching_synthetic_topology() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=5)
+
+    request = ScenarioRequest(
+        scenario_name="MO_Only",
+        circuit_name="ghz_5",
+        num_qubits=5,
+        backend_name=synthetic_topology.backend_name,
+        synthetic_topology=synthetic_topology,
+    )
+
+    assert request.synthetic_topology is synthetic_topology
+
+
+def test_scenario_request_rejects_synthetic_topology_backend_name_mismatch() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=5)
+
+    with pytest.raises(ValueError, match="backend_name"):
+        ScenarioRequest(
+            scenario_name="MO_Only",
+            circuit_name="ghz_5",
+            num_qubits=5,
+            backend_name="fake_backend",
+            synthetic_topology=synthetic_topology,
+        )
 
 
 def test_public_integration_contracts_do_not_export_scenario_name() -> None:

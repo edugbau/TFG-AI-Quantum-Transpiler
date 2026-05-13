@@ -1,6 +1,7 @@
 from dataclasses import fields
 
 from src.integration.backend_adapter import BackendBundle, resolve_backend_bundle
+from src.integration.synthetic_topology import SyntheticTopologySpec
 
 
 def test_resolve_backend_bundle_returns_backend_and_coupling_edges() -> None:
@@ -59,3 +60,24 @@ def test_resolve_backend_bundle_uses_public_qiskit_interface_functions(monkeypat
         ("get_coupling_edges", backend),
         ("get_basis_gates", backend),
     ]
+
+
+def test_resolve_backend_bundle_builds_synthetic_backend_without_get_backend(monkeypatch) -> None:
+    get_backend_calls: list[str] = []
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=3)
+
+    monkeypatch.setattr(
+        "src.integration.backend_adapter.qiskit_interface.get_backend",
+        lambda backend_name: get_backend_calls.append(backend_name),
+    )
+
+    bundle = resolve_backend_bundle(
+        synthetic_topology.backend_name,
+        synthetic_topology=synthetic_topology,
+    )
+
+    assert get_backend_calls == []
+    assert bundle.backend_name == "synthetic_line_3q"
+    assert bundle.backend.num_qubits == 3
+    assert set(bundle.coupling_edges) == {(0, 1), (1, 0), (1, 2), (2, 1)}
+    assert bundle.basis_gates == ["id", "rz", "sx", "x", "cx"]
