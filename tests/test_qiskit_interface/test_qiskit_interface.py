@@ -810,6 +810,22 @@ class TestTranspilationWithLayout:
         assert callable(getattr(layout_obj, "final_index_layout", None))
         assert result.final_layout == layout_obj.final_index_layout()[: simple_circuit.num_qubits]
 
+    def test_transpile_circuit_reports_qiskit_initial_layout(self, simple_circuit, backend_torino):
+        result = transpile_circuit(
+            simple_circuit,
+            backend=backend_torino,
+            optimization_level=1,
+            seed=42,
+        )
+
+        layout_obj = result.transpiled_circuit.layout
+        assert layout_obj is not None
+        assert callable(getattr(layout_obj, "initial_index_layout", None))
+        assert result.qiskit_initial_layout == layout_obj.initial_index_layout(filter_ancillas=True)[
+            : simple_circuit.num_qubits
+        ]
+        assert result.to_artifact_dict()["transpilation"]["qiskit_initial_layout"] == result.qiskit_initial_layout
+
     def test_transpilation_metrics_distinguish_active_qubits_from_materialized_backend_width(
         self,
         simple_circuit,

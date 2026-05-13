@@ -57,14 +57,27 @@ def _build_result(
     metrics: dict[str, float | int] | None = None,
     errors: list[str] | None = None,
 ) -> ScenarioResult:
+    default_layout = list(range(case.num_qubits))
+    selected_layout = default_layout if scenario_name in {"MO_Only", "RL_Only", "MO+RL"} else None
+    artifact = None
+    if scenario_name == "Baseline":
+        artifact = {
+            "artifact_version": "transpilation_result.v1",
+            "baseline_name": "qiskit_level_1",
+            "transpilation": {
+                "qiskit_initial_layout": default_layout,
+                "final_layout": default_layout,
+            },
+        }
     return ScenarioResult(
         scenario_name=scenario_name,
         circuit_name=_case_library_name(case),
         backend_name=case.backend_name,
         seed=42,
         success=success,
-        selected_layout=[0, 1, 2] if scenario_name in {"MO_Only", "MO+RL"} else None,
+        selected_layout=selected_layout,
         transpilation_metrics=metrics,
+        transpilation_artifact=artifact,
         errors=errors or [],
     )
 
@@ -133,6 +146,12 @@ def test_run_campaign_executes_cases_in_stable_sequential_order(tmp_path) -> Non
         call_log.append(("MO_Only", case.case_id, id(circuit)))
         return _build_result("MO_Only", case, metrics=_build_metrics(90))
 
+    def fake_run_rl_only(request, *, circuit, injected_layout):
+        case = next(case for case in cases if case.case_id == _case_id_from_request(request))
+        assert injected_layout == [0, 1, 2]
+        call_log.append(("RL_Only", case.case_id, id(circuit)))
+        return _build_result("RL_Only", case, metrics=_build_metrics(85))
+
     def fake_train_case(*, campaign_case, campaign_config, target_circuit, coupling_map, case_output_dir, initial_layout=None):
         del campaign_config, case_output_dir, initial_layout
         assert coupling_map == [(0, 1), (1, 2)]
@@ -157,6 +176,7 @@ def test_run_campaign_executes_cases_in_stable_sequential_order(tmp_path) -> Non
         run_baseline=fake_run_baseline,
         run_mo_only=fake_run_mo_only,
         train_case_fn=fake_train_case,
+        run_rl_only=fake_run_rl_only,
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -168,21 +188,29 @@ def test_run_campaign_executes_cases_in_stable_sequential_order(tmp_path) -> Non
     assert [entry[:2] for entry in call_log] == [
         ("load", cases[0].case_id),
         ("Baseline", cases[0].case_id),
+        ("train", cases[0].case_id),
+        ("RL_Only", cases[0].case_id),
         ("MO_Only", cases[0].case_id),
         ("train", cases[0].case_id),
         ("MO+RL", cases[0].case_id),
         ("load", cases[1].case_id),
         ("Baseline", cases[1].case_id),
+        ("train", cases[1].case_id),
+        ("RL_Only", cases[1].case_id),
         ("MO_Only", cases[1].case_id),
         ("train", cases[1].case_id),
         ("MO+RL", cases[1].case_id),
         ("load", cases[2].case_id),
         ("Baseline", cases[2].case_id),
+        ("train", cases[2].case_id),
+        ("RL_Only", cases[2].case_id),
         ("MO_Only", cases[2].case_id),
         ("train", cases[2].case_id),
         ("MO+RL", cases[2].case_id),
         ("load", cases[3].case_id),
         ("Baseline", cases[3].case_id),
+        ("train", cases[3].case_id),
+        ("RL_Only", cases[3].case_id),
         ("MO_Only", cases[3].case_id),
         ("train", cases[3].case_id),
         ("MO+RL", cases[3].case_id),
@@ -193,7 +221,7 @@ def test_run_campaign_executes_cases_in_stable_sequential_order(tmp_path) -> Non
         case_circuit_ids = {
             circuit_id
             for name, case_id, circuit_id in call_log
-            if case_id == case.case_id and name in {"Baseline", "MO_Only", "train", "MO+RL"}
+            if case_id == case.case_id and name in {"Baseline", "MO_Only", "RL_Only", "train", "MO+RL"}
         }
         assert case_circuit_ids == {id(loaded_circuits[case.case_id])}
 
@@ -229,6 +257,13 @@ def test_run_campaign_trains_then_runs_baseline_mo_only_and_mo_rl(tmp_path) -> N
         call_order.append("train")
         return _build_training_result(case)
 
+    def fake_run_rl_only(request, *, circuit, injected_layout):
+        assert request.scenario_name == "RL_Only"
+        assert request.rl_model_path == str(_build_training_result(case).selected_artifact_path)
+        assert injected_layout == [0, 1, 2]
+        call_order.append("RL_Only")
+        return _build_result("RL_Only", case, metrics=_build_metrics(85))
+
     def fake_run_mo_rl(request, *, circuit, injected_layout):
         assert request.scenario_name == "MO+RL"
         assert request.rl_model_path == str(_build_training_result(case).selected_artifact_path)
@@ -248,6 +283,7 @@ def test_run_campaign_trains_then_runs_baseline_mo_only_and_mo_rl(tmp_path) -> N
         run_baseline=fake_run_baseline,
         run_mo_only=fake_run_mo_only,
         train_case_fn=fake_train_case,
+        run_rl_only=fake_run_rl_only,
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -256,11 +292,12 @@ def test_run_campaign_trains_then_runs_baseline_mo_only_and_mo_rl(tmp_path) -> N
         write_outputs=fake_write_outputs,
     )
 
-    assert call_order == ["Baseline", "MO_Only", "train", "MO+RL"]
+    assert call_order == ["Baseline", "train", "RL_Only", "MO_Only", "train", "MO+RL"]
     assert report.case_reports[0].status == "completed"
     assert report.case_reports[0].training_result.status == "completed"
     assert report.case_reports[0].baseline_result.scenario_name == "Baseline"
     assert report.case_reports[0].mo_only_result.scenario_name == "MO_Only"
+    assert report.case_reports[0].rl_only_result.scenario_name == "RL_Only"
     assert report.case_reports[0].mo_rl_result.scenario_name == "MO+RL"
     assert campaign.status == "completed"
     assert campaign.summary.status == "completed"
@@ -297,6 +334,11 @@ def test_run_campaign_trains_mo_rl_cases_from_mo_only_selected_layout(tmp_path) 
             transpilation_metrics=_build_metrics(90),
         ),
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result("MO+RL", case, metrics=_build_metrics(80)),
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -305,7 +347,7 @@ def test_run_campaign_trains_mo_rl_cases_from_mo_only_selected_layout(tmp_path) 
         write_outputs=lambda *, output_dir, report: None,
     )
 
-    assert captured_training_layouts == [[2, 1, 0]]
+    assert captured_training_layouts == [[0, 1, 2], [2, 1, 0]]
     assert report.case_reports[0].status == "completed"
 
 
@@ -346,6 +388,11 @@ def test_run_campaign_defensively_copies_selected_layout_across_training_and_mo_
             transpilation_metrics=_build_metrics(90),
         ),
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -354,7 +401,7 @@ def test_run_campaign_defensively_copies_selected_layout_across_training_and_mo_
         write_outputs=lambda *, output_dir, report: None,
     )
 
-    assert captured_training_layouts == [[2, 1, 0]]
+    assert captured_training_layouts == [[0, 1, 2], [2, 1, 0]]
     assert captured_mo_rl_layouts == [[2, 1, 0]]
     assert report.case_reports[0].status == "completed"
 
@@ -375,6 +422,7 @@ def test_run_campaign_uses_derived_routing_subgraph_for_training_and_mo_rl(tmp_p
         fallback_reason=None,
     )
     captured_training_coupling_maps: list[list[tuple[int, int]]] = []
+    captured_training_layouts: list[list[int] | None] = []
     captured_mo_rl_kwargs: list[dict[str, object]] = []
 
     monkeypatch.setattr(
@@ -388,7 +436,7 @@ def test_run_campaign_uses_derived_routing_subgraph_for_training_and_mo_rl(tmp_p
         del campaign_config, case_output_dir
         assert campaign_case == case
         assert target_circuit is circuit
-        assert initial_layout == [2, 1, 0]
+        captured_training_layouts.append(list(initial_layout) if initial_layout is not None else None)
         captured_training_coupling_maps.append(list(coupling_map))
         return _build_training_result(campaign_case)
 
@@ -419,6 +467,11 @@ def test_run_campaign_uses_derived_routing_subgraph_for_training_and_mo_rl(tmp_p
             transpilation_metrics=_build_metrics(90),
         ),
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -427,7 +480,8 @@ def test_run_campaign_uses_derived_routing_subgraph_for_training_and_mo_rl(tmp_p
         write_outputs=lambda *, output_dir, report: None,
     )
 
-    assert captured_training_coupling_maps == [[(0, 2), (2, 3)]]
+    assert captured_training_layouts == [[0, 1, 2], [2, 1, 0]]
+    assert captured_training_coupling_maps == [[(0, 2), (2, 3)], [(0, 2), (2, 3)]]
     assert captured_mo_rl_kwargs == [
         {
             "circuit": circuit,
@@ -472,6 +526,11 @@ def test_run_campaign_fails_case_when_mo_only_result_has_no_selected_layout(tmp_
             transpilation_metrics=_build_metrics(90),
         ),
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -485,7 +544,7 @@ def test_run_campaign_fails_case_when_mo_only_result_has_no_selected_layout(tmp_
     assert report.case_reports[0].mo_rl_result is None
     assert len(report.case_reports[0].incidents) == 1
     assert "selected layout" in report.case_reports[0].incidents[0]
-    assert train_calls == []
+    assert train_calls == [case.case_id]
     assert mo_rl_calls == []
 
 
@@ -516,6 +575,11 @@ def test_run_campaign_preserves_legacy_mo_rl_runner_seam_without_injected_layout
             transpilation_metrics=_build_metrics(90),
         ),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -556,6 +620,11 @@ def test_run_campaign_passes_injected_layout_to_kwargs_aware_mo_rl_runner(tmp_pa
             transpilation_metrics=_build_metrics(90),
         ),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -603,6 +672,11 @@ def test_run_campaign_forces_baseline_safe_request_defaults(tmp_path) -> None:
         run_baseline=fake_run_baseline,
         run_mo_only=lambda request, *, circuit: _build_result("MO_Only", case, metrics=_build_metrics(90)),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result("MO+RL", case, metrics=_build_metrics(80)),
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -689,6 +763,11 @@ def test_run_campaign_resolves_effective_mo_settings_per_campaign_case(monkeypat
         run_baseline=fake_run_baseline,
         run_mo_only=fake_run_mo_only,
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -820,6 +899,11 @@ def test_run_campaign_intermediate_persistence_does_not_mark_campaign_terminal(t
             metrics=_build_metrics(90),
         ),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result(
             "MO+RL",
             next(case for case in cases if case.case_id == _case_id_from_request(request)),
@@ -876,6 +960,11 @@ def test_run_campaign_intermediate_persistence_passes_coherent_running_report_to
             metrics=_build_metrics(90),
         ),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result(
             "MO+RL",
             next(case for case in cases if case.case_id == _case_id_from_request(request)),
@@ -941,6 +1030,11 @@ def test_run_campaign_default_scenario_runners_accept_real_public_signatures(tmp
         run_baseline=fake_public_run_baseline,
         run_mo_only=fake_public_run_mo_only,
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_public_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -949,7 +1043,7 @@ def test_run_campaign_default_scenario_runners_accept_real_public_signatures(tmp
         write_outputs=lambda *, output_dir, report: None,
     )
 
-    assert call_order == ["Baseline", "MO_Only", "train", "MO+RL"]
+    assert call_order == ["Baseline", "train", "MO_Only", "train", "MO+RL"]
     assert report.case_reports[0].status == "completed"
 
 
@@ -1089,6 +1183,9 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
 
     assert [entry[0] for entry in call_log] == [
         "qiskit_level_1",
+        "eval",
+        "rebuild",
+        "post",
         "mo",
         "custom_layout_level_1",
         "eval",
@@ -1135,6 +1232,11 @@ def test_run_campaign_preserves_baseline_and_mo_only_when_training_fails(tmp_pat
         run_baseline=lambda request, *, circuit: fake_result_for_request(request, "Baseline", 100),
         run_mo_only=lambda request, *, circuit: fake_result_for_request(request, "MO_Only", 90),
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -1211,6 +1313,11 @@ def test_run_campaign_marks_case_failed_when_baseline_or_mo_only_fails(tmp_path)
         run_baseline=fake_baseline,
         run_mo_only=fake_mo_only,
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -1228,7 +1335,7 @@ def test_run_campaign_marks_case_failed_when_baseline_or_mo_only_fails(tmp_path)
     assert report.case_reports[1].mo_only_result.success is False
     assert report.case_reports[1].training_result is None
     assert report.case_reports[1].mo_rl_result is None
-    assert train_calls == []
+    assert train_calls == [second_case.case_id]
     assert mo_rl_calls == []
     assert campaign.status == "completed"
     assert campaign.summary.failed_cases == 2
@@ -1274,6 +1381,11 @@ def test_run_campaign_records_incomplete_mo_rl_without_aborting_remaining_cases(
         run_baseline=lambda request, *, circuit: fake_result_for_request(request, "Baseline", 100),
         run_mo_only=lambda request, *, circuit: fake_result_for_request(request, "MO_Only", 90),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=fake_run_mo_rl,
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -1324,6 +1436,11 @@ def test_run_campaign_marks_remaining_cases_cancelled_after_explicit_cancellatio
             metrics=_build_metrics(90),
         ),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result(
             "MO+RL",
             first_case,
@@ -1366,6 +1483,11 @@ def test_run_campaign_marks_interrupted_when_circuit_load_is_interrupted(tmp_pat
         run_baseline=lambda request, *, circuit: _build_result("Baseline", second_case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: _build_result("MO_Only", second_case, metrics=_build_metrics(90)),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result("MO+RL", second_case, metrics=_build_metrics(80)),
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -1415,6 +1537,11 @@ def test_run_campaign_preserves_completed_results_when_persistence_is_interrupte
         run_baseline=lambda request, *, circuit: fake_result_for_case(first_case, "Baseline", 100),
         run_mo_only=lambda request, *, circuit: fake_result_for_case(first_case, "MO_Only", 90),
         train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: fake_result_for_case(first_case, "MO+RL", 80),
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -1479,6 +1606,11 @@ def test_run_campaign_aligns_training_case_anchor_with_persisted_case_directory(
         run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
         run_mo_only=lambda request, *, circuit: _build_result("MO_Only", case, metrics=_build_metrics(90)),
         train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            next(case for case in campaign.build_cases() if case.case_id == _case_id_from_request(request)),
+            metrics=_build_metrics(85),
+        ),
         run_mo_rl=lambda request, *, circuit, injected_layout: _build_result("MO+RL", case, metrics=_build_metrics(80)),
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
@@ -1487,5 +1619,6 @@ def test_run_campaign_aligns_training_case_anchor_with_persisted_case_directory(
         write_outputs=write_campaign_outputs,
     )
 
-    assert captured_case_output_dirs == [tmp_path / "campaigns" / campaign.campaign_id / "cases" / "ghz_bad_3__fake_torino"]
-    assert (captured_case_output_dirs[0] / "result.json").exists()
+    expected_case_dir = tmp_path / "campaigns" / campaign.campaign_id / "cases" / "ghz_bad_3__fake_torino"
+    assert captured_case_output_dirs == [expected_case_dir / "rl_only", expected_case_dir]
+    assert (expected_case_dir / "result.json").exists()

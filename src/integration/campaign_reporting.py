@@ -29,6 +29,7 @@ _WINDOWS_RESERVED_CASE_DIR_NAMES = frozenset(
 class AggregateMetricSummary:
     baseline_mean: float | None
     mo_only_mean: float | None
+    rl_only_mean: float | None
     mo_rl_mean: float | None
 
 
@@ -38,7 +39,9 @@ class CampaignCaseReport:
     status: str
     baseline_result: ScenarioResult | None = None
     mo_only_result: ScenarioResult | None = None
+    rl_only_result: ScenarioResult | None = None
     mo_rl_result: ScenarioResult | None = None
+    rl_only_training_result: TrainingBridgeResult | None = None
     training_result: TrainingBridgeResult | None = None
     incidents: list[str] = field(default_factory=list)
 
@@ -88,6 +91,8 @@ def _is_comparable(case_report: CampaignCaseReport) -> bool:
             return False
         if _extract_metric(case_report.mo_only_result, metric_name) is None:
             return False
+        if _extract_metric(case_report.rl_only_result, metric_name) is None:
+            return False
         if _extract_metric(case_report.mo_rl_result, metric_name) is None:
             return False
     return True
@@ -110,6 +115,9 @@ def _build_aggregate_metrics(case_reports: list[CampaignCaseReport]) -> dict[str
             mo_only_mean=_mean([
                 _extract_metric(case_report.mo_only_result, metric_name) for case_report in comparable_reports
             ]),
+            rl_only_mean=_mean([
+                _extract_metric(case_report.rl_only_result, metric_name) for case_report in comparable_reports
+            ]),
             mo_rl_mean=_mean([
                 _extract_metric(case_report.mo_rl_result, metric_name) for case_report in comparable_reports
             ]),
@@ -122,7 +130,7 @@ def _build_incidents(case_reports: list[CampaignCaseReport]) -> list[str]:
     for case_report in case_reports:
         if case_report.status == "completed" and not _is_comparable(case_report):
             incidents.append(
-                f"{case_report.case.case_id}: completed without a comparable metric bundle across Baseline, MO_Only, and MO+RL."
+                f"{case_report.case.case_id}: completed without a comparable metric bundle across Baseline, MO_Only, RL_Only, and MO+RL."
             )
         for incident in case_report.incidents:
             incidents.append(f"{case_report.case.case_id}: {incident}")
@@ -242,15 +250,17 @@ def _render_aggregate_table(report: CampaignReport) -> list[str]:
         f"Incomplete Cases: `{report.summary.incomplete_cases}`",
         f"Cancelled Cases: `{report.summary.cancelled_cases}`",
         "",
-        "| Metric | Baseline Mean | MO_Only Mean | MO+RL Mean |",
-        "| --- | ---: | ---: | ---: |",
+        "| Metric | Baseline Mean | MO_Only Mean | RL_Only Mean | MO+RL Mean |",
+        "| --- | ---: | ---: | ---: | ---: |",
     ]
     for metric_name in _MAIN_METRICS:
         metric_summary = report.aggregate_metrics[metric_name]
         lines.append(
             "| "
             f"{metric_name} | {_format_metric(metric_summary.baseline_mean)} | "
-            f"{_format_metric(metric_summary.mo_only_mean)} | {_format_metric(metric_summary.mo_rl_mean)} |"
+            f"{_format_metric(metric_summary.mo_only_mean)} | "
+            f"{_format_metric(metric_summary.rl_only_mean)} | "
+            f"{_format_metric(metric_summary.mo_rl_mean)} |"
         )
     return lines
 
@@ -295,13 +305,13 @@ def _render_scenario_notes(label: str, result: ScenarioResult | None) -> list[st
     return [f"- {label} Notes: " + " | ".join(result.notes)]
 
 
-def _render_training_summary(training_result: TrainingBridgeResult | None) -> list[str]:
+def _render_training_summary(training_result: TrainingBridgeResult | None, *, label: str = "RL") -> list[str]:
     if training_result is None:
-        return ["### RL Training Summary", "- Training: unavailable"]
+        return [f"### {label} Training Summary", "- Training: unavailable"]
     config = training_result.effective_training_config
     artifact_path = training_result.selected_artifact_path.as_posix() if training_result.selected_artifact_path else "none"
     return [
-        "### RL Training Summary",
+        f"### {label} Training Summary",
         f"- Status: `{training_result.status}`",
         f"- Algorithm: `{config.algorithm}`",
         f"- Timesteps: `{config.total_timesteps}`",
@@ -328,11 +338,14 @@ def _render_case_detail(report: CampaignReport) -> list[str]:
                 _render_selected_layout(case_report),
                 _render_scenario_metric_line("Baseline", case_report.baseline_result),
                 _render_scenario_metric_line("MO_Only", case_report.mo_only_result),
+                _render_scenario_metric_line("RL_Only", case_report.rl_only_result),
                 _render_scenario_metric_line("MO+RL", case_report.mo_rl_result),
             ]
         )
+        lines.extend(_render_scenario_notes("RL_Only", case_report.rl_only_result))
         lines.extend(_render_scenario_notes("MO+RL", case_report.mo_rl_result))
-        lines.extend(_render_training_summary(case_report.training_result))
+        lines.extend(_render_training_summary(case_report.rl_only_training_result, label="RL_Only"))
+        lines.extend(_render_training_summary(case_report.training_result, label="MO+RL"))
         if case_report.incidents:
             lines.append("- Incidents: " + "; ".join(case_report.incidents))
     return lines
@@ -486,6 +499,13 @@ def _normalize_report_for_persistence(report: CampaignReport, *, output_path: Pa
     normalized_case_reports = tuple(
         replace(
             case_report,
+            rl_only_training_result=_normalize_training_result_for_persistence(
+                case_report.rl_only_training_result,
+                output_path=output_path,
+                public_campaign_root=public_campaign_root,
+                case_id=case_report.case.case_id,
+                case_dir_name=case_dir_names[case_report.case.case_id],
+            ),
             training_result=_normalize_training_result_for_persistence(
                 case_report.training_result,
                 output_path=output_path,

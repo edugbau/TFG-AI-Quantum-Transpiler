@@ -13,7 +13,7 @@ Integration v1 covers these routing evaluation scenarios:
 
 The scenario layer still preserves `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL` as explicit Scenarios.
 
-Integration v1 also owns the Campaign layer used for reproducible `train+eval` comparison across one or more Campaign Cases. The canonical Campaign comparison set is `Baseline`, `MO_Only`, and `MO+RL`; `RL_Only` remains available as a standalone Scenario outside the primary guided Campaign flow.
+Integration v1 also owns the Campaign layer used for reproducible `train+eval` comparison across one or more Campaign Cases. The canonical Campaign comparison set is `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL`.
 
 Within that guided Campaign comparison, `MO_Only` selects the layout for the Campaign Case. Campaign training for `MO+RL` starts from that exact layout, and `MO+RL` evaluation reuses the same layout together with the resulting Training Artifact for the same Campaign Case.
 
@@ -52,7 +52,7 @@ Each Campaign persists a public root with at least:
 - `campaign.json` as the structured Campaign output;
 - `cases/<case>/result.json` for per-case persistence.
 
-The Summary Document records Campaign metadata, aggregate comparison across `Baseline`, `MO_Only`, and `MO+RL`, per-case detail, RL training notes, and recorded incidents. Cases that fail before comparison, or complete without a comparable metric bundle, are reported explicitly through the aggregate comparison and incidents sections. In the current implementation, those sections are the authoritative signal for non-comparable cases; top-level Campaign status can still remain `completed`, and a per-case status can still remain `completed`, when comparability is missing.
+The Summary Document records Campaign metadata, aggregate comparison across `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL`, per-case detail, RL training notes, and recorded incidents. Cases that fail before comparison, or complete without a comparable metric bundle, are reported explicitly through the aggregate comparison and incidents sections. In the current implementation, those sections are the authoritative signal for non-comparable cases; top-level Campaign status can still remain `completed`, and a per-case status can still remain `completed`, when comparability is missing.
 
 For the Campaign hybrid path, the sequence is explicit: `MO_Only` selects the layout, Campaign training produces the Training Artifact starting from that exact layout, and `MO+RL` evaluation uses the same layout and that artifact when it runs the routed comparison.
 
@@ -60,7 +60,7 @@ On top of that Campaign-only layout reuse, Campaign derives a path-expanded rout
 
 ## RL scenario semantics
 
-`RL_Only` returns episode summaries, not final circuits.
+`RL_Only` rebuilds the routed circuit from the RL trace and runs the same post-routing Qiskit stages as `MO+RL` when the episode completes.
 
 `MO+RL` now attempts to reconstruct the routed circuit from the RL trace, preferring the exact `executed_gate_trace` when available and using `swap_trace` to replay the physical swaps, and then runs the post-routing Qiskit stages to produce comparable transpilation metrics and an artifact.
 
@@ -68,7 +68,7 @@ In those routing summaries, `total_swaps == len(swap_trace)` and counts only the
 
 For transpilation metrics, `trans_num_qubits`/`trans_width` still represent materialized physical width, while `trans_active_qubits` is the better comparator for sparse-layout physical occupancy.
 
-If the RL episode does not complete routing, `MO+RL` returns a controlled result with the routing summary preserved and skips routed-circuit reconstruction and post-routing transpilation.
+If the RL episode does not complete routing, `RL_Only` and `MO+RL` return a controlled result with the routing summary preserved and skip routed-circuit reconstruction and post-routing transpilation.
 
 If the metadata sidecar is missing, integration reports that condition through an extra note and falls back to legacy defaults so previously saved routing checkpoints remain evaluable.
 
@@ -76,6 +76,4 @@ This does not change module ownership at Scenario level: `integration` owns Scen
 
 ## Deferred work
 
-- Final circuit reconstruction/export remains deferred for `RL_Only`.
-- QASM input for RL-based scenarios is still deferred until those flows can consume circuit artifacts beyond episode summaries.
-- Final circuit materialization for RL-focused flows remains a future iteration beyond the current `RL_Only` episode-summary scope.
+- QASM input for RL-based scenarios is still deferred until those flows can consume public circuit inputs beyond library circuits.

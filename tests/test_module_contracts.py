@@ -97,9 +97,9 @@ def assert_integration_v1_doc_scope(text: str) -> None:
     assert "routing" in lowered
     assert "qiskit-facing scenarios" in lowered
     assert "qasm input is available" in lowered
-    assert "episode summaries" in lowered
-    assert "not final circuits" in lowered
-    assert "future iteration" in lowered
+    assert "rebuilds the routed circuit" in lowered
+    assert "post-routing qiskit stages" in lowered
+    assert "deferred" in lowered
     assert "qasm" in lowered
     assert "backend catalog is intentionally limited" in lowered
     assert "fake backends" in lowered
@@ -367,11 +367,14 @@ def test_rl_docs_and_reset_contract_keep_initial_layout_generic() -> None:
     )
 
 
-def test_integration_docs_declare_routing_v1_scope_and_known_rl_limitations() -> None:
+def test_integration_docs_declare_routing_v1_scope_and_rl_reconstruction_scope() -> None:
     integration_text = read_text("src/integration/__init__.py")
     integration_readme_text = read_text("src/integration/README.md")
 
-    assert_contains_all(integration_text, ("routing-evaluation v1", "episode summaries, not final circuits"))
+    assert_contains_all(
+        integration_text,
+        ("routing-evaluation v1", "RL-based scenarios rebuild routed circuits"),
+    )
     assert_integration_v1_doc_scope(integration_readme_text)
 
 
@@ -400,7 +403,8 @@ def test_masked_routing_docs_describe_public_contracts() -> None:
         (
             "versioned masked routing metadata",
             "legacy fallback remains",
-            "episode summaries, not final circuits",
+            "RL_Only` rebuilds the routed circuit",
+            "post-routing Qiskit stages",
         ),
     )
     assert_contains_all(

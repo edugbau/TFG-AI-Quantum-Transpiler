@@ -16,13 +16,13 @@ La capa de Scenarios sigue cubriendo:
 - `RL_Only`
 - `MO+RL`
 
-La capa de Campaign soporta una Train+Eval Campaign donde cada Campaign Case corresponde a una combinación `circuit x backend`. El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only` y `MO+RL`. `RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign.
+La capa de Campaign soporta una Train+Eval Campaign donde cada Campaign Case corresponde a una combinación `circuit x backend`. El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
 
 Dentro de ese flujo guiado, `MO_Only` es el Scenario que selecciona el layout del Campaign Case. El training de Campaign para `MO+RL` arranca desde ese layout exacto, produce el Training Artifact del caso y la evaluación posterior de `MO+RL` reutiliza tanto ese mismo layout como ese artifacto resultante.
 
 Para Campaign `MO+RL`, `integration` sigue siendo dueño del handoff MO -> RL. En la semántica actual por defecto, Campaign conserva el layout exacto seleccionado por `MO_Only`, extrae los pares lógicos que realmente interactúan en el circuito, deriva un path-expanded routing subgraph sobre el coupling map real del backend y usa ese coupling map derivado tanto para el training RL como para la evaluación híbrida del mismo Campaign Case. If subgraph derivation fails, Campaign falls back to the full backend coupling map and records that fallback en `ScenarioResult.notes` y en la salida pública del caso. La comparación final post-routing de Qiskit sigue apuntando al backend real.
 
-El módulo no implementa el entrenamiento RL en sí mismo ni cubre `synthesis` en esta capa pública. `integration` orquesta el training por Campaign Case a través de un seam explícito y consume el Training Artifact resultante, mientras que `rl_module` sigue siendo dueño de cómo se ejecuta el training y de cómo se producen los checkpoints. En esta versión, `RL_Only` sigue devolviendo resúmenes de episodio (*episode summaries*), mientras que `MO+RL` ya puede reconstruir el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usa `swap_trace` para materializar los swaps físicos y ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing.
+El módulo no implementa el entrenamiento RL en sí mismo ni cubre `synthesis` en esta capa pública. `integration` orquesta el training por Campaign Case a través de un seam explícito y consume el Training Artifact resultante, mientras que `rl_module` sigue siendo dueño de cómo se ejecuta el training y de cómo se producen los checkpoints. En esta versión, `RL_Only` y `MO+RL` reconstruyen el circuito ruteado desde la traza RL: usan `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas, usan `swap_trace` para materializar los swaps físicos y ejecutan las fases post-routing de Qiskit cuando el episodio RL completa el routing.
 
 En términos de ownership:
 
@@ -324,14 +324,14 @@ Dos decisiones de desacoplamiento importantes:
 
 ## Limitaciones Conocidas de la v1
 
-### 1. Materialización final limitada por escenario RL
-`RL_Only` no devuelve todavía un circuito final reconstruido. `MO+RL` sí lo hace cuando el episodio RL completa el routing.
+### 1. Materialización final dependiente de episodios completos
+`RL_Only` y `MO+RL` devuelven un circuito final reconstruido cuando el episodio RL completa el routing.
 
 Consecuencia:
 
-- `Baseline`, `MO_Only` y `MO+RL` pueden compararse mediante métricas Qiskit cuando `MO+RL` completa el routing.
-- `RL_Only` sigue siendo un escenario de resumen de episodio.
-- Si `MO+RL` no completa el routing, devuelve un resultado controlado sin métricas finales de transpilación.
+- `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` pueden compararse mediante métricas Qiskit cuando los dos escenarios RL completan el routing.
+- `RL_Only` usa el layout inicial elegido por Qiskit para el Baseline `qiskit_level_1` y produce métricas post-routing cuando completa el episodio RL.
+- Si `RL_Only` o `MO+RL` no completan el routing, devuelven un resultado controlado sin métricas finales de transpilación.
 
 ### 2. Alcance limitado a `routing`
 La v1 no orquesta todavía `synthesis`.
