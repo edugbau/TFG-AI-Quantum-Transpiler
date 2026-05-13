@@ -21,6 +21,7 @@ from src.integration.scenarios import (
     run_baseline_scenario as _run_baseline_scenario,
     run_mo_only_scenario as _run_mo_only_scenario,
     run_mo_rl_scenario as _run_mo_rl_scenario,
+    run_rl_only_scenario as _run_rl_only_scenario,
 )
 
 
@@ -41,6 +42,7 @@ def _build_scenario_request(
     scenario_name: str,
     effective_mo_settings=None,
     rl_model_path: str | None = None,
+    initial_layout: list[int] | None = None,
 ) -> ScenarioRequest:
     if scenario_name == "Baseline":
         return ScenarioRequest(
@@ -54,6 +56,22 @@ def _build_scenario_request(
             mo_population_size=30,
             mo_n_generations=50,
             mo_objective_index=0,
+            rl_model_path=rl_model_path,
+        )
+
+    if scenario_name == "RL_Only":
+        return ScenarioRequest(
+            scenario_name=scenario_name,
+            circuit_name=_case_library_name(campaign_case),
+            num_qubits=campaign_case.num_qubits,
+            backend_name=campaign_case.backend_name,
+            seed=campaign.config.seed,
+            layout_policy=LayoutSelectionPolicy.COMPROMISE,
+            mo_use_quick=True,
+            mo_population_size=30,
+            mo_n_generations=50,
+            mo_objective_index=0,
+            initial_layout=initial_layout,
             rl_model_path=rl_model_path,
         )
 
@@ -99,6 +117,37 @@ def _build_case_output_dir(
 ) -> Path:
     case_dir_name = case_dir_names[campaign_case.case_id]
     return Path(output_root) / campaign.campaign_id / "cases" / case_dir_name
+
+
+def _extract_qiskit_initial_layout_from_baseline(baseline_result, *, num_qubits: int) -> list[int]:
+    candidates = []
+    artifact = baseline_result.transpilation_artifact or {}
+    if isinstance(artifact, dict):
+        transpilation = artifact.get("transpilation")
+        if isinstance(transpilation, dict):
+            candidates.extend(
+                [
+                    transpilation.get("qiskit_initial_layout"),
+                    transpilation.get("final_layout"),
+                ]
+            )
+    metrics = baseline_result.transpilation_metrics or {}
+    if isinstance(metrics, dict):
+        candidates.append(metrics.get("qiskit_initial_layout"))
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        layout = [int(entry) for entry in candidate]
+        if len(layout) != num_qubits:
+            raise ValueError("Baseline qiskit_initial_layout length must match num_qubits")
+        if any(entry < 0 for entry in layout):
+            raise ValueError("Baseline qiskit_initial_layout cannot contain negative entries")
+        if len(set(layout)) != len(layout):
+            raise ValueError("Baseline qiskit_initial_layout contains duplicated physical qubits")
+        return layout
+
+    return list(range(num_qubits))
 
 
 def _default_load_case_circuit(campaign: Campaign, campaign_case: CampaignCase):
@@ -198,6 +247,7 @@ def run_campaign(
     run_baseline: Callable[..., object] = _run_baseline_scenario,
     run_mo_only: Callable[..., object] = _run_mo_only_scenario,
     train_case_fn: Callable[..., object] | None = None,
+    run_rl_only: Callable[..., object] = _run_rl_only_scenario,
     run_mo_rl: Callable[..., object] = _run_mo_rl_scenario,
     resolve_backend_bundle: Callable[[str], object] = _resolve_backend_bundle,
     write_outputs: Callable[..., object] = write_campaign_outputs,
@@ -266,6 +316,53 @@ def run_campaign(
                 )
                 continue
 
+            qiskit_initial_layout = _extract_qiskit_initial_layout_from_baseline(
+                case_report.baseline_result,
+                num_qubits=campaign_case.num_qubits,
+            )
+            backend_bundle = resolve_backend_bundle(campaign_case.backend_name)
+            qiskit_routing_subgraph = build_path_expanded_subgraph(
+                circuit=circuit,
+                selected_layout=qiskit_initial_layout,
+                coupling_edges=backend_bundle.coupling_edges,
+            )
+            qiskit_coupling_edges_for_training = list(qiskit_routing_subgraph.coupling_edges)
+            qiskit_coupling_edges_for_rl_only = list(qiskit_routing_subgraph.coupling_edges)
+            case_report.rl_only_training_result = train_case_fn(
+                campaign_case=campaign_case,
+                campaign_config=campaign.config,
+                target_circuit=circuit,
+                coupling_map=qiskit_coupling_edges_for_training,
+                case_output_dir=case_output_dir / "rl_only",
+                initial_layout=list(qiskit_initial_layout),
+            )
+
+            if (
+                case_report.rl_only_training_result.status != "completed"
+                or case_report.rl_only_training_result.selected_artifact_path is None
+            ):
+                case_report.status = "incomplete"
+                case_report.incidents.append("RL training failed before RL_Only evaluation.")
+            else:
+                rl_only_request = _build_scenario_request(
+                    campaign=campaign,
+                    campaign_case=campaign_case,
+                    scenario_name="RL_Only",
+                    initial_layout=list(qiskit_initial_layout),
+                    rl_model_path=str(case_report.rl_only_training_result.selected_artifact_path),
+                )
+                case_report.rl_only_result = _invoke_scenario_runner(
+                    run_rl_only,
+                    rl_only_request,
+                    circuit=circuit,
+                    injected_layout=list(qiskit_initial_layout),
+                    injected_coupling_edges=qiskit_coupling_edges_for_rl_only,
+                    injected_routing_graph=qiskit_routing_subgraph,
+                )
+                if not case_report.rl_only_result.success:
+                    case_report.status = "incomplete"
+                    case_report.incidents.extend(case_report.rl_only_result.errors)
+
             case_report.mo_only_result = _invoke_scenario_runner(run_mo_only, mo_only_request, circuit=circuit)
             if not case_report.mo_only_result.success:
                 case_report.status = "failed"
@@ -302,7 +399,6 @@ def run_campaign(
 
             selected_layout_for_training = list(selected_layout)
             selected_layout_for_mo_rl = list(selected_layout)
-            backend_bundle = resolve_backend_bundle(campaign_case.backend_name)
             routing_subgraph = build_path_expanded_subgraph(
                 circuit=circuit,
                 selected_layout=selected_layout,
@@ -338,9 +434,9 @@ def run_campaign(
                     injected_coupling_edges=coupling_edges_for_mo_rl,
                     injected_routing_graph=routing_subgraph,
                 )
-                if case_report.mo_rl_result.success:
+                if case_report.mo_rl_result.success and case_report.status != "incomplete":
                     case_report.status = "completed"
-                else:
+                elif not case_report.mo_rl_result.success:
                     case_report.status = "incomplete"
                     case_report.incidents.extend(case_report.mo_rl_result.errors)
 

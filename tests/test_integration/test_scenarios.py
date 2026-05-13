@@ -64,6 +64,20 @@ def _make_transpilation_result(**overrides):
     )
 
 
+def _patch_successful_post_routing(monkeypatch, scenarios, final_layout=None) -> None:
+    resolved_final_layout = list(final_layout or [0, 1, 2])
+    monkeypatch.setattr(
+        scenarios,
+        "build_routed_circuit",
+        lambda **kwargs: ("routed-circuit", resolved_final_layout),
+    )
+    monkeypatch.setattr(
+        scenarios.qiskit_interface,
+        "transpile_post_routing",
+        lambda *args, **kwargs: _make_transpilation_result(),
+    )
+
+
 def _write_legacy_sb3_model(tmp_path, model_name: str, *, policy_module: str) -> None:
     with ZipFile(tmp_path / model_name, "w") as archive:
         archive.writestr(
@@ -639,17 +653,22 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
         "evaluate_routing_episode",
         lambda **kwargs: eval_calls.append(kwargs) or summary,
     )
+    _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
         _make_request("RL_Only", rl_model_path="models/policy.zip")
     )
 
     assert result.success is True
-    assert result.selected_layout is None
-    assert result.transpilation_metrics is None
+    assert result.selected_layout == [0, 1, 2]
+    assert result.transpilation_metrics == {
+        "backend_name": "fake_backend",
+        "trans_depth": 12,
+        "trans_two_qubit_gates": 4,
+    }
     assert result.routing_summary is summary
     assert result.notes == [
-        "RL outputs are episode summaries, not final circuits.",
+        "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
         "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
     assert eval_calls == [
@@ -658,7 +677,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
             "coupling_edges": [(0, 1), (1, 2)],
             "agent": "agent-object",
             "seed": 17,
-            "initial_layout": None,
+            "initial_layout": [0, 1, 2],
             "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
@@ -723,6 +742,7 @@ def test_run_rl_only_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None
         "src.rl_module",
         SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
     )
+    _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
         _make_request("RL_Only", rl_model_path=str(model_path))
@@ -733,7 +753,9 @@ def test_run_rl_only_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
     assert eval_calls[0]["masked"] is False
-    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+    assert result.notes == [
+        "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
+    ]
 
 
 def test_run_rl_only_scenario_forwards_masked_contract_fields(monkeypatch, tmp_path) -> None:
@@ -793,6 +815,7 @@ def test_run_rl_only_scenario_forwards_masked_contract_fields(monkeypatch, tmp_p
         "src.rl_module",
         SimpleNamespace(QuantumRLAgent=StubQuantumRLAgent),
     )
+    _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
         _make_request("RL_Only", rl_model_path=str(model_path))
@@ -803,7 +826,9 @@ def test_run_rl_only_scenario_forwards_masked_contract_fields(monkeypatch, tmp_p
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
     assert eval_calls[0]["masked"] is True
-    assert result.notes == ["RL outputs are episode summaries, not final circuits."]
+    assert result.notes == [
+        "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
+    ]
 
 
 def test_run_rl_only_scenario_adds_fallback_note_when_metadata_is_missing(monkeypatch, tmp_path) -> None:
@@ -842,13 +867,14 @@ def test_run_rl_only_scenario_adds_fallback_note_when_metadata_is_missing(monkey
             gates_executed_count=2,
         ),
     )
+    _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
         _make_request("RL_Only", rl_model_path=str(model_path))
     )
 
     assert result.notes == [
-        "RL outputs are episode summaries, not final circuits.",
+        "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
         "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
 
@@ -894,6 +920,7 @@ def test_run_rl_only_scenario_recovers_dqn_algorithm_when_metadata_is_missing(mo
             gates_executed_count=2,
         ),
     )
+    _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
         _make_request("RL_Only", rl_model_path=str(model_path))
@@ -901,7 +928,7 @@ def test_run_rl_only_scenario_recovers_dqn_algorithm_when_metadata_is_missing(mo
 
     assert load_calls == ["DQN"]
     assert result.notes == [
-        "RL outputs are episode summaries, not final circuits.",
+        "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
         "Legacy RL evaluation defaults were used because no run metadata sidecar was found.",
     ]
 

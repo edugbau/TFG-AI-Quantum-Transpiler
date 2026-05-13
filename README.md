@@ -22,7 +22,7 @@ Los modelos de routing guardados por `rl_module` pueden incluir un sidecar `run_
 
 `MaskablePPO` pasa a ser el estándar para checkpoints nuevos de masked routing. Los checkpoints legacy de `PPO` y `DQN` siguen soportados mediante contratos legacy/default o flujos unmasked, por lo que ambos regímenes coexisten durante la transición.
 
-En el estado actual de integration v1, `RL_Only` sigue devolviendo `episode summaries`, not final circuits. `MO+RL`, en cambio, ya reconstruye el circuito ruteado desde la traza RL: usa `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas y `swap_trace` para materializar los swaps físicos, con `total_swaps == len(swap_trace)` como contador de swaps realmente materializados, y después ejecuta las fases post-routing de Qiskit cuando el episodio RL completa el routing; si no completa, devuelve un resultado controlado sin artefacto de transpilación. QASM input is available for `Baseline` and `MO_Only` through `qasm_file`, mientras que los escenarios basados en RL todavía no exponen una entrada QASM equivalente en su superficie pública. Para comparar layouts dispersos en los artefactos/resultados de Qiskit, `trans_num_qubits`/`trans_width` siguen representando anchura física materializada, mientras que `trans_active_qubits` refleja los qubits físicamente activos del circuito transpìlado.
+En el estado actual de integration v1, `RL_Only` y `MO+RL` reconstruyen el circuito ruteado desde la traza RL: usan `executed_gate_trace` cuando está disponible para reproducir exactamente las puertas ejecutadas y `swap_trace` para materializar los swaps físicos, con `total_swaps == len(swap_trace)` como contador de swaps realmente materializados, y después ejecutan las fases post-routing de Qiskit cuando el episodio RL completa el routing; si no completa, devuelven un resultado controlado sin artefacto de transpilación. QASM input is available for `Baseline` and `MO_Only` through `qasm_file`, mientras que los escenarios basados en RL todavía no exponen una entrada QASM equivalente en su superficie pública. Para comparar layouts dispersos en los artefactos/resultados de Qiskit, `trans_num_qubits`/`trans_width` siguen representando anchura física materializada, mientras que `trans_active_qubits` refleja los qubits físicamente activos del circuito transpilado.
 
 ## Instalación
 
@@ -70,13 +70,13 @@ layout[i] = physical_qubit_for_logical_qubit_i
 
 ### Campaigns de Integración
 
-`src/integration/` ya no se limita a Scenarios unitarios. Ahora también soporta una **Train+Eval Campaign** reproducible compuesta por uno o más **Campaign Cases**. Cada Campaign Case corresponde a una combinación `circuit x backend` y ejecuta la comparación canónica `Baseline`, `MO_Only` y `MO+RL`.
+`src/integration/` ya no se limita a Scenarios unitarios. Ahora también soporta una **Train+Eval Campaign** reproducible compuesta por uno o más **Campaign Cases**. Cada Campaign Case corresponde a una combinación `circuit x backend` y ejecuta la comparación canónica `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
 
 Dentro de esa comparación guiada, `MO_Only` es el Scenario que selecciona el layout. El training de Campaign para `MO+RL` arranca desde ese layout exacto y la evaluación posterior de `MO+RL` reutiliza ese mismo layout junto con el Training Artifact producido para el mismo Campaign Case.
 
 Campaign `MO+RL` uses the exact `MO_Only` layout for the same Campaign Case. Campaign `MO+RL` derives a path-expanded routing subgraph from the interacting logical pairs in the circuit sobre el coupling map real del backend, entrena y evalúa RL sobre ese grafo derivado y, si la derivación falla, cae al coupling map completo del backend y registra ese fallback en la salida del caso. La comparación final post-routing de Qiskit sigue apuntando al backend real.
 
-`RL_Only` sigue existiendo como Scenario, pero queda fuera del flujo guiado principal de Campaign.
+`RL_Only` forma parte del flujo guiado principal de Campaign: usa el layout inicial resuelto por Qiskit en `qiskit_level_1`, entrena un artifact separado y produce métricas post-routing comparables.
 
 La guided CLI ofrece dos caminos:
 
@@ -108,8 +108,8 @@ Los límites de ownership se mantienen explícitos:
 - En Campaign `MO+RL`, el grafo de routing por defecto se deriva como un subgrafo path-expanded desde el layout de `MO_Only` y los pares lógicos que interactúan, con fallback explícito al backend completo si la derivación falla.
 - `src/rl_module/` soporta routing y un primer modo de `synthesis` entrenable restringido a circuitos Clifford.
 - `mo_module` y `rl_module` deben permanecer testeables de forma independiente.
-- La comparación canónica de Campaign usa `Baseline`, `MO_Only` y `MO+RL`; `RL_Only` queda fuera del flujo guiado principal.
-- `RL_Only` devuelve `episode summaries`, no circuitos finales.
+- La comparación canónica de Campaign usa `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`; `RL_Only` forma parte del flujo guiado principal con training separado desde el layout inicial elegido por Qiskit.
+- `RL_Only` reconstruye el circuito ruteado y devuelve métricas post-routing cuando el episodio completa.
 - `MO+RL` reconstruye el circuito ruteado desde la traza RL (`executed_gate_trace` + `swap_trace`) y ejecuta post-routing de Qiskit cuando el episodio completa el routing; si no, devuelve un resultado controlado sin transpilación final.
 - En `RoutingEpisodeSummary`, `total_swaps == len(swap_trace)` y representa swaps realmente materializados/reproducibles.
 - En métricas Qiskit, `trans_num_qubits`/`trans_width` siguen siendo anchura física materializada; usar `trans_active_qubits` para comparar ocupación física real cuando el layout es disperso.

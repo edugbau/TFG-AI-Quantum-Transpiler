@@ -114,9 +114,13 @@ def test_aggregate_summary_uses_only_comparable_completed_cases() -> None:
                 mo_only_result=_build_scenario_result(
                     "MO_Only", comparable_case_a, metrics=_build_metrics(90, 28, 40.0, 1.5)
                 ),
+                rl_only_result=_build_scenario_result(
+                    "RL_Only", comparable_case_a, metrics=_build_metrics(85, 26, 38.0, 1.8)
+                ),
                 mo_rl_result=_build_scenario_result(
                     "MO+RL", comparable_case_a, metrics=_build_metrics(80, 24, 36.0, 2.0)
                 ),
+                rl_only_training_result=_build_training_result(comparable_case_a),
                 training_result=_build_training_result(comparable_case_a),
             ),
             CampaignCaseReport(
@@ -128,9 +132,13 @@ def test_aggregate_summary_uses_only_comparable_completed_cases() -> None:
                 mo_only_result=_build_scenario_result(
                     "MO_Only", comparable_case_b, metrics=_build_metrics(180, 45, 68.0, 4.0)
                 ),
+                rl_only_result=_build_scenario_result(
+                    "RL_Only", comparable_case_b, metrics=_build_metrics(165, 42, 63.0, 4.5)
+                ),
                 mo_rl_result=_build_scenario_result(
                     "MO+RL", comparable_case_b, metrics=_build_metrics(150, 40, 60.0, 5.0)
                 ),
+                rl_only_training_result=_build_training_result(comparable_case_b),
                 training_result=_build_training_result(comparable_case_b),
             ),
             CampaignCaseReport(
@@ -162,6 +170,7 @@ def test_aggregate_summary_uses_only_comparable_completed_cases() -> None:
     assert report.summary.cancelled_cases == 0
     assert report.aggregate_metrics["trans_depth"].baseline_mean == 150.0
     assert report.aggregate_metrics["trans_depth"].mo_only_mean == 135.0
+    assert report.aggregate_metrics["trans_depth"].rl_only_mean == 125.0
     assert report.aggregate_metrics["trans_depth"].mo_rl_mean == 115.0
     assert report.aggregate_metrics["trans_two_qubit_gates"].baseline_mean == 40.0
     assert report.aggregate_metrics["trans_cnot_equivalent"].mo_rl_mean == 48.0
@@ -280,9 +289,13 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
                 mo_only_result=_build_scenario_result(
                     "MO_Only", completed_case, metrics=_build_metrics(90, 28, 40.0, 1.5)
                 ),
+                rl_only_result=_build_scenario_result(
+                    "RL_Only", completed_case, metrics=_build_metrics(85, 26, 38.0, 1.8)
+                ),
                 mo_rl_result=_build_scenario_result(
                     "MO+RL", completed_case, metrics=_build_metrics(80, 24, 36.0, 2.0)
                 ),
+                rl_only_training_result=_build_training_result(completed_case),
                 training_result=_build_training_result(completed_case),
                 incidents=["Used best_model.zip for MO+RL evaluation."],
             ),
@@ -312,7 +325,7 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
     assert "Selected Backends" in markdown
     assert "fake_torino" in markdown
     assert "Aggregate Comparison" in markdown
-    assert "| Metric | Baseline Mean | MO_Only Mean | MO+RL Mean |" in markdown
+    assert "| Metric | Baseline Mean | MO_Only Mean | RL_Only Mean | MO+RL Mean |" in markdown
     assert "Per-Case Detail" in markdown
     assert "## Case `ghz_3__fake_torino`" in markdown
     assert "- Effective Config: rl_algorithm=MaskablePPO" in markdown
@@ -490,7 +503,7 @@ def test_completed_non_comparable_cases_are_reported_without_zero_aggregate_valu
     assert report.summary.cancelled_cases == 0
     assert report.summary.case_results[0].status == "incomplete"
     assert report.incidents == [
-        "ghz_3__fake_torino: completed without a comparable metric bundle across Baseline, MO_Only, and MO+RL."
+        "ghz_3__fake_torino: completed without a comparable metric bundle across Baseline, MO_Only, RL_Only, and MO+RL."
     ]
     assert "| trans_depth | n/a | n/a | n/a |" in markdown
     assert "completed without a comparable metric bundle" in markdown

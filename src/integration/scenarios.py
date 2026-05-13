@@ -9,7 +9,10 @@ from src.integration.rl_model_contract import resolve_routing_model_contract
 from src.integration.routing_evaluator import build_routed_circuit, evaluate_routing_episode
 
 
-_RL_NOTE = "RL outputs are episode summaries, not final circuits."
+_RL_NOTE = "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
+_RL_INCOMPLETE_NOTE = (
+    "RL_Only routing episode was incomplete; routed-circuit reconstruction and post-routing transpilation were skipped."
+)
 _MO_RL_NOTE = "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
 _MO_RL_INCOMPLETE_NOTE = (
     "MO+RL routing episode was incomplete; routed-circuit reconstruction and post-routing transpilation were skipped."
@@ -169,6 +172,13 @@ def _build_incomplete_mo_rl_notes(metadata_source: str) -> list[str]:
     return notes
 
 
+def _build_incomplete_rl_notes(metadata_source: str) -> list[str]:
+    notes = [_RL_INCOMPLETE_NOTE]
+    if metadata_source == "defaults":
+        notes.append(_RL_METADATA_FALLBACK_NOTE)
+    return notes
+
+
 def _build_routing_graph_note(routing_graph) -> str:
     note_parts = [
         f"Routing graph: {routing_graph.mode} with {routing_graph.node_count} nodes",
@@ -238,6 +248,86 @@ def _validate_selected_layout(layout: list[int], num_qubits: int, backend) -> li
     if backend_num_qubits is not None and any(entry >= backend_num_qubits for entry in layout):
         raise ValueError("selected layout contains physical qubits outside the backend range")
     return [int(entry) for entry in layout]
+
+
+def _append_routing_graph_note(notes: list[str], routing_graph) -> list[str]:
+    if routing_graph is not None:
+        notes.append(_build_routing_graph_note(routing_graph))
+    return notes
+
+
+def _run_rl_reconstruction_flow(
+    *,
+    request: ScenarioRequest,
+    circuit,
+    backend_bundle,
+    selected_layout: list[int],
+    coupling_edges: list[tuple[int, int]],
+    contract,
+    agent,
+    complete_notes: list[str],
+    incomplete_notes: list[str],
+    incomplete_error: str,
+    injected_routing_graph=None,
+) -> ScenarioResult:
+    routing_summary = evaluate_routing_episode(
+        circuit=circuit,
+        coupling_edges=coupling_edges,
+        agent=agent,
+        seed=request.seed,
+        initial_layout=selected_layout,
+        frontier_mode=contract.frontier_mode,
+        max_steps=contract.max_steps,
+        lookahead_window=contract.lookahead_window,
+        masked=contract.masked,
+    )
+    if not routing_summary.completed or routing_summary.truncated:
+        return ScenarioResult(
+            scenario_name=request.scenario_name,
+            circuit_name=_get_result_circuit_name(request, circuit),
+            backend_name=request.backend_name,
+            seed=request.seed,
+            success=False,
+            selected_layout=selected_layout,
+            transpilation_metrics=None,
+            transpilation_artifact=None,
+            routing_summary=routing_summary,
+            errors=[incomplete_error],
+            notes=_append_routing_graph_note(incomplete_notes, injected_routing_graph),
+        )
+
+    selected_layout = _validate_routing_summary_initial_layout(routing_summary, selected_layout)
+    routed_circuit, final_layout = build_routed_circuit(
+        circuit=circuit,
+        coupling_edges=coupling_edges,
+        initial_layout=selected_layout,
+        swap_trace=routing_summary.swap_trace,
+        frontier_mode=contract.frontier_mode,
+        executed_gate_trace=routing_summary.executed_gate_trace,
+    )
+    final_layout = _validate_reconstructed_final_layout(routing_summary, final_layout)
+    transpilation_result = qiskit_interface.transpile_post_routing(
+        routed_circuit,
+        backend=backend_bundle.backend,
+        backend_name=backend_bundle.backend_name,
+        optimization_level=1,
+        seed=request.seed,
+        reference_circuit=circuit,
+        initial_layout=selected_layout,
+        final_layout=final_layout,
+    )
+    return ScenarioResult(
+        scenario_name=request.scenario_name,
+        circuit_name=_get_result_circuit_name(request, circuit),
+        backend_name=request.backend_name,
+        seed=request.seed,
+        success=True,
+        selected_layout=selected_layout,
+        transpilation_metrics=transpilation_result.to_dict(),
+        transpilation_artifact=transpilation_result.to_artifact_dict(),
+        routing_summary=routing_summary,
+        notes=_append_routing_graph_note(complete_notes, injected_routing_graph),
+    )
 
 
 def _run_mo(request: ScenarioRequest, circuit, backend_bundle):
@@ -317,37 +407,55 @@ def run_mo_only_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioR
     )
 
 
-def run_rl_only_scenario(request: ScenarioRequest) -> ScenarioResult:
+def run_rl_only_scenario(
+    request: ScenarioRequest,
+    *,
+    circuit=None,
+    injected_layout: list[int] | None = None,
+    injected_coupling_edges: list[tuple[int, int]] | None = None,
+    injected_routing_graph=None,
+) -> ScenarioResult:
     _require_scenario(request, "RL_Only")
     if request.rl_model_path is None:
         raise ValueError("rl_model_path is required for RL scenarios")
-    circuit = _load_circuit(request)
-    _validate_request_initial_layout(request, circuit)
+    if circuit is None:
+        circuit = _load_circuit(request)
     backend_bundle = resolve_backend_bundle(request.backend_name)
+    if injected_layout is not None:
+        selected_layout = _validate_selected_layout(
+            injected_layout,
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
+    elif request.initial_layout is not None:
+        selected_layout = _validate_selected_layout(
+            request.initial_layout,
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
+    else:
+        selected_layout = _validate_selected_layout(
+            list(range(_get_request_num_qubits(request, circuit))),
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
     contract = resolve_routing_model_contract(request.rl_model_path)
     agent = _load_agent(request, algorithm=contract.algorithm)
-    routing_summary = evaluate_routing_episode(
-        circuit=circuit,
-        coupling_edges=backend_bundle.coupling_edges,
-        agent=agent,
-        seed=request.seed,
-        initial_layout=request.initial_layout,
-        frontier_mode=contract.frontier_mode,
-        max_steps=contract.max_steps,
-        lookahead_window=contract.lookahead_window,
-        masked=contract.masked,
+    coupling_edges = (
+        list(injected_coupling_edges) if injected_coupling_edges is not None else backend_bundle.coupling_edges
     )
-    return ScenarioResult(
-        scenario_name=request.scenario_name,
-        circuit_name=_get_result_circuit_name(request, circuit),
-        backend_name=request.backend_name,
-        seed=request.seed,
-        success=True,
-        selected_layout=None,
-        transpilation_metrics=None,
-        transpilation_artifact=None,
-        routing_summary=routing_summary,
-        notes=_build_rl_notes(contract.metadata_source),
+    return _run_rl_reconstruction_flow(
+        request=request,
+        circuit=circuit,
+        backend_bundle=backend_bundle,
+        selected_layout=selected_layout,
+        coupling_edges=coupling_edges,
+        contract=contract,
+        agent=agent,
+        complete_notes=_build_rl_notes(contract.metadata_source),
+        incomplete_notes=_build_incomplete_rl_notes(contract.metadata_source),
+        incomplete_error="RL_Only routing episode did not complete; skipping routed-circuit reconstruction.",
+        injected_routing_graph=injected_routing_graph,
     )
 
 
@@ -387,67 +495,16 @@ def run_mo_rl_scenario(
     coupling_edges = (
         list(injected_coupling_edges) if injected_coupling_edges is not None else backend_bundle.coupling_edges
     )
-    routing_summary = evaluate_routing_episode(
+    return _run_rl_reconstruction_flow(
+        request=request,
         circuit=circuit,
-        coupling_edges=coupling_edges,
-        agent=agent,
-        seed=request.seed,
-        initial_layout=selected_layout,
-        frontier_mode=contract.frontier_mode,
-        max_steps=contract.max_steps,
-        lookahead_window=contract.lookahead_window,
-        masked=contract.masked,
-    )
-    notes = _build_incomplete_mo_rl_notes(contract.metadata_source)
-    if injected_routing_graph is not None:
-        notes.append(_build_routing_graph_note(injected_routing_graph))
-    if not routing_summary.completed or routing_summary.truncated:
-        return ScenarioResult(
-            scenario_name=request.scenario_name,
-            circuit_name=_get_result_circuit_name(request, circuit),
-            backend_name=request.backend_name,
-            seed=request.seed,
-            success=False,
-            selected_layout=selected_layout,
-            transpilation_metrics=None,
-            transpilation_artifact=None,
-            routing_summary=routing_summary,
-            errors=["MO+RL routing episode did not complete; skipping routed-circuit reconstruction."],
-            notes=notes,
-        )
-    selected_layout = _validate_routing_summary_initial_layout(routing_summary, selected_layout)
-    routed_circuit, final_layout = build_routed_circuit(
-        circuit=circuit,
-        coupling_edges=coupling_edges,
-        initial_layout=selected_layout,
-        swap_trace=routing_summary.swap_trace,
-        frontier_mode=contract.frontier_mode,
-        executed_gate_trace=routing_summary.executed_gate_trace,
-    )
-    final_layout = _validate_reconstructed_final_layout(routing_summary, final_layout)
-    transpilation_result = qiskit_interface.transpile_post_routing(
-        routed_circuit,
-        backend=backend_bundle.backend,
-        backend_name=backend_bundle.backend_name,
-        optimization_level=1,
-        seed=request.seed,
-        reference_circuit=circuit,
-        initial_layout=selected_layout,
-        final_layout=final_layout,
-    )
-    return ScenarioResult(
-        scenario_name=request.scenario_name,
-        circuit_name=_get_result_circuit_name(request, circuit),
-        backend_name=request.backend_name,
-        seed=request.seed,
-        success=True,
+        backend_bundle=backend_bundle,
         selected_layout=selected_layout,
-        transpilation_metrics=transpilation_result.to_dict(),
-        transpilation_artifact=transpilation_result.to_artifact_dict(),
-        routing_summary=routing_summary,
-        notes=(
-            [*_build_mo_rl_notes(contract.metadata_source), _build_routing_graph_note(injected_routing_graph)]
-            if injected_routing_graph is not None
-            else _build_mo_rl_notes(contract.metadata_source)
-        ),
+        coupling_edges=coupling_edges,
+        contract=contract,
+        agent=agent,
+        complete_notes=_build_mo_rl_notes(contract.metadata_source),
+        incomplete_notes=_build_incomplete_mo_rl_notes(contract.metadata_source),
+        incomplete_error="MO+RL routing episode did not complete; skipping routed-circuit reconstruction.",
+        injected_routing_graph=injected_routing_graph,
     )

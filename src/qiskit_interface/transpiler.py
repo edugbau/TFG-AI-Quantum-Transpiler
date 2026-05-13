@@ -146,6 +146,7 @@ class TranspilationResult:
     optimization_level: int = 1
     backend_name: str = ""
     initial_layout: Optional[list[int]] = None
+    qiskit_initial_layout: Optional[list[int]] = None
     final_layout: Optional[list[int]] = None
     elapsed_time_s: float = 0.0
     seed: int = DEFAULT_SEED
@@ -243,6 +244,8 @@ class TranspilationResult:
                 result[f"trans_{key}"] = val
         if self.initial_layout is not None:
             result["initial_layout"] = self.initial_layout
+        if self.qiskit_initial_layout is not None:
+            result["qiskit_initial_layout"] = self.qiskit_initial_layout
         return result
 
     def to_artifact_dict(self) -> dict[str, object]:
@@ -274,6 +277,7 @@ class TranspilationResult:
                 "elapsed_time_s": self.elapsed_time_s,
                 "baseline_name": self.baseline_name,
                 "initial_layout": self.initial_layout,
+                "qiskit_initial_layout": self.qiskit_initial_layout,
                 "final_layout": self.final_layout,
             },
             "metrics": {
@@ -377,6 +381,24 @@ def transpile_circuit(
     # --- Métricas del circuito transpilado ---
     transpiled_metrics = extract_metrics(transpiled)
 
+    qiskit_initial_layout = None
+    try:
+        if hasattr(transpiled, "layout") and transpiled.layout is not None:
+            layout_obj = transpiled.layout
+            if callable(getattr(layout_obj, "initial_index_layout", None)):
+                qiskit_initial_layout = [
+                    int(entry)
+                    for entry in layout_obj.initial_index_layout(filter_ancillas=True)[: circuit.num_qubits]
+                ]
+            elif hasattr(layout_obj, "initial_layout") and layout_obj.initial_layout is not None:
+                il = layout_obj.initial_layout
+                qiskit_initial_layout = [
+                    int(il[circuit.qubits[i]])
+                    for i in range(circuit.num_qubits)
+                ]
+    except Exception as e:
+        logger.debug("No se pudo extraer el layout inicial resuelto por Qiskit: %s", e)
+
     # --- Intentar extraer el layout final aplicado ---
     final_layout = None
     try:
@@ -408,6 +430,7 @@ def transpile_circuit(
         optimization_level=optimization_level,
         backend_name=actual_backend_name,
         initial_layout=initial_layout,
+        qiskit_initial_layout=qiskit_initial_layout,
         final_layout=final_layout,
         elapsed_time_s=elapsed,
         seed=seed,
