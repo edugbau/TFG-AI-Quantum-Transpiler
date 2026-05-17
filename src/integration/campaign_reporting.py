@@ -209,10 +209,24 @@ def _render_config(report: CampaignReport) -> list[str]:
         f"RL Frontier Mode: `{config.rl_frontier_mode}`",
         f"RL Lookahead Window: `{config.rl_lookahead_window}`",
         f"RL Max Steps: `{config.rl_max_steps}`",
+        f"RL Learning Rate: `{config.rl_learning_rate}`",
+        f"RL Clip Range: `{config.rl_clip_range}`",
+        f"RL Target KL: `{config.rl_target_kl}`",
+        f"RL Eval Episodes: `{config.rl_n_eval_episodes}`",
         f"Seed: `{config.seed}`",
+        f"Topology Source: `{config.topology_source}`",
         f"MO Effort Mode: `{config.mo_effort_mode}`",
         f"Layout Policy: `{config.layout_policy.value}`",
     ]
+    if config.synthetic_topology is not None:
+        lines.extend(
+            [
+                f"Synthetic Topology: `{config.synthetic_topology.backend_name}`",
+                f"Synthetic Shape: `{config.synthetic_topology.shape}`",
+                f"Synthetic Physical Qubits: `{config.synthetic_topology.physical_qubits}`",
+                f"Synthetic Basis Gates: `{', '.join(config.synthetic_topology.basis_gates)}`",
+            ]
+        )
     if config.mo_effort_mode == "auto":
         for qubit_count, settings in build_auto_mo_effort_preview(spec.num_qubits for spec in config.circuit_specs):
             lines.append(
@@ -236,8 +250,12 @@ def _render_selected_inputs(report: CampaignReport) -> list[str]:
     lines = ["", "## Selected Circuits"]
     lines.extend(f"- {spec.family} ({spec.num_qubits} qubits)" for spec in report.campaign_config.circuit_specs)
     lines.append("")
-    lines.append("## Selected Backends")
-    lines.extend(f"- {backend_name}" for backend_name in report.campaign_config.backend_names)
+    if report.campaign_config.synthetic_topology is None:
+        lines.append("## Selected Backends")
+        lines.extend(f"- {backend_name}" for backend_name in report.campaign_config.backend_names)
+    else:
+        lines.append("## Selected Synthetic Topology")
+        lines.append(f"- {report.campaign_config.synthetic_topology.backend_name}")
     return lines
 
 
@@ -288,6 +306,10 @@ def _render_effective_config(training_result: TrainingBridgeResult | None) -> st
         f"rl_frontier_mode={config.frontier_mode}, "
         f"rl_lookahead_window={config.lookahead_window}, "
         f"rl_max_steps={config.max_steps}, "
+        f"rl_learning_rate={config.learning_rate}, "
+        f"rl_clip_range={config.clip_range}, "
+        f"rl_target_kl={config.target_kl}, "
+        f"rl_n_eval_episodes={config.n_eval_episodes}, "
         f"seed={config.seed}"
     )
 
@@ -318,6 +340,10 @@ def _render_training_summary(training_result: TrainingBridgeResult | None, *, la
         f"- Frontier Mode: `{config.frontier_mode}`",
         f"- Lookahead Window: `{config.lookahead_window}`",
         f"- Max Steps: `{config.max_steps}`",
+        f"- Learning Rate: `{config.learning_rate}`",
+        f"- Clip Range: `{config.clip_range}`",
+        f"- Target KL: `{config.target_kl}`",
+        f"- Eval Episodes: `{config.n_eval_episodes}`",
         f"- Seed: `{config.seed}`",
         f"- Selected Artifact: `{artifact_path}`",
     ]

@@ -57,6 +57,7 @@ def _build_scenario_request(
             mo_n_generations=50,
             mo_objective_index=0,
             rl_model_path=rl_model_path,
+            synthetic_topology=campaign.config.synthetic_topology,
         )
 
     if scenario_name == "RL_Only":
@@ -73,6 +74,7 @@ def _build_scenario_request(
             mo_objective_index=0,
             initial_layout=initial_layout,
             rl_model_path=rl_model_path,
+            synthetic_topology=campaign.config.synthetic_topology,
         )
 
     if effective_mo_settings is None:
@@ -92,6 +94,7 @@ def _build_scenario_request(
         mo_n_generations=effective_mo_settings.mo_n_generations,
         mo_objective_index=mo_objective_index,
         rl_model_path=rl_model_path,
+        synthetic_topology=campaign.config.synthetic_topology,
     )
 
 
@@ -204,6 +207,12 @@ def _invoke_scenario_runner(run_scenario: Callable[..., object], request: Scenar
     if call_kwargs:
         return run_scenario(request, **call_kwargs)
     return run_scenario(request)
+
+
+def _resolve_case_backend_bundle(resolve_backend_bundle: Callable[..., object], campaign: Campaign, backend_name: str):
+    if campaign.config.synthetic_topology is not None and _runner_accepts_kwarg(resolve_backend_bundle, "synthetic_topology"):
+        return resolve_backend_bundle(backend_name, synthetic_topology=campaign.config.synthetic_topology)
+    return resolve_backend_bundle(backend_name)
 
 
 def _cancel_remaining_cases(case_reports: list[CampaignCaseReport], remaining_cases: list[CampaignCase]) -> None:
@@ -320,7 +329,7 @@ def run_campaign(
                 case_report.baseline_result,
                 num_qubits=campaign_case.num_qubits,
             )
-            backend_bundle = resolve_backend_bundle(campaign_case.backend_name)
+            backend_bundle = _resolve_case_backend_bundle(resolve_backend_bundle, campaign, campaign_case.backend_name)
             qiskit_routing_subgraph = build_path_expanded_subgraph(
                 circuit=circuit,
                 selected_layout=qiskit_initial_layout,

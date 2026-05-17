@@ -36,6 +36,10 @@ def test_build_default_campaign_config_uses_canonical_defaults() -> None:
     assert config.rl_frontier_mode == "dag"
     assert config.rl_lookahead_window == 10
     assert config.rl_max_steps == 200
+    assert config.rl_learning_rate == 1e-4
+    assert config.rl_clip_range == 0.1
+    assert config.rl_target_kl == 0.03
+    assert config.rl_n_eval_episodes == 5
     assert config.seed == 42
     assert config.mo_use_quick is True
     assert config.mo_population_size == 30
@@ -44,6 +48,8 @@ def test_build_default_campaign_config_uses_canonical_defaults() -> None:
     assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
     assert config.mo_objective_name is None
     assert config.mode == "default"
+    assert config.topology_source == "backend"
+    assert config.synthetic_topology is None
 
 
 def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode() -> None:
@@ -54,6 +60,7 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
             "ghz,qft",
             "3,5",
             "advanced",
+            "backend",
             "fake_torino,fake_brisbane",
             "MaskablePPO",
             "7000",
@@ -98,6 +105,10 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
     assert captured["campaign"].config.rl_frontier_mode == "dag"
     assert captured["campaign"].config.rl_lookahead_window == 15
     assert captured["campaign"].config.rl_max_steps == 300
+    assert captured["campaign"].config.rl_learning_rate == 1e-4
+    assert captured["campaign"].config.rl_clip_range == 0.1
+    assert captured["campaign"].config.rl_target_kl == 0.03
+    assert captured["campaign"].config.rl_n_eval_episodes == 5
     assert captured["campaign"].config.seed == 123
     assert captured["campaign"].config.mo_effort_mode == "custom"
     assert captured["campaign"].config.mo_use_quick is False
@@ -119,6 +130,7 @@ def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prin
             "ghz,qft",
             "3,8",
             "advanced",
+            "backend",
             "fake_torino",
             "MaskablePPO",
             "5000",
@@ -163,6 +175,103 @@ def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prin
     assert "MO Generations:" not in rendered
 
 
+def test_run_interactive_campaign_cli_collects_synthetic_topology_in_advanced_mode() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz",
+            "3",
+            "advanced",
+            "synthetic",
+            "grid",
+            "2",
+            "2",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "42",
+            "auto",
+            "compromise",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured["campaign"] = campaign
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-synth-001",
+        output_root=Path("campaigns"),
+    )
+
+    rendered = "\n".join(outputs)
+    config = captured["campaign"].config
+
+    assert exit_code == 0
+    assert config.topology_source == "synthetic"
+    assert config.backend_names == ("synthetic_grid_2x2",)
+    assert config.synthetic_topology.shape == "grid"
+    assert config.synthetic_topology.physical_qubits == 4
+    assert config.synthetic_topology.basis_gates == ("id", "rz", "sx", "x", "cx")
+    assert "Choose backend" not in rendered
+    assert "Topology Source: synthetic" in rendered
+    assert "Synthetic Topology: synthetic_grid_2x2" in rendered
+    assert "Synthetic Basis Gates: id, rz, sx, x, cx" in rendered
+
+
+def test_run_interactive_campaign_cli_reprompts_when_synthetic_topology_is_too_small() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz",
+            "3",
+            "advanced",
+            "synthetic",
+            "line",
+            "2",
+            "line",
+            "3",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "42",
+            "auto",
+            "compromise",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured["campaign"] = campaign
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-synth-002",
+        output_root=Path("campaigns"),
+    )
+
+    rendered = "\n".join(outputs)
+
+    assert exit_code == 0
+    assert captured["campaign"].config.backend_names == ("synthetic_line_3q",)
+    assert "Requires at least 3 physical qubits, got 2" in rendered
+
+
 def test_run_interactive_campaign_cli_collects_best_on_objective_objective_name(monkeypatch) -> None:
     from src.integration import campaign_cli
 
@@ -172,6 +281,7 @@ def test_run_interactive_campaign_cli_collects_best_on_objective_objective_name(
             "ghz",
             "3",
             "advanced",
+            "backend",
             "fake_torino",
             "MaskablePPO",
             "5000",
@@ -241,6 +351,7 @@ def test_run_interactive_campaign_cli_reprompts_when_custom_mo_population_is_bel
             "ghz",
             "3",
             "advanced",
+            "backend",
             "fake_torino",
             "MaskablePPO",
             "5000",

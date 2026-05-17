@@ -9,6 +9,7 @@ from src.integration.campaign_reporting import (
     write_campaign_outputs,
 )
 from src.integration.contracts import LayoutSelectionPolicy, ScenarioResult
+from src.integration.synthetic_topology import SyntheticTopologySpec
 from src.integration.training_bridge import TrainingBridgeResult, TrainingConfigSummary
 
 
@@ -335,11 +336,63 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
     assert "Incidents" in markdown
     assert "RL training failed before MO+RL evaluation." in markdown
     assert "Final Campaign Status: `completed`" in markdown
+    assert "Topology Source: `backend`" in markdown
+    assert "RL Learning Rate: `0.0001`" in markdown
+    assert "RL Clip Range: `0.1`" in markdown
+    assert "RL Target KL: `0.03`" in markdown
+    assert "RL Eval Episodes: `5`" in markdown
+    assert "rl_learning_rate=0.0001" in markdown
+    assert "rl_n_eval_episodes=5" in markdown
     assert "MO Effort Mode: `custom`" in markdown
     assert "MO Quick: `True`" in markdown
     assert "MO Population Size: `30`" in markdown
     assert "MO Generations: `50`" in markdown
     assert "MO Auto Preview" not in markdown
+
+
+def test_summary_markdown_includes_synthetic_topology_configuration() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="grid", rows=2, cols=2)
+    config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        backend_names=[synthetic_topology.backend_name],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="dag",
+        rl_lookahead_window=12,
+        rl_max_steps=256,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mo_effort_mode="auto",
+        mode="advanced",
+        topology_source="synthetic",
+        synthetic_topology=synthetic_topology,
+    )
+    case = _build_case("ghz_3__synthetic_grid_2x2", "ghz", 3, synthetic_topology.backend_name)
+    report = build_campaign_report(
+        campaign_id="campaign-synthetic",
+        campaign_status="completed",
+        campaign_config=config,
+        case_reports=[
+            CampaignCaseReport(
+                case=case,
+                status="failed",
+                incidents=["synthetic smoke"],
+            )
+        ],
+    )
+
+    markdown = render_campaign_summary_markdown(report)
+
+    assert "Topology Source: `synthetic`" in markdown
+    assert "Synthetic Topology: `synthetic_grid_2x2`" in markdown
+    assert "Synthetic Shape: `grid`" in markdown
+    assert "Synthetic Physical Qubits: `4`" in markdown
+    assert "Synthetic Basis Gates: `id, rz, sx, x, cx`" in markdown
+    assert "Selected Synthetic Topology" in markdown
+    assert "Selected Backends" not in markdown
 
 
 def test_summary_markdown_includes_mo_objective_name_for_best_on_objective_policy() -> None:

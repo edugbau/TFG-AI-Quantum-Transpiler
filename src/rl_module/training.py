@@ -24,6 +24,15 @@ from typing import Tuple, List, Optional
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PPO_STABILITY_HYPERPARAMS = {
+    "learning_rate": 1e-4,
+    "clip_range": 0.1,
+    "target_kl": 0.03,
+}
+DEFAULT_N_EVAL_EPISODES = 5
+DEFAULT_EVAL_FREQ = 5_000
+_PPO_LIKE_ALGORITHMS = {"PPO", "MaskablePPO"}
+
 try:
     from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 except ModuleNotFoundError:
@@ -67,6 +76,14 @@ def set_global_seeds(seed: int = 42):
     logger.info("Semillas globales fijadas a %d.", seed)
 
 
+def _build_effective_hyperparams(algorithm: str, hyperparams: Optional[dict]) -> dict:
+    effective_hyperparams = dict(hyperparams or {})
+    if algorithm in _PPO_LIKE_ALGORITHMS:
+        for key, value in DEFAULT_PPO_STABILITY_HYPERPARAMS.items():
+            effective_hyperparams.setdefault(key, value)
+    return effective_hyperparams
+
+
 def setup_training_pipeline(
     target_circuit: QuantumCircuit,
     coupling_map: List[Tuple[int, int]],
@@ -82,6 +99,8 @@ def setup_training_pipeline(
     hyperparams: Optional[dict] = None,
     basis_gates: Optional[List[str]] = None,
     initial_layout: Optional[List[int]] = None,
+    n_eval_episodes: int = DEFAULT_N_EVAL_EPISODES,
+    eval_freq: int = DEFAULT_EVAL_FREQ,
 ) -> QuantumRLAgent:
     """
     Configura y lanza el pipeline completo de entrenamiento del agente.
@@ -108,6 +127,12 @@ def setup_training_pipeline(
 
     if algorithm == "MaskablePPO" and mode != "routing":
         raise ValueError("MaskablePPO solo esta soportado para mode='routing'.")
+    if n_eval_episodes <= 0:
+        raise ValueError("n_eval_episodes must be greater than zero")
+    if eval_freq <= 0:
+        raise ValueError("eval_freq must be greater than zero")
+
+    effective_hyperparams = _build_effective_hyperparams(algorithm, hyperparams)
     
     # 1. Semillas
     set_global_seeds(seed)
@@ -128,11 +153,17 @@ def setup_training_pipeline(
         basis_gates=basis_gates,
     )
     if reset_options is None:
-        raw_env.reset(seed=seed)
+        _, train_reset_info = raw_env.reset(seed=seed)
         env = Monitor(raw_env)
     else:
-        raw_env.reset(seed=seed, options=reset_options)
+        _, train_reset_info = raw_env.reset(seed=seed, options=reset_options)
         env = Monitor(_StickyResetOptionsWrapper(raw_env, reset_options=reset_options))
+    routing_completed_at_reset = mode == "routing" and bool(
+        train_reset_info.get(
+            "already_completed_at_reset",
+            getattr(raw_env, "was_completed_at_reset", False),
+        )
+    )
     
     # Entorno de Evaluación independiente
     eval_raw_env = QuantumTranspilationEnv(
@@ -167,6 +198,12 @@ def setup_training_pipeline(
             lookahead_window=lookahead_window,
             max_steps=max_steps,
             basis_gates=metadata_basis_gates,
+            training_hyperparams=effective_hyperparams,
+            evaluation_config={
+                "eval_freq": eval_freq,
+                "n_eval_episodes": n_eval_episodes,
+                "deterministic": True,
+            },
         ),
     )
     
@@ -188,7 +225,8 @@ def setup_training_pipeline(
         eval_env, 
         best_model_save_path=run_model_dir,
         log_path=run_log_dir,
-        eval_freq=5_000,
+        eval_freq=eval_freq,
+        n_eval_episodes=n_eval_episodes,
         deterministic=True,
         render=False
     )
@@ -196,16 +234,26 @@ def setup_training_pipeline(
     callbacks = [checkpoint_callback, eval_callback]
     
     # 4. Inicializar y entrenar Agente
-    if hyperparams is None:
-        hyperparams = {}
-        
     agent = QuantumRLAgent(
         env=env,
         algorithm=algorithm,
         tensorboard_log=run_log_dir,
         seed=seed,
-        **hyperparams
+        **effective_hyperparams
     )
+
+    if routing_completed_at_reset:
+        logger.info(
+            "Routing training skipped because the target circuit is already executable on the initial layout."
+        )
+        final_path = os.path.join(run_model_dir, f"final_{mode}_{algorithm}.zip")
+        agent.save(final_path)
+        agent.last_model_path = final_path
+        agent.run_model_dir = run_model_dir
+        agent.run_log_dir = run_log_dir
+        agent.best_model_path = None
+        agent.training_skipped_reason = "routing_completed_at_reset"
+        return agent
     
     agent.train(total_timesteps=total_timesteps, callbacks=callbacks)
     

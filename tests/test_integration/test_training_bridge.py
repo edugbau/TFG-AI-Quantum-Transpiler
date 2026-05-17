@@ -77,6 +77,12 @@ def test_train_case_returns_best_model_when_available(monkeypatch, tmp_path) -> 
     assert captured_kwargs["lookahead_window"] == 12
     assert captured_kwargs["max_steps"] == 256
     assert captured_kwargs["seed"] == 42
+    assert captured_kwargs["hyperparams"] == {
+        "learning_rate": 1e-4,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+    }
+    assert captured_kwargs["n_eval_episodes"] == 5
     assert Path(captured_kwargs["log_dir"]) == expected_log_base_dir
     assert Path(captured_kwargs["model_save_dir"]) == expected_model_base_dir
     assert result.status == "completed"
@@ -91,6 +97,10 @@ def test_train_case_returns_best_model_when_available(monkeypatch, tmp_path) -> 
     assert result.effective_training_config.lookahead_window == 12
     assert result.effective_training_config.max_steps == 256
     assert result.effective_training_config.seed == 42
+    assert result.effective_training_config.learning_rate == 1e-4
+    assert result.effective_training_config.clip_range == 0.1
+    assert result.effective_training_config.target_kl == 0.03
+    assert result.effective_training_config.n_eval_episodes == 5
 
 
 def test_train_case_forwards_initial_layout_to_setup_training_pipeline(monkeypatch, tmp_path) -> None:

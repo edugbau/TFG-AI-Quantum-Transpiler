@@ -7,6 +7,7 @@ from src.integration.campaign_contracts import Campaign, CampaignCircuitSpec, Ca
 from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE, build_auto_mo_effort_preview
 from src.integration.campaign_runner import run_campaign
 from src.integration.contracts import LayoutSelectionPolicy
+from src.integration.synthetic_topology import SYNTHETIC_TOPOLOGY_SHAPES, SyntheticTopologySpec
 from src.mo_module.fitness import get_preset_objectives
 
 
@@ -28,11 +29,16 @@ _DEFAULT_RL_TIMESTEPS = 5000
 _DEFAULT_RL_FRONTIER_MODE = "dag"
 _DEFAULT_RL_LOOKAHEAD = 10
 _DEFAULT_RL_MAX_STEPS = 200
+_DEFAULT_RL_LEARNING_RATE = 1e-4
+_DEFAULT_RL_CLIP_RANGE = 0.1
+_DEFAULT_RL_TARGET_KL = 0.03
+_DEFAULT_RL_N_EVAL_EPISODES = 5
 _DEFAULT_SEED = 42
 _DEFAULT_MO_USE_QUICK = True
 _DEFAULT_MO_POPULATION_SIZE = 30
 _DEFAULT_MO_N_GENERATIONS = 50
 _MO_EFFORT_MODES = ("auto", "custom")
+_TOPOLOGY_SOURCES = ("backend", "synthetic")
 _DEFAULT_LAYOUT_POLICY = LayoutSelectionPolicy.COMPROMISE
 _DEFAULT_BACKEND = "fake_torino"
 
@@ -58,6 +64,10 @@ def build_default_campaign_config(
         rl_frontier_mode=_DEFAULT_RL_FRONTIER_MODE,
         rl_lookahead_window=_DEFAULT_RL_LOOKAHEAD,
         rl_max_steps=_DEFAULT_RL_MAX_STEPS,
+        rl_learning_rate=_DEFAULT_RL_LEARNING_RATE,
+        rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
+        rl_target_kl=_DEFAULT_RL_TARGET_KL,
+        rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
         seed=_DEFAULT_SEED,
         mo_use_quick=_DEFAULT_MO_USE_QUICK,
         mo_population_size=_DEFAULT_MO_POPULATION_SIZE,
@@ -65,6 +75,7 @@ def build_default_campaign_config(
         mo_effort_mode="auto",
         layout_policy=_DEFAULT_LAYOUT_POLICY,
         mode="default",
+        topology_source="backend",
     )
 
 
@@ -162,6 +173,59 @@ def _prompt_mo_effort_mode(input_fn, output_fn) -> str:
     )[0]
 
 
+def _prompt_topology_source(input_fn, output_fn) -> str:
+    return _prompt_csv_choices(
+        input_fn,
+        output_fn,
+        prompt=f"Choose topology source ({', '.join(_TOPOLOGY_SOURCES)}): ",
+        valid_values=_TOPOLOGY_SOURCES,
+        allow_multiple=False,
+    )[0]
+
+
+def _prompt_synthetic_topology(input_fn, output_fn, *, required_qubits: int) -> SyntheticTopologySpec:
+    while True:
+        shape = _prompt_csv_choices(
+            input_fn,
+            output_fn,
+            prompt=f"Choose synthetic topology ({', '.join(SYNTHETIC_TOPOLOGY_SHAPES)}): ",
+            valid_values=SYNTHETIC_TOPOLOGY_SHAPES,
+            allow_multiple=False,
+        )[0]
+        try:
+            if shape in {"full", "line", "ring"}:
+                spec = SyntheticTopologySpec(
+                    shape=shape,
+                    num_qubits=_prompt_int(input_fn, output_fn, prompt="Synthetic num qubits: ", minimum=1),
+                )
+            elif shape in {"grid", "hexagonal_lattice"}:
+                spec = SyntheticTopologySpec(
+                    shape=shape,
+                    rows=_prompt_int(input_fn, output_fn, prompt="Synthetic rows: ", minimum=1),
+                    cols=_prompt_int(input_fn, output_fn, prompt="Synthetic columns: ", minimum=1),
+                )
+            else:
+                spec = SyntheticTopologySpec(
+                    shape=shape,
+                    distance=_prompt_int(input_fn, output_fn, prompt="Synthetic distance: ", minimum=1),
+                )
+        except ValueError as exc:
+            output_fn(f"Invalid synthetic topology. {exc}")
+            continue
+        try:
+            physical_qubits = spec.physical_qubits
+        except Exception as exc:
+            output_fn(f"Invalid synthetic topology. {exc}")
+            continue
+        if physical_qubits < required_qubits:
+            output_fn(
+                "Invalid synthetic topology. "
+                f"Requires at least {required_qubits} physical qubits, got {physical_qubits}."
+            )
+            continue
+        return spec
+
+
 def _prompt_bool(input_fn, output_fn, *, prompt: str) -> bool:
     while True:
         raw = input_fn(prompt).strip().lower()
@@ -187,13 +251,23 @@ def _build_circuit_specs(families: tuple[str, ...], qubit_sizes: tuple[int, ...]
 
 
 def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[CampaignCircuitSpec, ...]) -> CampaignConfig:
-    backend_names = _prompt_csv_choices(
-        input_fn,
-        output_fn,
-        prompt=f"Choose backend(s) ({', '.join(_BACKENDS)}): ",
-        valid_values=_BACKENDS,
-        allow_multiple=True,
-    )
+    topology_source = _prompt_topology_source(input_fn, output_fn)
+    synthetic_topology = None
+    if topology_source == "backend":
+        backend_names = _prompt_csv_choices(
+            input_fn,
+            output_fn,
+            prompt=f"Choose backend(s) ({', '.join(_BACKENDS)}): ",
+            valid_values=_BACKENDS,
+            allow_multiple=True,
+        )
+    else:
+        synthetic_topology = _prompt_synthetic_topology(
+            input_fn,
+            output_fn,
+            required_qubits=max(spec.num_qubits for spec in circuit_specs),
+        )
+        backend_names = (synthetic_topology.backend_name,)
     rl_algorithm = _prompt_csv_choices(
         input_fn,
         output_fn,
@@ -252,6 +326,10 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         rl_frontier_mode=rl_frontier_mode,
         rl_lookahead_window=rl_lookahead,
         rl_max_steps=rl_max_steps,
+        rl_learning_rate=_DEFAULT_RL_LEARNING_RATE,
+        rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
+        rl_target_kl=_DEFAULT_RL_TARGET_KL,
+        rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
         seed=seed,
         mo_use_quick=mo_use_quick,
         mo_population_size=mo_population_size,
@@ -260,6 +338,8 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         layout_policy=layout_policy,
         mo_objective_name=mo_objective_name,
         mode="advanced",
+        topology_source=topology_source,
+        synthetic_topology=synthetic_topology,
     )
 
 
@@ -287,12 +367,20 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
     output_fn(f"Campaign ID: {campaign.campaign_id}")
     output_fn(f"Mode: {config.mode}")
     output_fn("Circuits: " + ", ".join(f"{spec.family} ({spec.num_qubits}q)" for spec in config.circuit_specs))
-    output_fn("Backends: " + ", ".join(config.backend_names))
+    output_fn(f"Topology Source: {config.topology_source}")
+    if config.synthetic_topology is None:
+        output_fn("Backends: " + ", ".join(config.backend_names))
+    else:
+        output_fn(f"Synthetic Topology: {config.synthetic_topology.backend_name}")
+        output_fn(f"Synthetic Physical Qubits: {config.synthetic_topology.physical_qubits}")
+        output_fn("Synthetic Basis Gates: " + ", ".join(config.synthetic_topology.basis_gates))
     output_fn(
         "RL: "
         f"algorithm={config.rl_algorithm}, timesteps={config.rl_total_timesteps}, "
         f"frontier_mode={config.rl_frontier_mode}, lookahead={config.rl_lookahead_window}, "
-        f"max_steps={config.rl_max_steps}, seed={config.seed}"
+        f"max_steps={config.rl_max_steps}, learning_rate={config.rl_learning_rate}, "
+        f"clip_range={config.rl_clip_range}, target_kl={config.rl_target_kl}, "
+        f"n_eval_episodes={config.rl_n_eval_episodes}, seed={config.seed}"
     )
     output_fn(f"MO Effort Mode: {config.mo_effort_mode}")
     if config.mo_effort_mode == "auto":

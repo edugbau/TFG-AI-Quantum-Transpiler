@@ -6,6 +6,7 @@ from qiskit import QuantumCircuit
 
 from src.integration.campaign_contracts import Campaign, CampaignCase, CampaignCircuitSpec, CampaignConfig
 from src.integration.contracts import LayoutSelectionPolicy, ScenarioResult
+from src.integration.synthetic_topology import SyntheticTopologySpec
 from src.integration.training_bridge import TrainingBridgeResult, TrainingConfigSummary
 
 
@@ -303,6 +304,68 @@ def test_run_campaign_trains_then_runs_baseline_mo_only_and_mo_rl(tmp_path) -> N
     assert campaign.summary.status == "completed"
     assert campaign.summary.comparable_completed_cases == 1
     assert write_calls == [1, 1]
+
+
+def test_run_campaign_threads_synthetic_topology_to_requests_and_backend_resolver(tmp_path) -> None:
+    from src.integration.campaign_runner import run_campaign
+
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=3)
+    config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        backend_names=[synthetic_topology.backend_name],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="dag",
+        rl_lookahead_window=12,
+        rl_max_steps=256,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mode="advanced",
+        topology_source="synthetic",
+        synthetic_topology=synthetic_topology,
+    )
+    campaign = Campaign.from_config(campaign_id="campaign-synthetic", config=config)
+    case = campaign.build_cases()[0]
+    resolver_calls = []
+    request_topologies = []
+
+    def fake_resolve_backend_bundle(backend_name, *, synthetic_topology=None):
+        resolver_calls.append((backend_name, synthetic_topology))
+        return SimpleNamespace(
+            backend_name=backend_name,
+            coupling_edges=[(0, 1), (1, 2)],
+        )
+
+    def fake_result(request, scenario_name, depth):
+        request_topologies.append((scenario_name, request.synthetic_topology))
+        return _build_result(scenario_name, case, metrics=_build_metrics(depth))
+
+    report = run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
+        run_baseline=lambda request, *, circuit: fake_result(request, "Baseline", 100),
+        run_mo_only=lambda request, *, circuit: fake_result(request, "MO_Only", 90),
+        train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: fake_result(request, "RL_Only", 85),
+        run_mo_rl=lambda request, *, circuit, injected_layout, **kwargs: fake_result(request, "MO+RL", 80),
+        resolve_backend_bundle=fake_resolve_backend_bundle,
+        write_outputs=lambda *, output_dir, report: None,
+    )
+
+    assert report.case_reports[0].status == "completed"
+    assert resolver_calls == [
+        ("synthetic_line_3q", synthetic_topology),
+    ]
+    assert request_topologies == [
+        ("Baseline", synthetic_topology),
+        ("RL_Only", synthetic_topology),
+        ("MO_Only", synthetic_topology),
+        ("MO+RL", synthetic_topology),
+    ]
 
 
 def test_run_campaign_trains_mo_rl_cases_from_mo_only_selected_layout(tmp_path) -> None:

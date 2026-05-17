@@ -4,11 +4,13 @@ from dataclasses import dataclass
 
 from src.integration.contracts import LayoutSelectionPolicy
 from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
+from src.integration.synthetic_topology import SyntheticTopologySpec, validate_synthetic_topology_capacity
 
 
 _ALLOWED_CASE_RESULT_STATUSES = frozenset({"completed", "failed", "incomplete", "cancelled"})
 _ALLOWED_CAMPAIGN_MODES = frozenset({"default", "advanced"})
 _ALLOWED_MO_EFFORT_MODES = frozenset({"auto", "custom"})
+_ALLOWED_TOPOLOGY_SOURCES = frozenset({"backend", "synthetic"})
 _ALLOWED_CAMPAIGN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled", "interrupted"})
 _TERMINAL_CAMPAIGN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _SUMMARY_CAMPAIGN_STATUSES = _TERMINAL_CAMPAIGN_STATUSES | {"running"}
@@ -106,9 +108,15 @@ class CampaignConfig:
     mo_population_size: int
     mo_n_generations: int
     layout_policy: LayoutSelectionPolicy
+    rl_learning_rate: float = 1e-4
+    rl_clip_range: float = 0.1
+    rl_target_kl: float = 0.03
+    rl_n_eval_episodes: int = 5
     mo_effort_mode: str = "auto"
     mo_objective_name: str | None = None
     mode: str = "default"
+    topology_source: str = "backend"
+    synthetic_topology: SyntheticTopologySpec | None = None
 
     def __post_init__(self) -> None:
         if not self.circuit_specs:
@@ -117,6 +125,9 @@ class CampaignConfig:
             raise ValueError("Campaign requires at least one backend_names entry")
         if self.mode not in _ALLOWED_CAMPAIGN_MODES:
             raise ValueError("Campaign mode must be one of default, advanced")
+        normalized_topology_source = self.topology_source.strip().lower()
+        if normalized_topology_source not in _ALLOWED_TOPOLOGY_SOURCES:
+            raise ValueError("CampaignConfig topology_source must be one of backend, synthetic")
         if self.mo_effort_mode not in _ALLOWED_MO_EFFORT_MODES:
             raise ValueError("CampaignConfig mo_effort_mode must be one of auto, custom")
         normalized_rl_algorithm = self.rl_algorithm.strip()
@@ -131,6 +142,14 @@ class CampaignConfig:
             raise ValueError("CampaignConfig rl_lookahead_window must be greater than zero")
         if self.rl_max_steps <= 0:
             raise ValueError("CampaignConfig rl_max_steps must be greater than zero")
+        if self.rl_learning_rate <= 0:
+            raise ValueError("CampaignConfig rl_learning_rate must be greater than zero")
+        if self.rl_clip_range <= 0:
+            raise ValueError("CampaignConfig rl_clip_range must be greater than zero")
+        if self.rl_target_kl <= 0:
+            raise ValueError("CampaignConfig rl_target_kl must be greater than zero")
+        if self.rl_n_eval_episodes <= 0:
+            raise ValueError("CampaignConfig rl_n_eval_episodes must be greater than zero")
         if self.seed < 0:
             raise ValueError("CampaignConfig seed cannot be negative")
         if not isinstance(self.mo_use_quick, bool):
@@ -157,6 +176,22 @@ class CampaignConfig:
         circuit_keys = [(spec.family, spec.num_qubits) for spec in normalized_circuit_specs]
         if len(set(circuit_keys)) != len(circuit_keys):
             raise ValueError("CampaignConfig circuit_specs cannot contain duplicates")
+        if normalized_topology_source == "backend":
+            if self.synthetic_topology is not None:
+                raise ValueError("CampaignConfig synthetic_topology is only accepted for synthetic topology_source")
+        else:
+            if self.mode != "advanced":
+                raise ValueError("CampaignConfig synthetic topology_source is only accepted in advanced mode")
+            if self.synthetic_topology is None:
+                raise ValueError("CampaignConfig synthetic_topology is required for synthetic topology_source")
+            if len(normalized_backends) != 1:
+                raise ValueError("CampaignConfig synthetic topology_source requires exactly one backend_names entry")
+            if normalized_backends[0] != self.synthetic_topology.backend_name:
+                raise ValueError("CampaignConfig backend_names must contain the synthetic topology backend_name")
+            validate_synthetic_topology_capacity(
+                self.synthetic_topology,
+                required_qubits=max(spec.num_qubits for spec in normalized_circuit_specs),
+            )
         if normalized_layout_policy is LayoutSelectionPolicy.BEST_ON_OBJECTIVE:
             if not normalized_objective_name:
                 raise ValueError("CampaignConfig mo_objective_name is required for best_on_objective")
@@ -168,6 +203,7 @@ class CampaignConfig:
         object.__setattr__(self, "rl_frontier_mode", normalized_frontier_mode)
         object.__setattr__(self, "layout_policy", normalized_layout_policy)
         object.__setattr__(self, "mo_objective_name", normalized_objective_name)
+        object.__setattr__(self, "topology_source", normalized_topology_source)
 
 
 @dataclass(slots=True)

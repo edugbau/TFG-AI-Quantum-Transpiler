@@ -2429,6 +2429,159 @@ class TestTrainingUtilities:
         assert metadata["environment"]["lookahead_window"] == 6
         assert metadata["environment"]["max_steps"] == 77
         assert metadata["environment"]["basis_gates"] is None
+        assert metadata["training"]["hyperparams"] == {
+            "learning_rate": 1e-4,
+            "clip_range": 0.1,
+            "target_kl": 0.03,
+        }
+        assert metadata["evaluation"] == {
+            "eval_freq": 5000,
+            "n_eval_episodes": 5,
+            "deterministic": True,
+        }
+
+    def test_setup_training_pipeline_preserves_explicit_ppo_hyperparams(
+        self, monkeypatch, linear_coupling_3q, tmp_path
+    ):
+        from src.rl_module import training
+
+        captured_hyperparams = {}
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log=None, seed=None, **kwargs):
+                captured_hyperparams.update(kwargs)
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=True):
+                return None
+
+            def save(self, path):
+                Path(path).write_text("model", encoding="utf-8")
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(training, "Monitor", lambda env: env)
+        monkeypatch.setattr(training, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(training, "CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr(training, "EvalCallback", lambda *args, **kwargs: object())
+
+        training.setup_training_pipeline(
+            target_circuit=QuantumCircuit(2),
+            coupling_map=linear_coupling_3q,
+            algorithm="PPO",
+            total_timesteps=1,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+            hyperparams={
+                "learning_rate": 3e-4,
+                "clip_range": 0.2,
+                "target_kl": 0.08,
+                "n_epochs": 3,
+            },
+        )
+
+        assert captured_hyperparams["learning_rate"] == 3e-4
+        assert captured_hyperparams["clip_range"] == 0.2
+        assert captured_hyperparams["target_kl"] == 0.08
+        assert captured_hyperparams["n_epochs"] == 3
+
+    def test_setup_training_pipeline_does_not_apply_ppo_defaults_to_dqn(
+        self, monkeypatch, linear_coupling_3q, tmp_path
+    ):
+        from src.rl_module import training
+
+        captured_hyperparams = {}
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def reset(self, seed=None):
+                return {}, {}
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log=None, seed=None, **kwargs):
+                captured_hyperparams.update(kwargs)
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=True):
+                return None
+
+            def save(self, path):
+                Path(path).write_text("model", encoding="utf-8")
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(training, "Monitor", lambda env: env)
+        monkeypatch.setattr(training, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(training, "CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr(training, "EvalCallback", lambda *args, **kwargs: object())
+
+        training.setup_training_pipeline(
+            target_circuit=QuantumCircuit(2),
+            coupling_map=linear_coupling_3q,
+            algorithm="DQN",
+            total_timesteps=1,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+        )
+
+        assert "learning_rate" not in captured_hyperparams
+        assert "clip_range" not in captured_hyperparams
+        assert "target_kl" not in captured_hyperparams
+
+    def test_setup_training_pipeline_skips_learning_when_routing_completed_at_reset(
+        self, monkeypatch, linear_coupling_3q, tmp_path
+    ):
+        from src.rl_module import training
+
+        train_called = False
+
+        class DummyEnv:
+            def __init__(self, *args, **kwargs):
+                self.was_completed_at_reset = False
+
+            def reset(self, seed=None, options=None):
+                self.was_completed_at_reset = True
+                return {}, {
+                    "already_completed_at_reset": True,
+                    "executed_gates": [("h", 0, 0), ("cx", 0, 1)],
+                }
+
+        class DummyAgent:
+            def __init__(self, env, algorithm, tensorboard_log=None, seed=None, **kwargs):
+                self.env = env
+
+            def train(self, total_timesteps, callbacks=None, progress_bar=True):
+                nonlocal train_called
+                train_called = True
+
+            def save(self, path):
+                Path(path).write_text("model", encoding="utf-8")
+
+        monkeypatch.setattr(training, "QuantumTranspilationEnv", DummyEnv)
+        monkeypatch.setattr(training, "Monitor", lambda env: env)
+        monkeypatch.setattr(training, "QuantumRLAgent", DummyAgent)
+        monkeypatch.setattr(training, "CheckpointCallback", lambda **kwargs: object())
+        monkeypatch.setattr(training, "EvalCallback", lambda *args, **kwargs: object())
+
+        agent = training.setup_training_pipeline(
+            target_circuit=QuantumCircuit(2),
+            coupling_map=linear_coupling_3q,
+            mode="routing",
+            algorithm="PPO",
+            total_timesteps=100,
+            log_dir=str(tmp_path / "logs"),
+            model_save_dir=str(tmp_path / "models"),
+        )
+
+        assert train_called is False
+        assert Path(agent.last_model_path).exists()
+        assert agent.best_model_path is None
+        assert agent.training_skipped_reason == "routing_completed_at_reset"
 
     def test_setup_training_pipeline_omits_basis_gates_from_routing_metadata(
         self, monkeypatch, linear_coupling_3q, tmp_path
@@ -2567,6 +2720,7 @@ class TestTrainingUtilities:
     ):
         """Routing con MaskablePPO usa el callback de evaluacion con mascaras."""
         callback_types = []
+        maskable_eval_kwargs = {}
 
         class DummyEnv:
             def __init__(self, *args, **kwargs):
@@ -2596,6 +2750,7 @@ class TestTrainingUtilities:
 
         class DummyMaskableEvalCallback:
             def __init__(self, *args, **kwargs):
+                maskable_eval_kwargs.update(kwargs)
                 pass
 
         from src.rl_module import training
@@ -2618,6 +2773,8 @@ class TestTrainingUtilities:
         )
 
         assert callback_types == ["DummyCheckpointCallback", "DummyMaskableEvalCallback"]
+        assert maskable_eval_kwargs["eval_freq"] == 5000
+        assert maskable_eval_kwargs["n_eval_episodes"] == 5
 
     def test_setup_training_pipeline_rejects_maskableppo_for_synthesis(
         self, monkeypatch, simple_circuit_3q, linear_coupling_3q
