@@ -1,64 +1,21 @@
 """
-mo_module — Módulo 3: Optimización Multiobjetivo de Layouts
-============================================================
+mo_module - optimizacion multiobjetivo de layouts
+==================================================
 
-Módulo de optimización multiobjetivo para el TFG
-"Transpilación Cuántica Híbrida".
+Este paquete agrupa la busqueda evolutiva de layouts, el analisis de
+Pareto, el ajuste de hiperparametros y el tooling de benchmark local.
+La fachada publica sirve como entrada rapida a:
 
-Este paquete implementa la optimización de layouts de qubits
-(mapeo lógico → físico) mediante algoritmos evolutivos multiobjetivo
-(NSGA-II y MOEA/D), generando un frente de Pareto de soluciones
-que equilibran múltiples criterios de calidad.
-
-Sub-módulos:
-
-  - **encoding**: Codificación del layout como individuo evolutivo,
-    operadores genéticos (sampling, crossover, mutación) adaptados
-    a permutaciones parciales.
-  - **fitness**: Funciones de fitness activas basadas en transpilación
-    (profundidad y CNOTs hoy), extensibles mediante patrón Strategy
-    y evaluador compuesto.
-  - **optimizer**: Algoritmos evolutivos (NSGA-II, MOEA/D) vía pymoo,
-    configuración centralizada, pipeline de optimización.
-  - **pareto**: Análisis del frente de Pareto (hipervolumen, knee
-    point, selección de soluciones, visualización).
-
-Uso típico::
-
-    from src.mo_module import (
-        optimize_layout,
-        optimize_layout_quick,
-        analyze_pareto_front,
-        plot_pareto_front_2d,
-        OptimizerConfig,
-    )
-    from src.qiskit_interface import create_ghz_circuit, get_backend
-
-    # Circuito y backend
-    circuit = create_ghz_circuit(5)
-    backend = get_backend("fake_torino")
-
-    # Optimizar con configuración por defecto
-    result = optimize_layout(circuit, backend=backend)
-    print(result.summary())
-
-    # Analizar el frente de Pareto
-    analysis = analyze_pareto_front(result)
-    print(analysis["metrics"].summary())
-
-    # Seleccionar el mejor layout (compromiso)
-    best_layout = result.get_compromise_layout()
-
-Dependencias:
-  - pymoo >= 0.6 (NSGA-II, MOEA/D, indicadores)
-  - numpy >= 2.0
-  - scipy >= 1.10
-  - matplotlib >= 3.8 (para visualización)
-  - src.qiskit_interface (circuitos, backends, transpilación)
+  - **encoding**: representacion del layout y operadores geneticos.
+  - **fitness**: evaluacion de candidatos y cache de transpilacion.
+  - **optimizer**: orquestacion de NSGA-II / MOEA/D.
+  - **pareto**: seleccion e interpretacion del frente.
+  - **tuning**: ajuste con Optuna.
+  - **benchmark**: evaluacion estadistica y campañas locales.
 """
 
 # ===================================================================
-#  Re-exportaciones públicas
+#  Re-exportaciones publicas
 # ===================================================================
 
 # --- encoding ---
@@ -130,7 +87,7 @@ from .benchmark import (
 
 
 # ===================================================================
-#  __all__ — API pública explícita
+#  __all__ - API publica explicita
 # ===================================================================
 __all__ = [
     # encoding

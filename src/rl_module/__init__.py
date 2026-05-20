@@ -1,8 +1,13 @@
 """
-Módulo de Aprendizaje por Refuerzo (RL Module).
+rl_module - entorno RL para routing y synthesis
+===============================================
 
-Este módulo provee el entorno Gymnasium y los agentes necesarios para la transpilación
-cuántica híbrida, incluyendo enrutamiento (routing) y síntesis completa (synthesis).
+Este paquete expone el entorno Gymnasium, las estrategias de observacion,
+las recompensas, el agente SB3, el pipeline de entrenamiento, la metadata
+de checkpoints y la GUI de inspeccion.
+
+El modulo soporta routing con masked routing para nuevos checkpoints y un
+primer modo de synthesis restringido a Clifford.
 """
 
 from importlib import import_module

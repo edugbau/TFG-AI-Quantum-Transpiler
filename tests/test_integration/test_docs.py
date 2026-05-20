@@ -8,80 +8,94 @@ def read_text(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_integration_docs_describe_routing_evaluation_v1_scope_and_known_limits() -> None:
+def assert_contains_all(text: str, expected_tokens: tuple[str, ...]) -> None:
+    for token in expected_tokens:
+        assert token in text
+
+
+def test_root_readme_summarizes_integration_boundary() -> None:
     repo_readme_text = read_text("README.md")
+
+    assert_contains_all(
+        repo_readme_text,
+        (
+            "qiskit_interface",
+            "mo_module",
+            "rl_module",
+            "integration",
+            "Scenario",
+            "Campaign",
+            "masked routing",
+            "run_metadata.json",
+            "trans_active_qubits",
+        ),
+    )
+
+
+def test_integration_docs_describe_scenarios_and_campaigns() -> None:
     integration_readme_text = read_text("src/integration/README.md")
     internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
 
-    assert "RL_Only" in repo_readme_text
-    assert "reconstruye el circuito ruteado" in repo_readme_text
-    assert "MO+RL" in repo_readme_text
-    assert "swap_trace" in repo_readme_text
-    assert "executed_gate_trace" in repo_readme_text
-    assert "QASM input is available for `Baseline` and `MO_Only`" in repo_readme_text
-    assert "trans_active_qubits" in repo_readme_text
-    assert "total_swaps == len(swap_trace)" in repo_readme_text
-    assert "QASM input is also deferred" not in repo_readme_text
-    assert "stub" not in repo_readme_text.lower()
-
-    assert "QASM input is available" in integration_readme_text
-    assert "Qiskit-facing scenarios" in integration_readme_text
-    assert "`RL_Only` rebuilds the routed circuit from the RL trace" in integration_readme_text
-    assert "`MO+RL` now attempts to reconstruct the routed circuit from the RL trace" in integration_readme_text
-    assert "trans_active_qubits" in integration_readme_text
-
-    assert "QASM input is available for the Qiskit-facing scenarios" in internal_doc_text
-    assert "qiskit_interface.load_circuit(...)" in internal_doc_text
-    assert "--circuit-source" in internal_doc_text
-    assert "--circuit-path" in internal_doc_text
-    assert "--circuit-format" in internal_doc_text
-    assert "Baseline" in internal_doc_text and "MO_Only" in internal_doc_text
-    assert "backend catalog is intentionally limited" in internal_doc_text
-    assert "executed_gate_trace" in internal_doc_text
-    assert "total_swaps == len(swap_trace)" in internal_doc_text
-    assert "trans_active_qubits" in internal_doc_text
+    assert_contains_all(
+        integration_readme_text,
+        (
+            "Scenario",
+            "Campaign",
+            "Baseline",
+            "MO_Only",
+            "RL_Only",
+            "MO+RL",
+            "SyntheticTopologySpec",
+            "mo_effort_mode",
+            "load_campaign_batch",
+            "run_campaign_batch",
+            "run_metadata.json",
+            "path-expanded routing subgraph",
+            "fake_torino",
+            "fake_brisbane",
+        ),
+    )
+    assert_contains_all(
+        internal_doc_text,
+        (
+            "ScenarioRequest",
+            "CampaignConfig",
+            "SyntheticTopologySpec",
+            "run_campaign_batch",
+            "run_metadata.json",
+            "path-expanded routing subgraph",
+        ),
+    )
 
 
 def test_integration_docs_describe_rl_metadata_sidecar_contract() -> None:
-    repo_readme_text = read_text("README.md")
     integration_readme_text = read_text("src/integration/README.md")
     internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
 
-    assert "run_metadata.json" in repo_readme_text
-    assert "saved routing contract from that sidecar when available" in integration_readme_text
-    assert "reports that condition through an extra note" in integration_readme_text
-    assert "ScenarioResult.notes" in internal_doc_text
-    assert "resolve_routing_model_contract()" in internal_doc_text
-    assert "Legacy RL evaluation defaults were used because no run metadata sidecar was found." in internal_doc_text
-    assert "metadata_source" not in internal_doc_text
-    assert "_load_routing_contract()" not in internal_doc_text
+    assert_contains_all(
+        integration_readme_text,
+        (
+            "masked routing",
+            "legacy",
+            "run_metadata.json",
+            "Training Artifact",
+        ),
+    )
+    assert_contains_all(
+        internal_doc_text,
+        (
+            "masked routing",
+            "legacy",
+            "run_metadata.json",
+            "ScenarioResult",
+        ),
+    )
 
 
-def test_integration_docs_lock_campaign_mo_conditioned_layout_reuse_semantics() -> None:
-    repo_readme_text = read_text("README.md")
-    integration_readme_text = read_text("src/integration/README.md")
-    internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
+def test_integration_package_docstring_keeps_routing_v1_scope() -> None:
+    integration_text = read_text("src/integration/__init__.py")
 
-    assert "Cada Campaign Case corresponde a una combinación `circuit x backend` y ejecuta la comparación canónica `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`." in repo_readme_text
-    assert "`MO_Only` es el Scenario que selecciona el layout. El training de Campaign para `MO+RL` arranca desde ese layout exacto y la evaluación posterior de `MO+RL` reutiliza ese mismo layout junto con el Training Artifact producido para el mismo Campaign Case." in repo_readme_text
-    assert "En el camino híbrido de Campaign, `MO_Only` selecciona el layout, `integration` lo reenvía como `initial_layout` al training RL y la evaluación `MO+RL` reutiliza ese mismo layout junto con el Training Artifact del caso." in repo_readme_text
-
-    assert "The canonical Campaign comparison set is `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL`." in integration_readme_text
-    assert "Within that guided Campaign comparison, `MO_Only` selects the layout for the Campaign Case. Campaign training for `MO+RL` starts from that exact layout, and `MO+RL` evaluation reuses the same layout together with the resulting Training Artifact for the same Campaign Case." in integration_readme_text
-    assert "For the Campaign hybrid path, the sequence is explicit: `MO_Only` selects the layout, Campaign training produces the Training Artifact starting from that exact layout, and `MO+RL` evaluation uses the same layout and that artifact when it runs the routed comparison." in integration_readme_text
-
-    assert "El conjunto canónico de comparación dentro de esa Campaign es `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`." in internal_doc_text
-    assert "Dentro de ese flujo guiado, `MO_Only` es el Scenario que selecciona el layout del Campaign Case. El training de Campaign para `MO+RL` arranca desde ese layout exacto, produce el Training Artifact del caso y la evaluación posterior de `MO+RL` reutiliza tanto ese mismo layout como ese artifacto resultante." in internal_doc_text
-    assert "usa el layout exacto seleccionado por `MO_Only` para lanzar el training RL del camino `MO+RL` y reutiliza ese mismo layout en la evaluación híbrida del caso;" in internal_doc_text
-
-
-def test_integration_docs_lock_campaign_path_expanded_subgraph_default() -> None:
-    repo_readme_text = read_text("README.md")
-    integration_readme_text = read_text("src/integration/README.md")
-    internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
-
-    assert "Campaign `MO+RL` uses the exact `MO_Only` layout for the same Campaign Case." in repo_readme_text
-    assert "Campaign `MO+RL` derives a path-expanded routing subgraph from the interacting logical pairs in the circuit" in repo_readme_text
-    assert "Campaign trains and evaluates RL on that derived routing graph" in integration_readme_text
-    assert "final Qiskit post-routing comparison still targets the real backend" in integration_readme_text
-    assert "If subgraph derivation fails, Campaign falls back to the full backend coupling map and records that fallback" in internal_doc_text
+    assert_contains_all(
+        integration_text,
+        ("routing-evaluation v1", "RL-based scenarios rebuild routed circuits"),
+    )

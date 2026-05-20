@@ -1,173 +1,139 @@
-# Documentación Interna: Módulo de Aprendizaje por Refuerzo (RL)
+# Documentacion interna de `rl_module`
 
-## Visión General
-El `rl_module` se encarga de la fase de **Enrutamiento (Routing) y Síntesis** de circuitos cuánticos. Tras recibir un mapeo estático inicial (`initial_layout`) como input externo, el agente de RL se encarga de insertar puertas SWAP de manera dinámica para resolver los bloqueos de conectividad o transicionar a nuevas puertas. El handoff MO -> RL, cuando aplique, pertenece a `src/integration/`.
+`rl_module` es el nucleo RL del proyecto. Modela el problema de transpilacion cuantica como un entorno Gymnasium y separa routing, masked routing, synthesis, entrenamiento, metadata de checkpoints y GUI.
 
-Para ofrecer una escalabilidad completa, la arquitectura del entorno ha sido diseñada aplicando el **Patrón Strategy**, separando la definición del problema en estrategias. Esto permite modificar si el agente actúa en modo "solo enrutamiento" (*Routing*) o si debe generar secuencias de puertas completas (*Synthesis*).
+## Mapa de lectura
 
-## Estructura de Proyecto
-```
-src/rl_module/
-├── environment.py       # Entorno Gymnasium (QuantumTranspilationEnv) optimizado con búsquedas O(1) en Layout.
-├── env_strategies.py    # Patrón Strategy que expone modos: RoutingStrategy, SynthesisStrategy.
-├── frontier.py          # Proveedores de frontera (secuencial y DAG) para routing.
-├── rewards.py           # Sistema desacoplado de heurísticas (RoutingReward, SynthesisReward).
-├── agent.py             # Wrapper (QuantumRLAgent) orquestando Stable-Baselines3 (PPO / DQN / MaskablePPO) y soporte GPU/CUDA.
-├── training.py          # Script de abstracción y pipeline de entrenamiento (logs en TensorBoard y Checkpoint callbacks).
-├── gui/                 # GUI única con vistas especializadas por modo y panel de inspección de episodios.
-└── docs/                # Documentación interna (como este archivo).
-```
+1. `environment.py`, `env_strategies.py`, `frontier.py` y `rewards.py` explican como se formula el problema.
+2. `agent.py`, `training.py` y `model_metadata.py` cubren entrenamiento y contratos de evaluacion.
+3. `synthesis_primitives.py` y `synthesis_clifford.py` explican el modo `synthesis`.
+4. `gui/` cubre la inspeccion de episodios.
 
-## GUI RL: una app, dos vistas especializadas
+## 1. Arquitectura general
 
-La interfaz `rl_gui.py` ya no debe entenderse como dos aplicaciones separadas. La GUI es una sola app (`RLBenchmarkGUI`) con configuración compartida y dos vistas especializadas:
+### Piezas principales
 
-- **Vista de routing**: expone controles específicos de frontera (`frontier_mode="sequential"` o `"dag"`) y métricas ligadas a lookahead, layout dinámico y SWAPs.
-- **Vista de synthesis**: oculta los controles exclusivos de routing y centra la evaluación en primitivas hardware-aware y en el progreso del residual.
+| Archivo | Rol |
+| --- | --- |
+| `environment.py` | Entorno principal `QuantumTranspilationEnv` |
+| `env_strategies.py` | Estrategias por modo (`RoutingStrategy`, `SynthesisStrategy`) |
+| `frontier.py` | Frontera visible para routing (`SequentialFrontier`, `DagFrontier`) |
+| `rewards.py` | Shaping de recompensas |
+| `agent.py` | Wrapper sobre Stable-Baselines3 |
+| `training.py` | Pipeline reproducible de entrenamiento |
+| `model_metadata.py` | Lectura y escritura de `run_metadata.json` |
+| `synthesis_primitives.py` | Catalogo de primitivas hardware-aware |
+| `synthesis_clifford.py` | Logica de residual Clifford para `synthesis` v1 |
+| `gui/` | Visualizacion e inspeccion de episodios |
 
-Ambas vistas comparten el mismo flujo general de entrenamiento/evaluación, pero cada una muestra únicamente los controles y los detalles de episodio que tienen significado semántico para su modo.
+### Boundary con `integration`
 
-## Arquitectura de Escalabilidad (Patrón Strategy)
+`rl_module` consume un `initial_layout` externo, pero no decide su origen. El handoff MO -> RL pertenece a `integration`, que tambien decide como leer `run_metadata.json` y como reconstruir episodios para comparacion.
 
-El entorno `QuantumTranspilationEnv` no impone directamente los espacios de observación ni de acción. Delega esta responsabilidad a las clases que heredan de `RLEnvStrategy`. Además, implementa en *O(1)* la búsqueda del mapeo cuántico utilizando arrays cruzados (`current_layout` y `_inverse_layout`).
+## 2. Routing y masked routing
 
-La selección de puertas visibles y su ejecución ya no dependen de una única cola rígida. El entorno delega esa responsabilidad en proveedores de frontera:
+### Idea de modelado
 
-- `SequentialFrontier`: usa la secuencia lineal de instrucciones.
-- `DagFrontier`: usa `qiskit.converters.circuit_to_dag(...).front_layer()` para exponer paralelismo real.
+Routing se formula como una secuencia de decisiones sobre swaps:
 
-### 1. Modo Enrutamiento (`mode="routing"`)
-- **Action Space:** Discreto (`gym.spaces.Discrete`). El tamaño equivale al número de aristas bidireccionales del Coupling Map (sin duplicados). El agente inserta un SWAP y el layout dinámico se invierte. Este espacio permanece fijo sobre las aristas del hardware incluso en el nuevo régimen de **masked routing**.
-- **Observation Space:** Diccionario con:
-  - `layout`: Array del mapeo lógico→físico actual (tamaño `num_qubits`).
-  - `lookahead`: Buffer vectorial lógico de tamaño fijo ($N \times 2$) sobre la frontera visible.
-  - `lookahead_physical`: Proyección física de las mismas puertas bajo el layout actual.
-  - `lookahead_executable`: Marca binaria de ejecutabilidad inmediata.
-  - `lookahead_routing_distance`: Distancia de routing aproximada (`shortest_path_length - 1`).
-  - `lookahead_valid_mask`: Máscara binaria para distinguir puertas reales de padding.
-  - `step_progress`: Escalar normalizado $\in [0, 1]$ que indica `current_step / max_steps`. Proporciona **contexto temporal** al agente para distinguir estados idénticos visitados en momentos distintos del episodio, rompiendo oscilaciones cíclicas A→B→A.
-- **Lógica de Ejecución:** El entorno busca qué puertas quedan desbloqueadas tras aplicar el SWAP y ejecuta repetitivamente (en cascada) sus dependencias.
+- el action space es discreto y fijo sobre las aristas del coupling map;
+- `action_masks()` solo restringe candidatos validos en cada estado;
+- la semantica no cambia por episodio, lo que mantiene estables los indices de accion.
 
-### Régimen de `masked routing`
+### Observacion
 
-El módulo incorpora ahora un régimen adicional de routing enmascarado pensado para checkpoints nuevos. La idea es acercar la selección de acciones a la restricción de candidatos típica de SABRE sin redefinir la semántica pública del entorno:
+La observacion combina layout, frontier y contexto temporal:
 
-- el espacio de acción sigue indexando todas las aristas del coupling map;
-- `action_masks()` aplica una `hard mask` determinista y frontier-aware sobre ese espacio fijo;
-- la máscara elimina acciones inválidas o dominadas antes del muestreo, pero no introduce un action space dinámico nuevo.
+- `layout` y `_inverse_layout` permiten consultas en O(1);
+- `lookahead` expone las puertas visibles;
+- `lookahead_physical` muestra el efecto fisico bajo el layout actual;
+- `lookahead_executable` y `lookahead_routing_distance` explican si una puerta ya puede ejecutarse;
+- `step_progress` aporta contexto temporal para diferenciar estados repetidos.
 
-En entrenamiento y carga de modelos, `MaskablePPO` es el estándar para checkpoints nuevos de masked routing. Los checkpoints legacy de `PPO` y `DQN` continúan siendo válidos mediante contratos legacy/default o evaluaciones unmasked, de forma que la compatibilidad hacia atrás se mantiene durante la migración.
+### Frontier
 
-### `frontier_mode`
+- `SequentialFrontier` mantiene una lectura lineal del circuito.
+- `DagFrontier` usa `front_layer()` para exponer paralelismo real.
 
-El entorno puede operar con dos modos de frontera:
+### Recompensas
 
-- `frontier_mode="sequential"`: usa la cola secuencial de instrucciones.
-- `frontier_mode="dag"`: usa una `front_layer` real del DAG y hace visibles varias puertas independientes en paralelo.
+La recompensa separa progreso util de ruido:
 
-Esto mejora la observabilidad del efecto del `SWAP`: el agente ya no ve solo el par lógico futuro, sino también su proyección física, su ejecutabilidad actual y su distancia de routing.
+- bonifica puertas ejecutadas;
+- penaliza SWAPs inutiles, layouts repetidos y deshacer el ultimo SWAP;
+- castiga truncaciones y acciones invalidas;
+- en `synthesis`, la recompensa se centra en reducir el residual.
 
-### Semántica del inspector de episodios en routing
+### Masked routing
 
-Durante la evaluación interactiva, el `EpisodeInspectorPanel` registra un `EvaluationStepRecord` por paso y muestra metadatos propios de routing:
+El regimen nuevo de `masked routing` no redefine el entorno:
 
-- **`layout_before` / `layout_after`**: estado del mapeo lógico->físico antes y después de la acción.
-- **`visible_frontier_before`**: snapshot de la frontera visible antes del paso. Cada entrada incluye puerta, qubits lógicos, qubits físicos proyectados y si la puerta ya era ejecutable.
-- **`swap_edge`**: arista física seleccionada por la acción discreta cuando el agente inserta un SWAP.
-- **`executed_gates`**: puertas que el entorno pudo ejecutar en cascada tras actualizar el layout.
-- **`routing_progress_delta`**: progreso neto de routing inducido por la acción.
-- **`repeated_layout` / `undo_swap`**: señales de diagnóstico para detectar oscilaciones o deshacer el SWAP inmediatamente anterior.
+- `MaskablePPO` es el trainer estandar para checkpoints nuevos;
+- `PPO` y `DQN` siguen soportados como legacy;
+- la mascara es determinista, frontier-aware y compatible con la codificacion fija de acciones.
 
-La lectura correcta del inspector en routing es: primero se observa la frontera visible bajo el layout actual, luego la acción modifica el layout físico mediante un SWAP y, si eso desbloquea dependencias, el entorno ejecuta automáticamente las puertas habilitadas. Por eso el panel muestra frontera, layout, SWAP y puertas ejecutadas en ese orden lógico.
+## 3. Synthesis v1
 
-### 2. Modo Síntesis (`mode="synthesis"`)
-- **Estado actual**: primer modo entrenable restringido a circuitos Clifford.
-- **Conciencia de hardware**: requiere `coupling_map` y `basis_gates`; la topología sola no determina la puerta nativa de 2 qubits.
-- **Espacio de acción**: `Discrete(N)` sobre un catálogo fijo de primitivas Clifford hardware-aware.
-- **Criterio de éxito**: equivalencia Clifford por residual identidad en espacio físico.
-- **Limitación actual**: el layout es fijo durante el episodio; no hay `swap` dinámico en synthesis v1.
+`synthesis` es un modo acotado y distinto de routing.
 
-### Semántica del inspector de episodios en synthesis
+- trabaja sobre circuitos Clifford;
+- necesita `basis_gates` ademas del coupling map;
+- usa primitivas hardware-aware en vez de swaps;
+- mantiene el layout fijo durante el episodio;
+- el criterio de progreso es el residual Clifford, no una cola de puertas pendientes.
 
-En `synthesis`, el inspector reutiliza el mismo panel pero cambia completamente la interpretación del paso:
+`synthesis_primitives.py` define el catalogo discreto de primitivas. `synthesis_clifford.py` construye y evalua el estado residual fisico.
 
-- **`primitive_name`**: nombre de la primitiva aplicada desde el catálogo hardware-aware.
-- **`primitive_physical_qargs`**: qubits físicos sobre los que se intenta aplicar la primitiva.
-- **`primitive_cost`**: coste asociado a la primitiva elegida.
-- **`residual_distance_before` / `residual_distance_after`**: distancia del residual antes y después del paso.
-- **`residual_distance_delta`**: mejora neta del residual causada por la acción.
+## 4. Entrenamiento y metadata
 
-La visualización de `synthesis` es deliberadamente **residual-céntrica**. El panel no debe interpretarse como una cola de "puertas restantes" al estilo routing. El episodio progresa reduciendo el residual Clifford hacia la identidad física, y cada paso se describe por la primitiva aplicada y por cuánto reduce (o no) esa distancia residual.
+### `agent.py`
 
-## Sistema de Recompensas (`rewards.py`)
+Encapsula Stable-Baselines3 y permite cargar o entrenar politicas para routing y synthesis.
 
-Extraído con el patrón *RewardStrategy*. Permite modificar heurísticas de recompensa sin alterar la mecánica de Gymnasium. Para `RoutingReward`:
-- **SWAP aplicado:** Penalización ligera (ej. -1.0) incentivando caminos críticos cortos y menos puertas añadidas.
-- **Puertas ejecutadas:** Fuerte bonificación (ej. +10.0) fomentando progreso.
-- **Acción Inválida:** Penalización media (ej. -5.0) para prevenir movimientos fuera de rango o mal uso del coupling map.
-- **Truncación (`max_steps` expirado):** Fuerte penalización en los límites temporales (ej. -20.0).
-- **Circuito Completado:** Bonificación masiva a final de episodio (+50.0).
+### `training.py`
 
-## Entrenamiento y Agente (SB3)
-Se utilizan los wrappers del archivo `agent.py` y `training.py` basados en `stable_baselines3`.
-El método `setup_training_pipeline()` permite acoplar automáticamente semillas de reproducibilidad (`set_global_seeds`), encapsular el entorno Gymnasium para reportes (`Monitor`), e inyectar `Dict` Policies a través del motor PyTorch que correrá predefinido en CUDA. Se levantan periódicamente *TensorBoard Logs* y *Checkpoint Calbacks* como sistema de salvado.
-En `mode="synthesis"`, el pipeline también debe recibir `basis_gates` explícitas para construir el catálogo de primitivas tanto en entrenamiento como en evaluación.
+Responsable de:
 
-Para DQN, se inyectan automáticamente hiperparámetros estabilizadores: `exploration_fraction=0.5` (mayor exploración durante el entrenamiento), `tau=0.05` (soft target updates para suavizar el aprendizaje) y `learning_starts=1000`.
+- fijar semillas;
+- crear entornos de entrenamiento y evaluacion;
+- envolver con `Monitor`;
+- registrar callbacks;
+- guardar modelos y artefactos.
 
-## Gestión de Layouts Físicos vs. Lógicos
+### `model_metadata.py`
 
-Cuando el circuito tiene menos qubits lógicos que el hardware físico (ej. Bell State de 2 qubits en un anillo de 5), los arrays se dimensionan correctamente:
-- `current_layout` tiene tamaño `num_qubits` (lógicos).
-- `_inverse_layout` tiene tamaño `num_physical_qubits` (hardware), con `-1` para posiciones vacías.
-- SWAPs entre dos posiciones físicas **ambas vacías** (`lq1 == -1 and lq2 == -1`) se marcan como acción inválida y reciben penalización.
+Es el contrato que conecta entrenamiento y evaluacion.
 
-## Problema Conocido: Oscilación en Evaluación
+- `build_run_metadata()` crea el metadata que luego se persiste como `run_metadata.json`.
+- `save_run_metadata()` guarda el sidecar.
+- `load_run_metadata_for_model()` lo recupera cuando `integration` evalua un checkpoint.
 
-### Síntoma
-Durante el entrenamiento, la media móvil de recompensa sube y la longitud de episodio baja, indicando que el agente **aprende correctamente**. Sin embargo, al evaluar el modelo entrenado, el agente entra en un bucle infinito de oscilaciones (ej. Layout A → B → A → B...) sin resolver nunca el circuito.
+Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Si falta, `integration` cae a defaults legacy.
 
-### Causa Raíz
-Durante el entrenamiento, PPO utiliza una **política estocástica**: muestrea acciones de su distribución de probabilidades, lo que rompe ciclos naturalmente por azar. Sin embargo, durante la evaluación (tanto con `deterministic=True` como `deterministic=False`), el agente tiende a repetir las mismas decisiones porque:
+## 5. GUI e inspeccion
 
-1. **Sin memoria explícita:** La red neuronal (MLP) no tiene estado recurrente. Si observa el mismo layout dos veces, emite la misma distribución de acciones. Aunque se añadió un escalar `step_progress` (progreso temporal normalizado `current_step / max_steps`) a la observación, este valor cambia muy lentamente en episodios largos (200 steps) y no es suficiente para diferenciar estados de forma efectiva.
+La GUI no es un adorno.
 
-2. **Política no convergida:** En entornos con espacio de estados pequeño (ej. Bell State en Ring-5 se resuelve en 1 SWAP), la red no tiene suficiente señal de gradiente para distinguir cuál de las 5 aristas es la correcta para **cada** layout inicial posible.
+- `rl_gui.py` coordina la aplicacion.
+- `routing_view.py` expone controles de routing.
+- `synthesis_view.py` expone controles de synthesis.
+- `evaluation_panel.py` permite inspeccionar pasos, recompensas, layouts y trazas.
 
-3. **Diferencia train vs eval:** El ruido estocástico del entrenamiento actúa como exploración implícita y enmascara el problema. En evaluación pura, el ruido desaparece y los ciclos emergen.
+La GUI sirve para explicar por que una politica se comporta como lo hace y para detectar oscilaciones, patrones repetitivos y progreso real.
 
-### Mitigaciones Implementadas
-- **`step_progress` en observación** (`env_strategies.py`): Escalar $\in [0, 1]$ que da contexto temporal al agente. Ayuda parcialmente pero no resuelve el problema por completo.
-- **Lookahead enriquecido**: `lookahead_physical`, `lookahead_executable`, `lookahead_routing_distance` y `lookahead_valid_mask` hacen explícito el efecto de cada `SWAP` sobre la frontera observable.
-- **`frontier_mode="dag"`**: permite representar correctamente puertas paralelas en circuitos con dependencias no lineales.
-- **Detección visual de ciclos en GUI** (`rl_gui.py`): durante la evaluación interactiva de **routing**, la GUI detecta si un layout se visita 3 veces y corta el episodio mostrando `"CICLO DETECTADO ⚠"`. Esto **no afecta** al entorno de entrenamiento y no se aplica a `synthesis`, donde el layout puede permanecer fijo por diseño y el progreso se mide sobre el residual, no sobre cambios de layout.
-- **Penalización de SWAPs vacíos** (`environment.py`): Los SWAPs entre dos posiciones físicas sin qubit lógico se marcan como inválidos (-5.0 de penalización).
-- **Shaping por repetición en routing** (`rewards.py` + `environment.py`): el entorno expone señales `repeated_layout`, `undo_swap` y `routing_progress_delta`, y `RoutingReward` ya penaliza repeticiones/undo-swap y bonifica progreso neto de routing.
+## 6. Decisiones de diseno
 
-### Posibles Soluciones Futuras (No Implementadas)
-1. **Redes recurrentes (LSTM):** Usar `RecurrentPPO` de `sb3-contrib` para dar al agente memoria real de acciones pasadas.
-2. **State hashing en la observación:** Incluir un hash de los últimos N layouts visitados como parte de la observación.
-3. **Memoria explícita o contexto histórico richer:** Añadir contexto de historial sin depender solo de `step_progress`, por ejemplo mediante observaciones recurrentes o features de trayectoria más expresivas.
-4. **Mayor entrenamiento y `max_steps` ajustado:** Con circuitos más complejos y más timesteps, la política podría converger lo suficiente para no oscilar.
+- Se separa la semantica por estrategias para evitar duplicar el entorno.
+- Se mantiene una representacion de layout dual para acceder en O(1).
+- El action space permanece fijo y la restriccion de candidatos se aplica con mascaras.
+- La compatibilidad hacia atras es explicita mediante metadata versionada y fallback legacy.
+- `rl_module` no orquesta Campaigns ni produce layouts; ese rol es de `integration`.
 
----
+## 7. Documentacion relacionada
 
-## Elementos a Consultar (Preguntas para los tutores del TFG)
+- [../README.md](../README.md): entrada canonica del modulo.
+- [lookahead_frontier.md](lookahead_frontier.md): detalle de observacion y frontier.
+- [routing_stability_roadmap.md](routing_stability_roadmap.md): roadmap de estabilidad y masking.
+- [synthesis_mode_status.md](synthesis_mode_status.md): estado del modo synthesis.
+- [rl_module_explicacion_tfg.md](rl_module_explicacion_tfg.md): nota de defensa y apunte para la memoria.
 
-En esta recta final del desarrollo de `rl_module`, se enumeran las dudas y consideraciones que deberíamos evaluar y debatir frente a los tutores para encauzar correctamente la memoria y pruebas:
-
-1. **Representación Estricta de DAG:**
-   Actualmente, el mecanismo *Lookahead* del entorno extrae las siguientes puertas iterando la serie algorítmica de Qiskit por motivos de velocidad en el entrenamiento masivo. Sin embargo, para extraer el verdadero *paralelismo*, lo óptimo en la literatura ha sido utilizar el generador `DAGCircuit.front_layer()`.
-   ¿Deberíamos reestructurar el Lookahead para ser puramente por DAG y asumir esa pérdida de rendimiento/velocidad del pipeline de entrenamiento, o se documenta nuestra heurística y por qué es funcional con esta topología?
-
-2. **Sistema y Ajuste de Recompensas (`rewards.py`):**
-   ¿Existen valores de pesos o penalizaciones iniciales recomendados basados en la experiencia con enrutadores previos? (Revisar los pesos iniciales: -1 por SWAP, +10 por ejecutar frente a la penalización de timeout). ¿Sugerencias sobre recompensas negativas incrementales?
-
-3. **Algoritmos SB3 y Experimentos:**
-   Nuestro Wrapper soporta tanto `PPO` como `DQN` en políticas de `MultiInput`, y añade `MaskablePPO` como estándar para checkpoints nuevos de masked routing. ¿Recomiendan enfocar la computación empírica principal en `MaskablePPO` para el nuevo régimen enmascarado, manteniendo comparativas gruesas con PPO/DQN legacy cuando resulte útil para el informe?
-
-5. **Entrenamiento y Fuentes de `initial_layout`:**
-   El sistema actualmente expone la inyección de un *Layout Estático Inicial* como input externo. A la hora de entrenar al agente de forma general (durante los miles de timesteps), ¿deberíamos exponerle distribuciones variadas de layouts iniciales sobre diferentes circuitos, o dejarlo entrenar primero con *layouts 1:1* ruidosos/adversariales para forzar su robustez al routing independientemente del productor aguas arriba? La orquestación de un futuro handoff MO -> RL pertenece a `src/integration/`.
-
-6. **Oscilación en Evaluación (ver sección "Problema Conocido"):**
-   El agente aprende correctamente durante el entrenamiento (reward crece, longitud de episodio baja) pero entra en bucle al evaluarlo. ¿Qué enfoque recomiendan: redes recurrentes (`RecurrentPPO`), penalización explícita por repetición de layouts, o considerarlo una limitación inherente del MLP sin memoria y documentarlo como tal?

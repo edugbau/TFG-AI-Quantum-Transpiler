@@ -1,49 +1,25 @@
 """
-qiskit_interface — Módulo 1: Interfaz con Qiskit
-=================================================
+qiskit_interface - contrato de circuitos, backends y transpilacion
+===================================================================
 
-Módulo de interfaz con el ecosistema Qiskit 2.x para el TFG
-"Transpilación Cuántica Híbrida".
+Este paquete expone la capa comun entre Qiskit y el resto del proyecto.
+Su superficie publica agrupa:
 
-Este paquete proporciona tres sub-módulos:
+  - **circuit_utils**: carga, creacion, conversion y metricas de circuitos.
+  - **backend_info**: metadata de hardware simulado y layouts heuristicos.
+  - **transpiler**: baseline de Qiskit, evaluacion de layouts externos y
+    helpers de comparacion.
 
-  - **circuit_utils**: Carga, creación, conversión y extracción de
-    métricas de circuitos cuánticos.
-  - **backend_info**: Consulta de información de backends cuánticos
-    simulados (topología, puertas nativas, errores, T1/T2).
-  - **transpiler**: Transpilación estándar de Qiskit como baseline
-    y utilidades de comparación.
-
-Uso típico::
-
-    from src.qiskit_interface import (
-        create_ghz_circuit,
-        extract_metrics,
-        get_backend,
-        extract_backend_info,
-        transpile_circuit,
-        transpile_all_levels,
-    )
-
-    # Crear circuito y extraer métricas
-    ghz = create_ghz_circuit(5)
-    metrics = extract_metrics(ghz)
-    print(metrics.summary())
-
-    # Obtener info del backend
-    backend = get_backend("fake_torino")
-    info = extract_backend_info(backend)
-
-    # Transpilar y comparar
-    result = transpile_circuit(ghz, backend=backend, optimization_level=2)
-    print(result.summary())
+El resto del proyecto consume esta fachada para generar circuitos,
+evaluar layouts y construir artefactos serializables sin acoplarse a los
+detalles internos de Qiskit.
 """
 
 # ===================================================================
-#  Re-exportaciones públicas
+#  Re-exportaciones publicas
 # ===================================================================
-#  Se importan aquí los símbolos más usados para que los usuarios
-#  del módulo puedan hacer:
+#  Se importan aqui los simbolos mas usados para que los usuarios
+#  del modulo puedan hacer:
 #      from src.qiskit_interface import create_ghz_circuit
 #  en lugar de:
 #      from src.qiskit_interface.circuit_utils import create_ghz_circuit
@@ -107,7 +83,7 @@ from .transpiler import (
 )
 
 # ===================================================================
-#  __all__ — API pública explícita
+#  __all__ - API publica explicita
 # ===================================================================
 __all__ = [
     # circuit_utils

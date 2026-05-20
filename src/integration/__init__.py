@@ -1,10 +1,13 @@
-"""Module 4: integration and experimentation.
+"""integration - orquestacion de scenarios y Campaigns.
 
-This package owns the MO -> RL handoff and the routing-evaluation v1
-scope for `Baseline`, `MO_Only`, `RL_Only`, and `MO+RL` scenarios.
+Este paquete conecta `qiskit_interface`, `mo_module` y `rl_module`.
+Su superficie publica cubre los contratos de Scenario y la capa minima de
+routing-evaluation v1 para `Baseline`, `MO_Only`, `RL_Only` y `MO+RL`.
 
-RL-based scenarios rebuild routed circuits and run Qiskit post-routing
-metrics when the routing episode completes.
+RL-based scenarios rebuild routed circuits when the episode completes.
+La orquestacion de Campaigns, el handoff MO -> RL y la persistencia
+publica viven aqui; la logica interna de MO y RL permanece en sus
+modulos respectivos.
 """
 
 from .contracts import (

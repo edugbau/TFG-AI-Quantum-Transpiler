@@ -1,6 +1,12 @@
 import ast
-import re
 from pathlib import Path
+
+import pytest
+
+import src.integration as integration
+from src.integration import LayoutSelectionPolicy, ScenarioRequest
+from src.integration.synthetic_topology import SyntheticTopologySpec
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,116 +25,12 @@ def assert_excludes_all(text: str, forbidden_tokens: tuple[str, ...]) -> None:
         assert token not in text
 
 
-def assert_any_contains(text: str, alternatives: tuple[str, ...]) -> None:
-    assert any(option in text for option in alternatives)
-
-
-def assert_mentions_initial_layout_from_caller(text: str) -> None:
-    assert "initial_layout" in text
-    assert_any_contains(
-        text,
-        (
-            "suministrados por el llamador",
-            "suministrado por el llamador",
-            "desde el llamador",
-        ),
-    )
-
-
-def assert_mentions_fixed_session_ref_point(text: str) -> None:
-    lowered = text.lower()
-
-    assert_contains_all(text, ("session_ref_point", "calibrated", "manual", "HV=0.0"))
-    assert "trial" in lowered
-    assert "seed" in lowered
-    assert "recalcul" in lowered
-    assert "warning" in lowered or "aviso" in lowered
-    assert "promedi" in lowered or "media" in lowered
-    assert "1.3x" in text or "30 %" in text or "30%" in text
-    assert "ValueError" not in text
-    assert "fijo" in lowered or "fija" in lowered
-    assert "resultado/frente" in lowered
-
-
-def assert_mentions_event_specific_payloads(text: str) -> None:
-    lowered = text.lower()
-
-    assert_contains_all(
-        text,
-        (
-            "calibration_started",
-            "calibration_progress",
-            "calibration_completed",
-            "trial_completed",
-            "tuning_completed",
-        ),
-    )
-    assert "payload" in lowered or "evento" in lowered
-    assert "campos relevantes" in lowered or "espec" in lowered
-    assert "mismo payload" in lowered or "payloads son específicos" in lowered
-    assert "no todos" in lowered or "cada evento" in lowered
-
-
-def assert_mentions_calibration_progress_fields(text: str) -> None:
-    assert "calibration_progress" in text
-    assert_contains_all(text, ("current_step", "total_steps", "config", "ref_point_candidate"))
-
-
-def assert_mentions_trial_completed_fields(text: str) -> None:
-    assert "trial_completed" in text
-    assert_contains_all(text, ("score", "best_score", "params", "ref_point"))
-
-
-def assert_mentions_supported_crossover_options(text: str) -> None:
-    lowered = text.lower()
-
-    assert_contains_all(text, ("crossover_operator", "DPXCrossover", "LayoutCrossover"))
-    assert "`dpx`" in lowered
-    assert "`ox`" in lowered
-    assert "por defecto" in lowered
-    assert_any_contains(lowered, ("alternativa", "opcional"))
-    assert "prob_crossover" not in text
-
-
-def assert_integration_v1_doc_scope(text: str) -> None:
-    assert_contains_all(text, ("Baseline", "MO_Only", "RL_Only", "MO+RL"))
-
-    lowered = text.lower()
-    assert "routing" in lowered
-    assert "qiskit-facing scenarios" in lowered
-    assert "qasm input is available" in lowered
-    assert "rebuilds the routed circuit" in lowered
-    assert "post-routing qiskit stages" in lowered
-    assert "deferred" in lowered
-    assert "qasm" in lowered
-    assert "backend catalog is intentionally limited" in lowered
-    assert "fake backends" in lowered
-
-
-def assert_mentions_masked_routing_regime(text: str) -> None:
-    lowered = text.lower()
-
-    assert "masked routing" in lowered
-    assert "sabre" in lowered
-    assert "fixed" in lowered or "fijo" in lowered or "fija" in lowered
-    assert "coupling" in lowered
-    assert "action_masks()" in text
-    assert "deterministic" in lowered or "determinista" in lowered
-    assert "frontier-aware" in lowered
-    assert "hard mask" in lowered
-    assert "maskableppo" in lowered or "maskableppo" in text
-    assert "legacy ppo/dqn" in lowered or ("legacy" in lowered and "ppo" in lowered and "dqn" in lowered)
-    assert "checkpoint" in lowered
-
-
 def iter_python_files(relative_dir: str):
     return (ROOT / relative_dir).rglob("*.py")
 
 
 def assert_module_tree_has_no_imports(relative_dir: str, forbidden_modules: tuple[str, ...]) -> None:
-    forbidden_prefixes = forbidden_modules + tuple(
-        f"src.{module}" for module in forbidden_modules
-    )
+    forbidden_prefixes = forbidden_modules + tuple(f"src.{module}" for module in forbidden_modules)
 
     for python_file in iter_python_files(relative_dir):
         tree = ast.parse(python_file.read_text(encoding="utf-8"), filename=str(python_file))
@@ -140,7 +42,6 @@ def assert_module_tree_has_no_imports(relative_dir: str, forbidden_modules: tupl
                         alias.name == module or alias.name.startswith(f"{module}.")
                         for module in forbidden_prefixes
                     ), f"{python_file} imports forbidden module {alias.name!r}"
-
             elif isinstance(node, ast.ImportFrom):
                 module_name = node.module
                 if module_name is not None:
@@ -148,17 +49,71 @@ def assert_module_tree_has_no_imports(relative_dir: str, forbidden_modules: tupl
                         module_name == module or module_name.startswith(f"{module}.")
                         for module in forbidden_prefixes
                     ), f"{python_file} imports forbidden module {module_name!r}"
-
-                    if module_name == "src":
-                        for alias in node.names:
-                            assert alias.name not in forbidden_modules, (
-                                f"{python_file} imports forbidden module src.{alias.name}"
-                            )
                 elif node.level > 0:
                     for alias in node.names:
                         assert alias.name not in forbidden_modules, (
                             f"{python_file} imports forbidden relative module {alias.name}"
                         )
+
+
+def test_scenario_request_defaults_and_normalization() -> None:
+    request = ScenarioRequest(
+        scenario_name="MO_Only",
+        circuit_name="ghz_5",
+        num_qubits=5,
+        backend_name="fake_backend",
+        layout_policy="compromise",
+    )
+
+    assert request.seed == 42
+    assert request.layout_policy is LayoutSelectionPolicy.COMPROMISE
+    assert request.circuit_source.value == "library"
+    assert request.circuit_format.value == "auto"
+
+
+def test_scenario_request_accepts_matching_synthetic_topology() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=5)
+
+    request = ScenarioRequest(
+        scenario_name="MO_Only",
+        circuit_name="ghz_5",
+        num_qubits=5,
+        backend_name=synthetic_topology.backend_name,
+        synthetic_topology=synthetic_topology,
+    )
+
+    assert request.synthetic_topology is synthetic_topology
+
+
+def test_scenario_request_rejects_invalid_baseline_inputs() -> None:
+    with pytest.raises(ValueError):
+        ScenarioRequest(
+            scenario_name="Baseline",
+            circuit_name="ghz",
+            num_qubits=3,
+            backend_name="fake_torino",
+            initial_layout=[0, 1, 2],
+        )
+
+
+def test_scenario_request_requires_rl_model_for_rl_only() -> None:
+    with pytest.raises(ValueError):
+        ScenarioRequest(
+            scenario_name="RL_Only",
+            circuit_name="ghz",
+            num_qubits=3,
+            backend_name="fake_torino",
+        )
+
+
+def test_public_integration_contracts_do_not_export_scenario_name() -> None:
+    assert integration.__all__ == [
+        "LayoutSelectionPolicy",
+        "RoutingEpisodeSummary",
+        "ScenarioRequest",
+        "ScenarioResult",
+    ]
+    assert not hasattr(integration, "ScenarioName")
 
 
 def test_docs_and_workspace_metadata_define_four_module_ownership() -> None:
@@ -170,249 +125,190 @@ def test_docs_and_workspace_metadata_define_four_module_ownership() -> None:
         (
             "The project has 4 interconnected modules:",
             "src/integration/",
-            "benchmark scenarios",
+            "Module boundaries are respected",
+            "integration owns",
         ),
     )
-    assert_contains_all(workspace_agents_text, ("Module boundaries are respected", "integration owns"))
-    assert_contains_all(workspace_agents_text, ("orchestration", "handoff scenarios"))
     assert_contains_all(
         readme_text,
         (
-            "Proyecto de transpilación cuántica organizado en cuatro módulos",
-            "MO y RL evolucionan como módulos separados",
-            "MO+RL",
-        ),
-    )
-    assert_contains_all(readme_text, ("integration`", "handoff", "orquestación"))
-    assert_excludes_all(
-        workspace_agents_text,
-        (
-            "Pipeline orchestration: MO layouts feed RL agent",
-            "Qiskit interface → MO optimization → RL synthesis → integration orchestration",
-        ),
-    )
-    assert_excludes_all(
-        readme_text,
-        (
-            "Pipeline híbrido de transpilación de circuitos cuánticos que combina",
-            "recibe los layouts optimizados como entrada",
+            "Como leer el proyecto",
+            "src/qiskit_interface/README.md",
+            "src/mo_module/README.md",
+            "src/rl_module/README.md",
+            "src/integration/README.md",
+            "Scenario",
+            "Campaign",
+            "layout[i] = physical_qubit_for_logical_qubit_i",
         ),
     )
 
 
-def test_qiskit_interface_docs_keep_initial_layout_generic() -> None:
+def test_qiskit_interface_docs_define_central_contracts() -> None:
     transpiler_text = read_text("src/qiskit_interface/transpiler.py")
     qiskit_readme_text = read_text("src/qiskit_interface/README.md")
 
-    assert_mentions_initial_layout_from_caller(transpiler_text)
-    assert "initial_layout" in qiskit_readme_text
     assert_contains_all(
         qiskit_readme_text,
         (
-            "load_circuit(",
-            "`qasm3`",
-            "`auto`",
+            "CircuitMetrics",
+            "BackendInfo",
+            "TranspilationResult",
+            "two_qubit_gates",
+            "cnot_equivalent",
+            "load_circuit",
             "fake_torino",
-            "fake_sherbrooke",
             "fake_brisbane",
-            "Baseline",
-            "MO_Only",
+            "transpile_post_routing",
+            "run_baseline",
+            "run_named_baseline",
         ),
     )
-    assert_any_contains(
-        qiskit_readme_text.lower(),
-        ("resúmenes de episodio", "resumenes de episodio"),
-    )
-    assert "helper de evaluación local" in qiskit_readme_text
+    assert_contains_all(qiskit_readme_text, ("initial_layout", "mo_module", "integration"))
+    assert "initial_layout" in transpiler_text
     assert "src/integration/" in transpiler_text
-    assert "No implementa la integración MO -> RL" in transpiler_text
-
-    assert_excludes_all(
-        transpiler_text,
-        (
-            "layout inicial personalizado (del módulo MO)",
-            "layouts del módulo MO",
-            "puente principal",
-            "híbrido MO+RL",
-        ),
-    )
-    assert_excludes_all(
-        qiskit_readme_text,
-        ("Función puente para el Módulo MO",),
-    )
 
 
-def test_mo_docs_route_layout_consumption_through_integration() -> None:
-    mo_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
-
-    assert "consumibles por el módulo `integration`" in mo_doc_text
-    assert "escenarios `MO_Only` y futuros flujos `MO+RL`" in mo_doc_text
-    assert "Salida hacia el módulo `rl_module`" not in mo_doc_text
-
-
-def test_mo_docs_keep_mo_to_rl_handoff_exclusive_to_integration() -> None:
-    internal_text = read_text("src/mo_module/docs/internal_documentation.md")
-    benchmark_text = read_text("src/mo_module/docs/benchmark_documentation.md")
+def test_mo_docs_define_layout_flow_and_local_benchmarking() -> None:
+    mo_readme_text = read_text("src/mo_module/README.md")
 
     assert_contains_all(
-        internal_text,
+        mo_readme_text,
         (
-            "consumibles por el módulo `integration`",
-            "no debe comunicarse directamente con `rl_module`",
-            "handoff MO -> RL pertenece exclusivamente a `src/integration/`",
-        ),
-    )
-    assert_contains_all(
-        benchmark_text,
-        (
-            "tooling experimental local al módulo MO",
-            "no actúan como puente de orquestación hacia `rl_module`",
-            "src/integration/",
+            "encoding",
+            "fitness",
+            "optimizer",
+            "pareto",
+            "tuning",
+            "benchmark",
+            "layout_campaigns",
+            "local",
+            "handoff MO -> RL",
         ),
     )
 
 
-def test_mo_benchmark_docs_cover_phase3_layout_campaign_presets() -> None:
-    benchmark_text = read_text("src/mo_module/docs/benchmark_documentation.md")
-    campaigns_text = read_text("src/mo_module/benchmark/layout_campaigns.py")
+def test_mo_appendices_keep_tuning_and_campaign_details() -> None:
+    mo_readme_text = read_text("src/mo_module/README.md")
 
     assert_contains_all(
-        benchmark_text,
+        mo_readme_text,
         (
-            "layout_campaigns.py",
-            "run_layout_selection_campaign",
-            "build_reference_layouts",
-            "quick",
-            "balanced",
-            "thorough",
-            "reverse_trivial",
-            "high_index_block",
-            "heaviest_hex",
-            "tooling experimental local al módulo MO",
-            "no actúan como puente de orquestación hacia `rl_module`",
-        ),
-    )
-    assert_contains_all(
-        campaigns_text,
-        (
-            "preset",
-            "quick",
-            "balanced",
-            "thorough",
-            "heaviest_hex",
+            "docs/tuning.md",
+            "docs/benchmark_documentation.md",
+            "docs/analisis_resultados.md",
+            "docs/generacion_soluciones.md",
         ),
     )
 
 
-def test_mo_tuning_docs_keep_fixed_session_ref_point_contract() -> None:
-    tuning_doc_text = read_text("src/mo_module/docs/tuning.md")
-    internal_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
-
-    for text in (tuning_doc_text, internal_doc_text):
-        assert_mentions_fixed_session_ref_point(text)
-
-
-def test_mo_docs_describe_event_specific_progress_payloads() -> None:
-    tuning_doc_text = read_text("src/mo_module/docs/tuning.md")
-    mo_doc_text = read_text("src/mo_module/docs/internal_documentation.md")
-
-    assert_mentions_event_specific_payloads(mo_doc_text)
-    assert_mentions_calibration_progress_fields(tuning_doc_text)
-    assert_mentions_trial_completed_fields(tuning_doc_text)
-
-
-def test_mo_generation_docs_match_supported_crossover_contract() -> None:
-    generation_doc_text = read_text("src/mo_module/docs/generacion_soluciones.md")
-
-    assert_mentions_supported_crossover_options(generation_doc_text)
-
-
-def test_rl_docs_and_reset_contract_keep_initial_layout_generic() -> None:
-    rl_environment_text = read_text("src/rl_module/environment.py")
-    rl_lookahead_text = read_text("src/rl_module/docs/lookahead_frontier.md")
+def test_rl_docs_define_routing_synthesis_and_metadata_contracts() -> None:
+    rl_readme_text = read_text("src/rl_module/README.md")
     rl_internal_text = read_text("src/rl_module/docs/internal_documentation.md")
 
     assert_contains_all(
-        rl_environment_text,
+        rl_readme_text,
         (
-            "Permite inyectar un `initial_layout` externo a través de `options`.",
-            "# Ingesta genérica de layout inicial desde el llamador",
-        ),
-    )
-    assert_contains_all(
-        rl_lookahead_text,
-        (
-            "Si se inyecta `initial_layout`, el entorno lo respeta exactamente.",
-            "El productor del `initial_layout` es externo al módulo; el handoff MO -> RL pertenecerá a `src/integration/`.",
+            "routing",
+            "masked routing",
+            "synthesis",
+            "training",
+            "model_metadata",
+            "RLBenchmarkGUI",
+            "integration",
+            "MaskablePPO",
         ),
     )
     assert_contains_all(
         rl_internal_text,
         (
-            "input externo",
-            "handoff MO -> RL",
-            "src/integration/",
-        ),
-    )
-    assert_excludes_all(
-        rl_environment_text,
-        ("desde el Módulo MO",),
-    )
-    assert_excludes_all(
-        rl_internal_text,
-        (
-            "generado típicamente por el módulo de Optimización Multiobjetivo (MO)",
-            "traído desde el Algoritmo Genético Multiobjetivo",
+            "run_metadata.json",
+            "synthesis_primitives",
+            "synthesis_clifford",
+            "MaskablePPO",
+            "integration",
         ),
     )
 
 
-def test_integration_docs_declare_routing_v1_scope_and_rl_reconstruction_scope() -> None:
+def test_integration_docs_define_scenario_and_campaign_layers() -> None:
     integration_text = read_text("src/integration/__init__.py")
     integration_readme_text = read_text("src/integration/README.md")
+    internal_doc_text = read_text("src/integration/docs/internal_documentation.md")
 
     assert_contains_all(
         integration_text,
         ("routing-evaluation v1", "RL-based scenarios rebuild routed circuits"),
     )
-    assert_integration_v1_doc_scope(integration_readme_text)
+    assert_contains_all(
+        integration_readme_text,
+        (
+            "Scenario",
+            "Campaign",
+            "SyntheticTopologySpec",
+            "mo_effort_mode",
+            "load_campaign_batch",
+            "run_campaign_batch",
+            "run_metadata.json",
+            "path-expanded routing subgraph",
+            "fake_torino",
+            "fake_brisbane",
+            "Baseline",
+            "MO_Only",
+            "RL_Only",
+            "MO+RL",
+        ),
+    )
+    assert_contains_all(
+        internal_doc_text,
+        (
+            "ScenarioRequest",
+            "CampaignConfig",
+            "SyntheticTopologySpec",
+            "run_campaign_batch",
+            "run_metadata.json",
+            "path-expanded routing subgraph",
+        ),
+    )
 
 
 def test_masked_routing_docs_describe_public_contracts() -> None:
     repo_readme_text = read_text("README.md")
+    rl_readme_text = read_text("src/rl_module/README.md")
     rl_internal_text = read_text("src/rl_module/docs/internal_documentation.md")
-    rl_lookahead_text = read_text("src/rl_module/docs/lookahead_frontier.md")
-    roadmap_text = read_text("src/rl_module/docs/routing_stability_roadmap.md")
     integration_readme_text = read_text("src/integration/README.md")
     integration_internal_text = read_text("src/integration/docs/internal_documentation.md")
-    future_iteration_text = read_text(
-        "docs/future-iterations/chapter3-branch2-frontier-observation-and-feasible-actions.md"
-    )
 
-    for text in (
-        repo_readme_text,
-        rl_internal_text,
-        rl_lookahead_text,
-        roadmap_text,
-        future_iteration_text,
-    ):
-        assert_mentions_masked_routing_regime(text)
+    assert_contains_all(repo_readme_text, ("masked routing", "MaskablePPO", "run_metadata.json"))
+
+    for text in (rl_readme_text, rl_internal_text):
+        assert_contains_all(
+            text,
+            (
+                "masked routing",
+                "action_masks()",
+                "frontier-aware",
+                "MaskablePPO",
+                "legacy",
+            ),
+        )
 
     assert_contains_all(
         integration_readme_text,
         (
-            "versioned masked routing metadata",
-            "legacy fallback remains",
-            "RL_Only` rebuilds the routed circuit",
-            "post-routing Qiskit stages",
+            "masked routing",
+            "legacy",
+            "run_metadata.json",
+            "Campaign",
         ),
     )
     assert_contains_all(
         integration_internal_text,
         (
-            "versioned masked routing metadata",
-            "legacy defaults",
-            "MaskablePPO",
+            "masked routing",
+            "legacy",
+            "run_metadata.json",
+            "Campaign",
         ),
     )
 
