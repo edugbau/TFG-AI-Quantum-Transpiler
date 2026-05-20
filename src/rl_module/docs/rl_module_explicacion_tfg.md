@@ -60,7 +60,7 @@ Esto es importante porque desacopla la búsqueda del layout inicial de la polít
 
 ### Salidas principales
 
-- un agente entrenado (`PPO` o `DQN`) capaz de actuar en el entorno;
+- un agente entrenado (`PPO`, `DQN` o `MaskablePPO` para routing enmascarado) capaz de actuar en el entorno;
 - episodios evaluables paso a paso;
 - métricas de entrenamiento;
 - trazas e inspección visual mediante la GUI.
@@ -138,7 +138,7 @@ Implementa la lógica matemática específica del modo `synthesis` basado en Cli
 
 ### `agent.py`
 
-Encapsula Stable-Baselines3 en `QuantumRLAgent`. Soporta `PPO` y `DQN`, y detecta automáticamente si hay `CUDA` disponible.
+Encapsula Stable-Baselines3 en `QuantumRLAgent`. Soporta `PPO`, `DQN` y `MaskablePPO` para routing enmascarado, y detecta automáticamente si hay `CUDA` disponible.
 
 ### `training.py`
 
@@ -451,6 +451,7 @@ Los algoritmos soportados son:
 
 - `PPO`
 - `DQN`
+- `MaskablePPO` (solo routing enmascarado)
 
 El agente usa por defecto `MultiInputPolicy`, porque las observaciones son diccionarios con varias entradas heterogéneas.
 

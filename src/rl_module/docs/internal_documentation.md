@@ -12,7 +12,7 @@ src/rl_module/
 ├── env_strategies.py    # Patrón Strategy que expone modos: RoutingStrategy, SynthesisStrategy.
 ├── frontier.py          # Proveedores de frontera (secuencial y DAG) para routing.
 ├── rewards.py           # Sistema desacoplado de heurísticas (RoutingReward, SynthesisReward).
-├── agent.py             # Wrapper (QuantumRLAgent) orquestando Stable-Baselines3 (PPO / DQN) y soporte GPU/CUDA.
+├── agent.py             # Wrapper (QuantumRLAgent) orquestando Stable-Baselines3 (PPO / DQN / MaskablePPO) y soporte GPU/CUDA.
 ├── training.py          # Script de abstracción y pipeline de entrenamiento (logs en TensorBoard y Checkpoint callbacks).
 ├── gui/                 # GUI única con vistas especializadas por modo y panel de inspección de episodios.
 └── docs/                # Documentación interna (como este archivo).

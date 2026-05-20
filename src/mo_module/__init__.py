@@ -15,9 +15,9 @@ Sub-módulos:
   - **encoding**: Codificación del layout como individuo evolutivo,
     operadores genéticos (sampling, crossover, mutación) adaptados
     a permutaciones parciales.
-  - **fitness**: Funciones de fitness extensibles (profundidad,
-    CNOTs, tasas de error, decoherencia, conectividad) con patrón
-    Strategy y evaluador compuesto.
+  - **fitness**: Funciones de fitness activas basadas en transpilación
+    (profundidad y CNOTs hoy), extensibles mediante patrón Strategy
+    y evaluador compuesto.
   - **optimizer**: Algoritmos evolutivos (NSGA-II, MOEA/D) vía pymoo,
     configuración centralizada, pipeline de optimización.
   - **pareto**: Análisis del frente de Pareto (hipervolumen, knee

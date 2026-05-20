@@ -224,7 +224,7 @@ def load_circuit(
     num_qubits: Optional[int] = None,
     circuit_path: Optional[Union[str, Path]] = None,
     circuit_format: str = "auto",
-    seed: Optional[int] = None,
+    seed: Optional[int] = 42,
 ) -> QuantumCircuit:
     """Carga un circuito desde la biblioteca interna o desde un fichero QASM."""
     if source_kind == "library":

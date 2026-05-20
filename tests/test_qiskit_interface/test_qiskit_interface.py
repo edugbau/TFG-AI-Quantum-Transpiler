@@ -236,6 +236,30 @@ class TestCircuitIO:
         assert loaded.metadata["source_format"] == "library"
         assert loaded.metadata["resolved_circuit_name"] == "ghz"
 
+    def test_load_circuit_library_defaults_to_seed_42(self, monkeypatch):
+        """load_circuit usa seed=42 por defecto para circuitos aleatorios de biblioteca."""
+        seen_seeds = []
+
+        def fake_create_random_circuit(num_qubits, depth, seed=None):
+            seen_seeds.append(seed)
+            return QuantumCircuit(num_qubits)
+
+        monkeypatch.setattr(
+            "src.qiskit_interface.circuit_utils.create_random_circuit",
+            fake_create_random_circuit,
+        )
+
+        loaded = load_circuit(
+            "library",
+            circuit_name="random_shallow",
+            num_qubits=3,
+        )
+
+        assert seen_seeds == [42]
+        assert loaded.num_qubits == 3
+        assert loaded.metadata is not None
+        assert loaded.metadata["resolved_circuit_name"] == "random_shallow"
+
     def test_load_circuit_qasm_file_auto_detects_qasm2_and_attaches_metadata(self, tmp_path):
         """load_circuit detecta QASM2 automáticamente y adjunta metadatos."""
         qasm_path = tmp_path / "simple_from_text.txt"

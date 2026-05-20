@@ -18,6 +18,9 @@ Objetivos activos:
     CNOTs) y es la principal fuente de error.
 
   Ambas métricas requieren transpilar el circuito con el layout dado.
+  Las métricas de error, decoherencia y conectividad viven en la capa
+  de diagnóstico de ``qiskit_interface``, pero no están registradas
+  como objetivos activos.
 
 Arquitectura (extensible):
   Se utiliza el patrón **Strategy** para las funciones de fitness,
@@ -449,7 +452,7 @@ class FitnessEvaluator:
         Ejemplo::
 
             evaluator = FitnessEvaluator.from_names(
-                ["depth", "avg_error_2q"],
+                ["depth", "cnot_count"],
                 backend_info=info,
                 circuit=ghz,
                 backend=backend,

@@ -101,7 +101,8 @@ Para checkpoints nuevos de este régimen, `MaskablePPO` es el trainer estándar.
 
 ## Limitación actual
 
-El modo `synthesis` sigue siendo un placeholder. La infraestructura de frontier
-y observación se comparte con routing, pero la lógica de aplicar puertas,
-comparar contra el objetivo y terminar episodios en synthesis todavía no está
-implementada.
+`lookahead` y `frontier` siguen siendo una abstracción pensada para routing.
+El modo `synthesis` ya está implementado en `environment.py` y
+`env_strategies.py`, con semántica residual-céntrica propia y una condición de
+terminación basada en que el residual Clifford llegue a la identidad. No
+reutiliza la misma lectura de "cola de puertas pendientes" que routing.
