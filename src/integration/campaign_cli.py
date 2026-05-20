@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import argparse
+import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any, Callable
 from uuid import uuid4
 
 from src.integration.campaign_contracts import Campaign, CampaignCircuitSpec, CampaignConfig
@@ -41,6 +45,26 @@ _MO_EFFORT_MODES = ("auto", "custom")
 _TOPOLOGY_SOURCES = ("backend", "synthetic")
 _DEFAULT_LAYOUT_POLICY = LayoutSelectionPolicy.COMPROMISE
 _DEFAULT_BACKEND = "fake_torino"
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCampaignResult:
+    campaign_id: str
+    status: str
+    summary_document: str
+    structured_output: str
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchReport:
+    status: str
+    dry_run: bool
+    total_campaigns: int
+    completed_campaigns: int
+    failed_campaigns: int
+    results: tuple[BatchCampaignResult, ...]
+    summary_path: str
 
 
 def _default_campaign_id() -> str:
@@ -401,6 +425,335 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
         output_fn(f"MO Objective: {config.mo_objective_name}")
 
 
+def _require_mapping(value: object, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return value
+
+
+def _require_string(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _optional_int(mapping: dict[str, Any], key: str, default: int, *, minimum: int = 0) -> int:
+    if key not in mapping:
+        return default
+    value = mapping[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    if value < minimum:
+        raise ValueError(f"{key} must be an integer >= {minimum}")
+    return value
+
+
+def _optional_float(mapping: dict[str, Any], key: str, default: float, *, minimum_exclusive: float = 0.0) -> float:
+    if key not in mapping:
+        return default
+    value = mapping[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be a number")
+    normalized = float(value)
+    if normalized <= minimum_exclusive:
+        raise ValueError(f"{key} must be greater than {minimum_exclusive}")
+    return normalized
+
+
+def _optional_bool(mapping: dict[str, Any], key: str, default: bool) -> bool:
+    if key not in mapping:
+        return default
+    value = mapping[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a boolean")
+    return value
+
+
+def _normalize_choice(
+    value: object,
+    *,
+    field_name: str,
+    valid_values: tuple[str, ...],
+) -> str:
+    raw = _require_string(value, field_name=field_name).lower()
+    valid_lookup = {valid_value.lower(): valid_value for valid_value in valid_values}
+    if raw not in valid_lookup:
+        raise ValueError(
+            f"{field_name} has invalid value {raw!r}; choose one of: {', '.join(valid_values)}"
+        )
+    return valid_lookup[raw]
+
+
+def _normalize_backend_names(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("backend_names must be a non-empty array")
+    backends = tuple(
+        _normalize_choice(backend_name, field_name="backend_names", valid_values=_BACKENDS)
+        for backend_name in value
+    )
+    if len(set(backends)) != len(backends):
+        raise ValueError("backend_names cannot contain duplicates")
+    return backends
+
+
+def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
+    circuit = _require_mapping(entry.get("circuit"), field_name="circuit")
+    family = _normalize_choice(circuit.get("family"), field_name="circuit.family", valid_values=_CIRCUIT_FAMILIES)
+    num_qubits = _optional_int(circuit, "num_qubits", 0, minimum=1)
+    circuit_specs = (CampaignCircuitSpec(family=family, num_qubits=num_qubits),)
+    mode = _normalize_choice(entry.get("mode", "default"), field_name="mode", valid_values=("default", "advanced"))
+    topology_source = _normalize_choice(
+        entry.get("topology_source", "backend"),
+        field_name="topology_source",
+        valid_values=("backend",),
+    )
+    backend_names = _normalize_backend_names(entry.get("backend_names", [_DEFAULT_BACKEND]))
+    base_config = build_default_campaign_config(circuit_specs=circuit_specs, backend_name=backend_names[0])
+    rl = _require_mapping(entry.get("rl", {}), field_name="rl")
+    mo = _require_mapping(entry.get("mo", {}), field_name="mo")
+    rl_algorithm = _normalize_choice(
+        rl.get("algorithm", base_config.rl_algorithm),
+        field_name="rl.algorithm",
+        valid_values=_RL_ALGORITHMS,
+    )
+    rl_frontier_mode = _normalize_choice(
+        rl.get("frontier_mode", base_config.rl_frontier_mode),
+        field_name="rl.frontier_mode",
+        valid_values=_FRONTIER_MODES,
+    )
+    mo_effort_mode = _normalize_choice(
+        mo.get("effort_mode", base_config.mo_effort_mode),
+        field_name="mo.effort_mode",
+        valid_values=_MO_EFFORT_MODES,
+    )
+    layout_policy_name = _normalize_choice(
+        mo.get("layout_policy", base_config.layout_policy.value),
+        field_name="mo.layout_policy",
+        valid_values=_LAYOUT_POLICIES,
+    )
+    layout_policy = LayoutSelectionPolicy(layout_policy_name)
+    mo_objective_name = mo.get("objective_name")
+    if mo_objective_name is not None:
+        mo_objective_name = _normalize_choice(
+            mo_objective_name,
+            field_name="mo.objective_name",
+            valid_values=_available_objective_names(),
+        )
+
+    return CampaignConfig(
+        circuit_specs=base_config.circuit_specs,
+        backend_names=backend_names,
+        rl_algorithm=rl_algorithm,
+        rl_total_timesteps=_optional_int(
+            rl,
+            "total_timesteps",
+            base_config.rl_total_timesteps,
+            minimum=1,
+        ),
+        rl_frontier_mode=rl_frontier_mode,
+        rl_lookahead_window=_optional_int(
+            rl,
+            "lookahead_window",
+            base_config.rl_lookahead_window,
+            minimum=1,
+        ),
+        rl_max_steps=_optional_int(rl, "max_steps", base_config.rl_max_steps, minimum=1),
+        rl_learning_rate=_optional_float(rl, "learning_rate", base_config.rl_learning_rate),
+        rl_clip_range=_optional_float(rl, "clip_range", base_config.rl_clip_range),
+        rl_target_kl=_optional_float(rl, "target_kl", base_config.rl_target_kl),
+        rl_n_eval_episodes=_optional_int(
+            rl,
+            "n_eval_episodes",
+            base_config.rl_n_eval_episodes,
+            minimum=1,
+        ),
+        seed=_optional_int(entry, "seed", base_config.seed, minimum=0),
+        mo_use_quick=_optional_bool(mo, "use_quick", base_config.mo_use_quick),
+        mo_population_size=_optional_int(
+            mo,
+            "population_size",
+            base_config.mo_population_size,
+            minimum=1,
+        ),
+        mo_n_generations=_optional_int(
+            mo,
+            "n_generations",
+            base_config.mo_n_generations,
+            minimum=1,
+        ),
+        mo_effort_mode=mo_effort_mode,
+        layout_policy=layout_policy,
+        mo_objective_name=mo_objective_name,
+        mode=mode,
+        topology_source=topology_source,
+    )
+
+
+def _build_batch_campaign(entry: dict[str, Any]) -> Campaign:
+    campaign_id = _require_string(entry.get("campaign_id"), field_name="campaign_id")
+    return Campaign.from_config(campaign_id=campaign_id, config=_build_batch_campaign_config(entry))
+
+
+def load_campaign_batch(path: Path | str) -> tuple[Campaign, ...]:
+    batch_path = Path(path)
+    try:
+        payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {batch_path}: {exc}") from exc
+
+    root = _require_mapping(payload, field_name="batch")
+    raw_campaigns = root.get("campaigns")
+    if not isinstance(raw_campaigns, list) or not raw_campaigns:
+        raise ValueError("campaigns must be a non-empty array")
+
+    campaigns: list[Campaign] = []
+    errors: list[str] = []
+    seen_ids: set[str] = set()
+    for index, raw_campaign in enumerate(raw_campaigns):
+        try:
+            campaign = _build_batch_campaign(_require_mapping(raw_campaign, field_name=f"campaigns[{index}]"))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"campaigns[{index}]: {exc}")
+            continue
+        if campaign.campaign_id in seen_ids:
+            errors.append(f"campaigns[{index}]: duplicate campaign_id: {campaign.campaign_id}")
+            continue
+        seen_ids.add(campaign.campaign_id)
+        campaigns.append(campaign)
+
+    if errors:
+        raise ValueError("\n".join(errors))
+    return tuple(campaigns)
+
+
+def _write_batch_summary(*, output_root: Path, report: BatchReport) -> None:
+    output_root.mkdir(parents=True, exist_ok=True)
+    summary_path = output_root / "batch_summary.json"
+    summary_path.write_text(json.dumps(asdict(report), indent=2), encoding="utf-8")
+
+
+def run_campaign_batch(
+    campaigns: tuple[Campaign, ...] | list[Campaign],
+    *,
+    output_root: Path | str = "campaigns",
+    dry_run: bool = False,
+    run_campaign_fn: Callable[..., object] = run_campaign,
+) -> BatchReport:
+    output_path = Path(output_root)
+    results: list[BatchCampaignResult] = []
+    for campaign in campaigns:
+        campaign_output_dir = output_path / campaign.campaign_id
+        summary_document = str(campaign_output_dir / "summary.md")
+        structured_output = str(campaign_output_dir / "campaign.json")
+        if dry_run:
+            results.append(
+                BatchCampaignResult(
+                    campaign_id=campaign.campaign_id,
+                    status="validated",
+                    summary_document=summary_document,
+                    structured_output=structured_output,
+                )
+            )
+            continue
+
+        try:
+            report = run_campaign_fn(campaign, output_root=output_path)
+        except Exception as exc:
+            results.append(
+                BatchCampaignResult(
+                    campaign_id=campaign.campaign_id,
+                    status="failed",
+                    summary_document=summary_document,
+                    structured_output=structured_output,
+                    error=str(exc),
+                )
+            )
+            continue
+
+        results.append(
+            BatchCampaignResult(
+                campaign_id=campaign.campaign_id,
+                status=report.campaign_status,
+                summary_document=summary_document,
+                structured_output=structured_output,
+            )
+        )
+
+    failed_campaigns = sum(1 for result in results if result.status == "failed")
+    completed_campaigns = sum(1 for result in results if result.status in {"completed", "validated"})
+    status = "dry_run" if dry_run else ("failed" if failed_campaigns else "completed")
+    batch_summary_path = output_path / "batch_summary.json"
+    batch_report = BatchReport(
+        status=status,
+        dry_run=dry_run,
+        total_campaigns=len(results),
+        completed_campaigns=completed_campaigns,
+        failed_campaigns=failed_campaigns,
+        results=tuple(results),
+        summary_path=str(batch_summary_path),
+    )
+    _write_batch_summary(output_root=output_path, report=batch_report)
+    return batch_report
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", dest="input_path", help="JSON file with one or more Campaign definitions.")
+    parser.add_argument("--output-root", default="campaigns")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def run_campaign_cli_from_args(
+    argv: list[str] | None = None,
+    *,
+    input_fn=input,
+    output_fn=print,
+    run_campaign_fn: Callable[..., object] = run_campaign,
+    campaign_id_factory=_default_campaign_id,
+) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    if args.input_path is None:
+        if args.dry_run:
+            output_fn("--dry-run requires --input.")
+            return 1
+        return run_interactive_campaign_cli(
+            input_fn=input_fn,
+            output_fn=output_fn,
+            run_campaign_fn=run_campaign_fn,
+            campaign_id_factory=campaign_id_factory,
+            output_root=args.output_root,
+        )
+
+    try:
+        campaigns = load_campaign_batch(args.input_path)
+    except ValueError as exc:
+        output_fn(f"Invalid campaign batch: {exc}")
+        return 1
+
+    if args.dry_run:
+        for campaign in campaigns:
+            output_fn(f"Validated campaign: {campaign.campaign_id}")
+    else:
+        output_fn(f"Executing {len(campaigns)} campaign(s) from {args.input_path}...")
+
+    report = run_campaign_batch(
+        campaigns,
+        output_root=args.output_root,
+        dry_run=args.dry_run,
+        run_campaign_fn=run_campaign_fn,
+    )
+    for result in report.results:
+        output_fn(f"Campaign ID: {result.campaign_id}")
+        output_fn(f"Final Status: {result.status}")
+        if result.error is not None:
+            output_fn(f"Error: {result.error}")
+        output_fn(f"Summary Document: {result.summary_document}")
+        output_fn(f"Structured Campaign Output: {result.structured_output}")
+    output_fn(f"Batch Summary: {report.summary_path}")
+    return 1 if report.status == "failed" else 0
+
+
 def run_interactive_campaign_cli(
     *,
     input_fn=input,
@@ -428,7 +781,7 @@ def run_interactive_campaign_cli(
 
 
 def main() -> int:
-    return run_interactive_campaign_cli()
+    return run_campaign_cli_from_args()
 
 
 if __name__ == "__main__":

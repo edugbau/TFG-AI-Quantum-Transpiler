@@ -1,0 +1,37 @@
+{
+  "campaigns": [
+    {
+      "campaign_id": "example-ghz-3-torino",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 3
+      },
+      "backend_names": [
+        "fake_torino"
+      ],
+      "seed": 42
+    },
+    {
+      "campaign_id": "example-qft-3-brisbane",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 3
+      },
+      "backend_names": [
+        "fake_brisbane"
+      ],
+      "seed": 43
+    },
+    {
+      "campaign_id": "example-random-shallow-4-torino",
+      "circuit": {
+        "family": "random_shallow",
+        "num_qubits": 4
+      },
+      "backend_names": [
+        "fake_torino"
+      ],
+      "seed": 44
+    }
+  ]
+}

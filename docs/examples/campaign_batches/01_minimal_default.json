@@ -1,0 +1,11 @@
+{
+  "campaigns": [
+    {
+      "campaign_id": "example-minimal-ghz-3",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 3
+      }
+    }
+  ]
+}

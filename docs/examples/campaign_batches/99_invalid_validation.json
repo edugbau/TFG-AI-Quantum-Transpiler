@@ -1,0 +1,31 @@
+{
+  "campaigns": [
+    {
+      "campaign_id": "invalid-family",
+      "circuit": {
+        "family": "not_a_family",
+        "num_qubits": 3
+      }
+    },
+    {
+      "campaign_id": "invalid-backend",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 3
+      },
+      "backend_names": [
+        "not_a_backend"
+      ]
+    },
+    {
+      "campaign_id": "invalid-policy",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 3
+      },
+      "mo": {
+        "layout_policy": "not_a_policy"
+      }
+    }
+  ]
+}
