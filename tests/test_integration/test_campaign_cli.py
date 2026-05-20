@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,12 @@ def _make_io(responses: list[str]) -> tuple[callable, list[str]]:
         outputs.append(str(message))
 
     return input_fn, outputs
+
+
+def _write_batch_file(tmp_path: Path, payload: dict) -> Path:
+    batch_path = tmp_path / "campaigns.json"
+    batch_path.write_text(json.dumps(payload), encoding="utf-8")
+    return batch_path
 
 
 def test_build_default_campaign_config_uses_canonical_defaults() -> None:
@@ -50,6 +57,282 @@ def test_build_default_campaign_config_uses_canonical_defaults() -> None:
     assert config.mode == "default"
     assert config.topology_source == "backend"
     assert config.synthetic_topology is None
+
+
+def test_load_campaign_batch_builds_single_campaign_from_json(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-3-torino-fast",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                    "backend_names": ["fake_torino"],
+                    "mode": "advanced",
+                    "rl": {
+                        "algorithm": "MaskablePPO",
+                        "total_timesteps": 5000,
+                        "frontier_mode": "dag",
+                        "lookahead_window": 10,
+                        "max_steps": 200,
+                        "learning_rate": 0.0001,
+                        "clip_range": 0.1,
+                        "target_kl": 0.03,
+                        "n_eval_episodes": 5,
+                    },
+                    "mo": {
+                        "effort_mode": "auto",
+                        "layout_policy": "compromise",
+                    },
+                    "seed": 42,
+                }
+            ]
+        },
+    )
+
+    campaigns = load_campaign_batch(batch_path)
+    config = campaigns[0].config
+
+    assert len(campaigns) == 1
+    assert campaigns[0].campaign_id == "ghz-3-torino-fast"
+    assert config.circuit_specs == (CampaignCircuitSpec(family="ghz", num_qubits=3),)
+    assert config.backend_names == ("fake_torino",)
+    assert config.mode == "advanced"
+    assert config.rl_algorithm == "MaskablePPO"
+    assert config.rl_total_timesteps == 5000
+    assert config.rl_frontier_mode == "dag"
+    assert config.rl_lookahead_window == 10
+    assert config.rl_max_steps == 200
+    assert config.rl_learning_rate == 0.0001
+    assert config.rl_clip_range == 0.1
+    assert config.rl_target_kl == 0.03
+    assert config.rl_n_eval_episodes == 5
+    assert config.mo_effort_mode == "auto"
+    assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
+    assert config.seed == 42
+
+
+def test_load_campaign_batch_preserves_independent_campaign_configs(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-default",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                    "backend_names": ["fake_torino"],
+                    "seed": 11,
+                },
+                {
+                    "campaign_id": "qft-advanced",
+                    "circuit": {"family": "qft", "num_qubits": 5},
+                    "backend_names": ["fake_brisbane"],
+                    "mode": "advanced",
+                    "rl": {
+                        "algorithm": "PPO",
+                        "total_timesteps": 9000,
+                        "frontier_mode": "sequential",
+                        "lookahead_window": 15,
+                        "max_steps": 300,
+                    },
+                    "mo": {
+                        "effort_mode": "custom",
+                        "use_quick": False,
+                        "population_size": MIN_CUSTOM_MO_POPULATION_SIZE,
+                        "n_generations": 70,
+                        "layout_policy": "compromise",
+                    },
+                    "seed": 99,
+                },
+            ]
+        },
+    )
+
+    first, second = load_campaign_batch(batch_path)
+
+    assert first.config.circuit_specs == (CampaignCircuitSpec(family="ghz", num_qubits=3),)
+    assert first.config.backend_names == ("fake_torino",)
+    assert first.config.rl_algorithm == "MaskablePPO"
+    assert first.config.seed == 11
+    assert first.config.mo_effort_mode == "auto"
+    assert second.config.circuit_specs == (CampaignCircuitSpec(family="qft", num_qubits=5),)
+    assert second.config.backend_names == ("fake_brisbane",)
+    assert second.config.rl_algorithm == "PPO"
+    assert second.config.rl_total_timesteps == 9000
+    assert second.config.rl_frontier_mode == "sequential"
+    assert second.config.rl_lookahead_window == 15
+    assert second.config.rl_max_steps == 300
+    assert second.config.seed == 99
+    assert second.config.mo_effort_mode == "custom"
+    assert second.config.mo_use_quick is False
+    assert second.config.mo_population_size == MIN_CUSTOM_MO_POPULATION_SIZE
+    assert second.config.mo_n_generations == 70
+
+
+def test_campaign_batch_dry_run_validates_without_executing(tmp_path) -> None:
+    from src.integration import campaign_cli
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "dry-run-campaign",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                }
+            ]
+        },
+    )
+    outputs: list[str] = []
+    run_calls: list[str] = []
+    output_root = tmp_path / "campaigns"
+
+    exit_code = campaign_cli.run_campaign_cli_from_args(
+        ["--input", str(batch_path), "--output-root", str(output_root), "--dry-run"],
+        output_fn=outputs.append,
+        run_campaign_fn=lambda campaign, *, output_root: run_calls.append(campaign.campaign_id),
+    )
+
+    summary = json.loads((output_root / "batch_summary.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert run_calls == []
+    assert "Validated campaign: dry-run-campaign" in outputs
+    assert summary["status"] == "dry_run"
+    assert summary["dry_run"] is True
+    assert summary["results"][0]["status"] == "validated"
+
+
+def test_campaign_batch_executes_queue_sequentially_in_file_order(tmp_path) -> None:
+    from src.integration import campaign_cli
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "campaign-one",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                },
+                {
+                    "campaign_id": "campaign-two",
+                    "circuit": {"family": "qft", "num_qubits": 4},
+                    "backend_names": ["fake_brisbane"],
+                },
+            ]
+        },
+    )
+    run_calls: list[str] = []
+    output_root = tmp_path / "campaigns"
+
+    def run_campaign_fn(campaign, *, output_root):
+        run_calls.append(campaign.campaign_id)
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_campaign_cli_from_args(
+        ["--input", str(batch_path), "--output-root", str(output_root)],
+        output_fn=lambda message="": None,
+        run_campaign_fn=run_campaign_fn,
+    )
+
+    summary = json.loads((output_root / "batch_summary.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert run_calls == ["campaign-one", "campaign-two"]
+    assert summary["status"] == "completed"
+    assert [result["campaign_id"] for result in summary["results"]] == [
+        "campaign-one",
+        "campaign-two",
+    ]
+
+
+def test_campaign_batch_continues_after_campaign_execution_exception(tmp_path) -> None:
+    from src.integration import campaign_cli
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "campaign-broken",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                },
+                {
+                    "campaign_id": "campaign-after",
+                    "circuit": {"family": "qft", "num_qubits": 4},
+                },
+            ]
+        },
+    )
+    run_calls: list[str] = []
+    output_root = tmp_path / "campaigns"
+
+    def run_campaign_fn(campaign, *, output_root):
+        run_calls.append(campaign.campaign_id)
+        if campaign.campaign_id == "campaign-broken":
+            raise RuntimeError("training crashed")
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_campaign_cli_from_args(
+        ["--input", str(batch_path), "--output-root", str(output_root)],
+        output_fn=lambda message="": None,
+        run_campaign_fn=run_campaign_fn,
+    )
+
+    summary = json.loads((output_root / "batch_summary.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert run_calls == ["campaign-broken", "campaign-after"]
+    assert summary["status"] == "failed"
+    assert [result["status"] for result in summary["results"]] == ["failed", "completed"]
+    assert summary["results"][0]["error"] == "training crashed"
+
+
+def test_campaign_batch_validation_errors_prevent_execution(tmp_path) -> None:
+    from src.integration import campaign_cli
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "bad-family",
+                    "circuit": {"family": "not_a_family", "num_qubits": 3},
+                },
+                {
+                    "campaign_id": "bad-backend",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                    "backend_names": ["not_a_backend"],
+                },
+                {
+                    "campaign_id": "bad-policy",
+                    "circuit": {"family": "qft", "num_qubits": 3},
+                    "mo": {"layout_policy": "not_a_policy"},
+                },
+            ]
+        },
+    )
+    outputs: list[str] = []
+    run_calls: list[str] = []
+
+    exit_code = campaign_cli.run_campaign_cli_from_args(
+        ["--input", str(batch_path), "--output-root", str(tmp_path / "campaigns")],
+        output_fn=outputs.append,
+        run_campaign_fn=lambda campaign, *, output_root: run_calls.append(campaign.campaign_id),
+    )
+
+    rendered = "\n".join(outputs)
+
+    assert exit_code == 1
+    assert run_calls == []
+    assert "Invalid campaign batch" in rendered
+    assert "not_a_family" in rendered
+    assert "not_a_backend" in rendered
+    assert "not_a_policy" in rendered
 
 
 def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode() -> None:

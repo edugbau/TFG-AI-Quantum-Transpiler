@@ -1,0 +1,32 @@
+{
+  "campaigns": [
+    {
+      "campaign_id": "example-qft-inv-4-two-backends",
+      "circuit": {
+        "family": "qft_inv",
+        "num_qubits": 4
+      },
+      "backend_names": [
+        "fake_torino",
+        "fake_brisbane"
+      ],
+      "mode": "advanced",
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 1500,
+        "frontier_mode": "dag",
+        "lookahead_window": 8,
+        "max_steps": 120,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 2
+      },
+      "mo": {
+        "effort_mode": "auto",
+        "layout_policy": "compromise"
+      },
+      "seed": 202
+    }
+  ]
+}
