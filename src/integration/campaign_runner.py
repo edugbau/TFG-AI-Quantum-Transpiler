@@ -209,6 +209,13 @@ def _invoke_scenario_runner(run_scenario: Callable[..., object], request: Scenar
     return run_scenario(request)
 
 
+def _invoke_train_case(train_case_fn: Callable[..., object], **kwargs):
+    call_kwargs = dict(kwargs)
+    if not _runner_accepts_kwarg(train_case_fn, "verbose"):
+        call_kwargs.pop("verbose", None)
+    return train_case_fn(**call_kwargs)
+
+
 def _resolve_case_backend_bundle(resolve_backend_bundle: Callable[..., object], campaign: Campaign, backend_name: str):
     if campaign.config.synthetic_topology is not None and _runner_accepts_kwarg(resolve_backend_bundle, "synthetic_topology"):
         return resolve_backend_bundle(backend_name, synthetic_topology=campaign.config.synthetic_topology)
@@ -261,6 +268,7 @@ def run_campaign(
     resolve_backend_bundle: Callable[[str], object] = _resolve_backend_bundle,
     write_outputs: Callable[..., object] = write_campaign_outputs,
     cancellation_requested: Callable[[], bool] | None = None,
+    verbose: bool = False,
 ):
     if load_case_circuit is None:
         load_case_circuit = lambda campaign_case: _default_load_case_circuit(campaign, campaign_case)
@@ -337,13 +345,15 @@ def run_campaign(
             )
             qiskit_coupling_edges_for_training = list(qiskit_routing_subgraph.coupling_edges)
             qiskit_coupling_edges_for_rl_only = list(qiskit_routing_subgraph.coupling_edges)
-            case_report.rl_only_training_result = train_case_fn(
+            case_report.rl_only_training_result = _invoke_train_case(
+                train_case_fn,
                 campaign_case=campaign_case,
                 campaign_config=campaign.config,
                 target_circuit=circuit,
                 coupling_map=qiskit_coupling_edges_for_training,
                 case_output_dir=case_output_dir / "rl_only",
                 initial_layout=list(qiskit_initial_layout),
+                verbose=verbose,
             )
 
             if (
@@ -415,13 +425,15 @@ def run_campaign(
             )
             coupling_edges_for_training = list(routing_subgraph.coupling_edges)
             coupling_edges_for_mo_rl = list(routing_subgraph.coupling_edges)
-            case_report.training_result = train_case_fn(
+            case_report.training_result = _invoke_train_case(
+                train_case_fn,
                 campaign_case=campaign_case,
                 campaign_config=campaign.config,
                 target_circuit=circuit,
                 coupling_map=coupling_edges_for_training,
                 case_output_dir=case_output_dir,
                 initial_layout=selected_layout_for_training,
+                verbose=verbose,
             )
 
             if case_report.training_result.status != "completed" or case_report.training_result.selected_artifact_path is None:

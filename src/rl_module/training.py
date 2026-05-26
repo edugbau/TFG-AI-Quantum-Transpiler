@@ -9,6 +9,7 @@ y lanzar el proceso de entrenamiento.
 import os
 import logging
 import random
+from inspect import Parameter, signature
 from datetime import datetime
 import numpy as np
 import torch
@@ -84,6 +85,25 @@ def _build_effective_hyperparams(algorithm: str, hyperparams: Optional[dict]) ->
     return effective_hyperparams
 
 
+def _callable_accepts_kwarg(callable_obj, kwarg_name: str) -> bool:
+    try:
+        parameters = signature(callable_obj).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        (parameter.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD) and parameter.name == kwarg_name)
+        or parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _train_agent(agent: QuantumRLAgent, *, total_timesteps: int, callbacks: list, progress_bar: bool) -> None:
+    if _callable_accepts_kwarg(agent.train, "progress_bar"):
+        agent.train(total_timesteps=total_timesteps, callbacks=callbacks, progress_bar=progress_bar)
+        return
+    agent.train(total_timesteps=total_timesteps, callbacks=callbacks)
+
+
 def setup_training_pipeline(
     target_circuit: QuantumCircuit,
     coupling_map: List[Tuple[int, int]],
@@ -101,6 +121,7 @@ def setup_training_pipeline(
     initial_layout: Optional[List[int]] = None,
     n_eval_episodes: int = DEFAULT_N_EVAL_EPISODES,
     eval_freq: int = DEFAULT_EVAL_FREQ,
+    verbose: bool = False,
 ) -> QuantumRLAgent:
     """
     Configura y lanza el pipeline completo de entrenamiento del agente.
@@ -239,6 +260,7 @@ def setup_training_pipeline(
         algorithm=algorithm,
         tensorboard_log=run_log_dir,
         seed=seed,
+        verbose=1 if verbose else 0,
         **effective_hyperparams
     )
 
@@ -255,7 +277,7 @@ def setup_training_pipeline(
         agent.training_skipped_reason = "routing_completed_at_reset"
         return agent
     
-    agent.train(total_timesteps=total_timesteps, callbacks=callbacks)
+    _train_agent(agent, total_timesteps=total_timesteps, callbacks=callbacks, progress_bar=verbose)
     
     # 5. Guardar modelo final
     final_path = os.path.join(run_model_dir, f"final_{mode}_{algorithm}.zip")

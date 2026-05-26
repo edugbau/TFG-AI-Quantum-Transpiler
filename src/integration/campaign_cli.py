@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict, dataclass
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -17,6 +18,7 @@ from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE, build_auto_
 from src.integration.campaign_runner import run_campaign
 from src.integration.contracts import LayoutSelectionPolicy
 from src.integration.synthetic_topology import SYNTHETIC_TOPOLOGY_SHAPES, SyntheticTopologySpec
+from src.integration.verbosity import suppress_output
 from src.mo_module.fitness import get_preset_objectives
 
 
@@ -757,6 +759,29 @@ def _write_batch_summary(*, output_root: Path, report: BatchReport) -> None:
     summary_path.write_text(json.dumps(asdict(report), indent=2), encoding="utf-8")
 
 
+def _campaign_result_path(output_root: Path | str, campaign_id: str) -> Path:
+    return Path(output_root) / campaign_id
+
+
+def _runner_accepts_kwarg(run_campaign_fn: Callable[..., object], kwarg_name: str) -> bool:
+    try:
+        parameters = signature(run_campaign_fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        (parameter.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD) and parameter.name == kwarg_name)
+        or parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _invoke_campaign_runner(run_campaign_fn: Callable[..., object], campaign: Campaign, **kwargs):
+    call_kwargs = dict(kwargs)
+    if not _runner_accepts_kwarg(run_campaign_fn, "verbose"):
+        call_kwargs.pop("verbose", None)
+    return run_campaign_fn(campaign, **call_kwargs)
+
+
 def run_campaign_batch(
     campaigns: tuple[Campaign, ...] | list[Campaign],
     *,
@@ -764,6 +789,7 @@ def run_campaign_batch(
     dry_run: bool = False,
     run_campaign_fn: Callable[..., object] = run_campaign,
     run_campaign_matrix_fn: Callable[..., object] = run_campaign_matrix,
+    verbose: bool = False,
 ) -> BatchReport:
     output_path = Path(output_root)
     results: list[BatchCampaignResult] = []
@@ -788,10 +814,20 @@ def run_campaign_batch(
 
         try:
             if is_matrix_campaign_config(campaign.config):
-                report = run_campaign_matrix_fn(campaign, output_root=output_path)
+                report = _invoke_campaign_runner(
+                    run_campaign_matrix_fn,
+                    campaign,
+                    output_root=output_path,
+                    verbose=verbose,
+                )
                 report_status = report.status
             else:
-                report = run_campaign_fn(campaign, output_root=output_path)
+                report = _invoke_campaign_runner(
+                    run_campaign_fn,
+                    campaign,
+                    output_root=output_path,
+                    verbose=verbose,
+                )
                 report_status = report.campaign_status
         except Exception as exc:
             results.append(
@@ -836,6 +872,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", dest="input_path", help="JSON file with one or more Campaign definitions.")
     parser.add_argument("--output-root", default="campaigns")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -858,6 +895,7 @@ def run_campaign_cli_from_args(
             run_campaign_fn=run_campaign_fn,
             campaign_id_factory=campaign_id_factory,
             output_root=args.output_root,
+            verbose=args.verbose,
         )
 
     try:
@@ -869,28 +907,35 @@ def run_campaign_cli_from_args(
     if args.dry_run:
         for campaign in campaigns:
             output_fn(f"Validated campaign: {campaign.campaign_id}")
-    else:
+    elif args.verbose:
         output_fn(f"Executing {len(campaigns)} campaign(s) from {args.input_path}...")
 
-    report = run_campaign_batch(
-        campaigns,
-        output_root=args.output_root,
-        dry_run=args.dry_run,
-        run_campaign_fn=run_campaign_fn,
-        run_campaign_matrix_fn=lambda campaign, *, output_root: run_campaign_matrix(
-            campaign,
-            output_root=output_root,
-            run_campaign_fn=run_campaign_fn if run_campaign_fn is not run_campaign else None,
-        ),
-    )
-    for result in report.results:
-        output_fn(f"Campaign ID: {result.campaign_id}")
-        output_fn(f"Final Status: {result.status}")
-        if result.error is not None:
-            output_fn(f"Error: {result.error}")
-        output_fn(f"Summary Document: {result.summary_document}")
-        output_fn(f"Structured Campaign Output: {result.structured_output}")
-    output_fn(f"Batch Summary: {report.summary_path}")
+    with suppress_output(enabled=not args.verbose and not args.dry_run):
+        report = run_campaign_batch(
+            campaigns,
+            output_root=args.output_root,
+            dry_run=args.dry_run,
+            run_campaign_fn=run_campaign_fn,
+            run_campaign_matrix_fn=lambda campaign, *, output_root, verbose=False: run_campaign_matrix(
+                campaign,
+                output_root=output_root,
+                run_campaign_fn=run_campaign_fn if run_campaign_fn is not run_campaign else None,
+                verbose=verbose,
+            ),
+            verbose=args.verbose,
+        )
+    if args.verbose or args.dry_run:
+        for result in report.results:
+            output_fn(f"Campaign ID: {result.campaign_id}")
+            output_fn(f"Final Status: {result.status}")
+            if result.error is not None:
+                output_fn(f"Error: {result.error}")
+            output_fn(f"Summary Document: {result.summary_document}")
+            output_fn(f"Structured Campaign Output: {result.structured_output}")
+        output_fn(f"Batch Summary: {report.summary_path}")
+    else:
+        for result in report.results:
+            output_fn(f"Campaign Result: {_campaign_result_path(args.output_root, result.campaign_id)}")
     return 1 if report.status == "failed" else 0
 
 
@@ -901,35 +946,48 @@ def run_interactive_campaign_cli(
     run_campaign_fn=run_campaign,
     campaign_id_factory=_default_campaign_id,
     output_root: Path | str = "campaigns",
+    verbose: bool = False,
 ) -> int:
     config = _collect_campaign_config(input_fn, output_fn)
     campaign = Campaign.from_config(campaign_id=campaign_id_factory(), config=config)
-    _print_confirmation_summary(output_fn, campaign=campaign)
+    if verbose:
+        _print_confirmation_summary(output_fn, campaign=campaign)
 
     if not _prompt_confirmation(input_fn, output_fn):
         output_fn("Campaign execution aborted.")
         return 0
 
-    output_fn("Executing campaign...")
+    if verbose:
+        output_fn("Executing campaign...")
     campaign_output_dir = Path(output_root) / campaign.campaign_id
-    if is_matrix_campaign_config(campaign.config):
-        report = run_campaign_matrix(
-            campaign,
-            output_root=output_root,
-            run_campaign_fn=run_campaign_fn if run_campaign_fn is not run_campaign else None,
-        )
-        final_status = report.status
-        summary_document = campaign_output_dir / "matrix_summary.md"
-        structured_output = campaign_output_dir / "matrix_summary.json"
+    with suppress_output(enabled=not verbose):
+        if is_matrix_campaign_config(campaign.config):
+            report = run_campaign_matrix(
+                campaign,
+                output_root=output_root,
+                run_campaign_fn=run_campaign_fn if run_campaign_fn is not run_campaign else None,
+                verbose=verbose,
+            )
+            final_status = report.status
+            summary_document = campaign_output_dir / "matrix_summary.md"
+            structured_output = campaign_output_dir / "matrix_summary.json"
+        else:
+            report = _invoke_campaign_runner(
+                run_campaign_fn,
+                campaign,
+                output_root=output_root,
+                verbose=verbose,
+            )
+            final_status = report.campaign_status
+            summary_document = campaign_output_dir / "summary.md"
+            structured_output = campaign_output_dir / "campaign.json"
+    if verbose:
+        output_fn(f"Campaign ID: {campaign.campaign_id}")
+        output_fn(f"Final Status: {final_status}")
+        output_fn(f"Summary Document: {summary_document}")
+        output_fn(f"Structured Campaign Output: {structured_output}")
     else:
-        report = run_campaign_fn(campaign, output_root=output_root)
-        final_status = report.campaign_status
-        summary_document = campaign_output_dir / "summary.md"
-        structured_output = campaign_output_dir / "campaign.json"
-    output_fn(f"Campaign ID: {campaign.campaign_id}")
-    output_fn(f"Final Status: {final_status}")
-    output_fn(f"Summary Document: {summary_document}")
-    output_fn(f"Structured Campaign Output: {structured_output}")
+        output_fn(f"Campaign Result: {campaign_output_dir}")
     return 0
 
 

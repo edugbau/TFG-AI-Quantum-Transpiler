@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Callable
 
@@ -88,6 +89,7 @@ def run_campaign_matrix(
     *,
     output_root: Path | str = "campaigns",
     run_campaign_fn: Callable[..., CampaignReport] | None = None,
+    verbose: bool = False,
 ) -> MatrixReport:
     output_path = Path(output_root)
     matrix_root = output_path / campaign.campaign_id
@@ -100,7 +102,7 @@ def run_campaign_matrix(
     if run_campaign_fn is None and workers > 1:
         with ProcessPoolExecutor(max_workers=workers) as executor:
             future_map = {
-                executor.submit(_run_child_campaign, child, runs_root): child
+                executor.submit(_run_child_campaign, child, runs_root, verbose=verbose): child
                 for child in children
             }
             for future in as_completed(future_map):
@@ -117,9 +119,9 @@ def run_campaign_matrix(
         for child in children:
             try:
                 if run_campaign_fn is None:
-                    report = runner(child, runs_root)
+                    report = runner(child, runs_root, verbose=verbose)
                 else:
-                    report = runner(child, output_root=runs_root)
+                    report = _invoke_campaign_runner(runner, child, output_root=runs_root, verbose=verbose)
             except Exception as exc:
                 child_results.append(_child_failure(child, runs_root, str(exc)))
                 continue
@@ -242,10 +244,29 @@ def write_matrix_outputs(*, report: MatrixReport) -> None:
     )
 
 
-def _run_child_campaign(campaign: Campaign, output_root: Path | str) -> CampaignReport:
+def _runner_accepts_kwarg(run_campaign_fn: Callable[..., object], kwarg_name: str) -> bool:
+    try:
+        parameters = signature(run_campaign_fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        (parameter.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD) and parameter.name == kwarg_name)
+        or parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _invoke_campaign_runner(run_campaign_fn: Callable[..., CampaignReport], campaign: Campaign, **kwargs) -> CampaignReport:
+    call_kwargs = dict(kwargs)
+    if not _runner_accepts_kwarg(run_campaign_fn, "verbose"):
+        call_kwargs.pop("verbose", None)
+    return run_campaign_fn(campaign, **call_kwargs)
+
+
+def _run_child_campaign(campaign: Campaign, output_root: Path | str, *, verbose: bool = False) -> CampaignReport:
     from src.integration.campaign_runner import run_campaign
 
-    return run_campaign(campaign, output_root=output_root)
+    return run_campaign(campaign, output_root=output_root, verbose=verbose)
 
 
 def _child_config_for(config: CampaignConfig, *, seed: int, mo_selection_mode: str) -> CampaignConfig:

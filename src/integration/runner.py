@@ -9,6 +9,7 @@ from src.integration.scenarios import (
     run_mo_rl_scenario,
     run_rl_only_scenario,
 )
+from src.integration.verbosity import suppress_output
 
 
 _SCENARIO_CHOICES = ("Baseline", "MO_Only", "RL_Only", "MO+RL")
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[circuit_format.value for circuit_format in CircuitFormat],
         default=CircuitFormat.AUTO.value,
     )
+    parser.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -54,8 +56,9 @@ def _dispatch(request: ScenarioRequest) -> ScenarioResult:
     raise ValueError(f"Unsupported scenario_name: {request.scenario_name}")
 
 
-def run_from_args(argv: list[str] | None = None) -> dict:
+def run_from_args(argv: list[str] | None = None, *, verbose: bool | None = None) -> dict:
     args = build_parser().parse_args(argv)
+    effective_verbose = args.verbose if verbose is None else verbose
     request_kwargs = {
         "scenario_name": args.scenario,
         "circuit_name": args.circuit,
@@ -69,7 +72,8 @@ def run_from_args(argv: list[str] | None = None) -> dict:
     if args.seed is not None:
         request_kwargs["seed"] = args.seed
     request = ScenarioRequest(**request_kwargs)
-    result = _dispatch(request)
+    with suppress_output(enabled=not effective_verbose):
+        result = _dispatch(request)
     return _to_serializable_dict(result)
 
 

@@ -287,6 +287,83 @@ def test_campaign_batch_executes_queue_sequentially_in_file_order(tmp_path) -> N
     ]
 
 
+def test_campaign_batch_non_verbose_prints_only_campaign_result_paths(tmp_path) -> None:
+    from src.integration import campaign_cli
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "campaign-one",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                },
+                {
+                    "campaign_id": "campaign-two",
+                    "circuit": {"family": "qft", "num_qubits": 4},
+                },
+            ]
+        },
+    )
+    outputs: list[str] = []
+    output_root = tmp_path / "campaigns"
+
+    def run_campaign_fn(campaign, *, output_root, verbose=False):
+        print("noisy child execution")
+        assert verbose is False
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_campaign_cli_from_args(
+        ["--input", str(batch_path), "--output-root", str(output_root)],
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+    )
+
+    assert exit_code == 0
+    assert outputs == [
+        f"Campaign Result: {output_root / 'campaign-one'}",
+        f"Campaign Result: {output_root / 'campaign-two'}",
+    ]
+
+
+def test_campaign_batch_verbose_preserves_detailed_final_output(tmp_path) -> None:
+    from src.integration import campaign_cli
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "campaign-one",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                }
+            ]
+        },
+    )
+    outputs: list[str] = []
+    output_root = tmp_path / "campaigns"
+
+    def run_campaign_fn(campaign, *, output_root, verbose=False):
+        assert verbose is True
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_campaign_cli_from_args(
+        ["--input", str(batch_path), "--output-root", str(output_root), "--verbose"],
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+    )
+
+    rendered = "\n".join(outputs)
+
+    assert exit_code == 0
+    assert f"Executing 1 campaign(s) from {batch_path}..." in rendered
+    assert "Campaign ID: campaign-one" in rendered
+    assert "Final Status: completed" in rendered
+    assert f"Summary Document: {output_root / 'campaign-one' / 'summary.md'}" in rendered
+    assert f"Structured Campaign Output: {output_root / 'campaign-one' / 'campaign.json'}" in rendered
+    assert f"Batch Summary: {output_root / 'batch_summary.json'}" in rendered
+
+
 def test_campaign_batch_continues_after_campaign_execution_exception(tmp_path) -> None:
     from src.integration import campaign_cli
 
@@ -409,6 +486,7 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
         run_campaign_fn=run_campaign_fn,
         campaign_id_factory=lambda: "campaign-adv-001",
         output_root=Path("campaigns"),
+        verbose=True,
     )
 
     rendered = "\n".join(outputs)
@@ -475,6 +553,7 @@ def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prin
         run_campaign_fn=run_campaign_fn,
         campaign_id_factory=lambda: "campaign-auto-001",
         output_root=Path("campaigns"),
+        verbose=True,
     )
 
     rendered = "\n".join(outputs)
@@ -530,6 +609,7 @@ def test_run_interactive_campaign_cli_collects_synthetic_topology_in_advanced_mo
         run_campaign_fn=run_campaign_fn,
         campaign_id_factory=lambda: "campaign-synth-001",
         output_root=Path("campaigns"),
+        verbose=True,
     )
 
     rendered = "\n".join(outputs)
@@ -707,6 +787,7 @@ def test_run_interactive_campaign_cli_collects_multi_seed_all_mo_modes() -> None
         run_campaign_fn=run_campaign_fn,
         campaign_id_factory=lambda: "campaign-matrix-cli",
         output_root=Path("campaigns"),
+        verbose=True,
     )
 
     rendered = "\n".join(outputs)
@@ -829,7 +910,7 @@ def test_run_interactive_campaign_cli_default_mode_uses_fake_torino_without_prom
     assert "Choose backend" not in rendered
 
 
-def test_run_interactive_campaign_cli_prints_confirmation_and_final_paths_on_execute() -> None:
+def test_run_interactive_campaign_cli_non_verbose_prints_only_campaign_result_after_execute() -> None:
     from src.integration import campaign_cli
 
     input_fn, outputs = _make_io(
@@ -841,12 +922,55 @@ def test_run_interactive_campaign_cli_prints_confirmation_and_final_paths_on_exe
         ]
     )
 
+    def run_campaign_fn(campaign, *, output_root, verbose=False):
+        print("internal training noise")
+        assert verbose is False
+        return SimpleNamespace(campaign_status="completed")
+
     exit_code = campaign_cli.run_interactive_campaign_cli(
         input_fn=input_fn,
         output_fn=lambda message="": outputs.append(str(message)),
-        run_campaign_fn=lambda campaign, *, output_root: SimpleNamespace(campaign_status="completed"),
+        run_campaign_fn=run_campaign_fn,
         campaign_id_factory=lambda: "campaign-default-002",
         output_root=Path("tmp_campaigns"),
+    )
+
+    rendered = "\n".join(outputs)
+
+    assert exit_code == 0
+    assert "Confirmation Summary" not in rendered
+    assert "Executing campaign..." not in rendered
+    assert "Final Status" not in rendered
+    assert "Summary Document" not in rendered
+    assert "Structured Campaign Output" not in rendered
+    assert "internal training noise" not in rendered
+    assert f"Campaign Result: {Path('tmp_campaigns') / 'campaign-default-002'}" in rendered
+
+
+def test_run_interactive_campaign_cli_verbose_prints_confirmation_and_final_paths_on_execute() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz,clifford",
+            "3,5",
+            "default",
+            "y",
+        ]
+    )
+
+    def run_campaign_fn(campaign, *, output_root, verbose=False):
+        assert verbose is True
+        print("internal training noise")
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-default-002",
+        output_root=Path("tmp_campaigns"),
+        verbose=True,
     )
 
     rendered = "\n".join(outputs)

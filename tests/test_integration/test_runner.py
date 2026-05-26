@@ -52,6 +52,7 @@ def test_build_parser_accepts_supported_scenarios_and_required_args() -> None:
             "3",
             "--backend",
             "fake_backend",
+            "--verbose",
         ]
     )
 
@@ -61,6 +62,7 @@ def test_build_parser_accepts_supported_scenarios_and_required_args() -> None:
     assert args.backend == "fake_backend"
     assert args.seed is None
     assert args.rl_model_path is None
+    assert args.verbose is True
     assert args.circuit_source == "library"
     assert args.circuit_path is None
     assert args.circuit_format == "auto"
@@ -130,6 +132,67 @@ def test_run_from_args_dispatches_baseline_and_returns_serializable_dict(monkeyp
     assert calls[0].circuit_source is CircuitSource.LIBRARY
     assert calls[0].circuit_path is None
     assert calls[0].circuit_format is CircuitFormat.AUTO
+
+
+def test_run_from_args_suppresses_internal_output_by_default(monkeypatch, capsys) -> None:
+    from src.integration import runner
+
+    expected = _make_result("Baseline")
+
+    def fake_run_baseline(request):
+        del request
+        print("internal scenario noise")
+        return expected
+
+    monkeypatch.setattr(runner, "run_baseline_scenario", fake_run_baseline)
+
+    payload = runner.run_from_args(
+        [
+            "--scenario",
+            "Baseline",
+            "--circuit",
+            "ghz_3",
+            "--num-qubits",
+            "3",
+            "--backend",
+            "fake_backend",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert payload == asdict(expected)
+    assert "internal scenario noise" not in captured.out
+
+
+def test_run_from_args_verbose_allows_internal_output(monkeypatch, capsys) -> None:
+    from src.integration import runner
+
+    expected = _make_result("Baseline")
+
+    def fake_run_baseline(request):
+        del request
+        print("internal scenario noise")
+        return expected
+
+    monkeypatch.setattr(runner, "run_baseline_scenario", fake_run_baseline)
+
+    payload = runner.run_from_args(
+        [
+            "--scenario",
+            "Baseline",
+            "--circuit",
+            "ghz_3",
+            "--num-qubits",
+            "3",
+            "--backend",
+            "fake_backend",
+            "--verbose",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert payload == asdict(expected)
+    assert "internal scenario noise" in captured.out
 
 
 def test_run_from_args_dispatches_mo_rl_with_rl_model_path(monkeypatch) -> None:

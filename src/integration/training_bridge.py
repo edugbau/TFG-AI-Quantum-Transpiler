@@ -94,6 +94,7 @@ def train_case(
     coupling_map: Sequence[tuple[int, int]],
     case_output_dir: Path | str,
     initial_layout: Sequence[int] | None = None,
+    verbose: bool = False,
 ) -> TrainingBridgeResult:
     del campaign_case
 
@@ -118,6 +119,7 @@ def train_case(
             hyperparams=_build_training_hyperparams(campaign_config),
             initial_layout=list(initial_layout) if initial_layout is not None else None,
             n_eval_episodes=campaign_config.rl_n_eval_episodes,
+            verbose=verbose,
         )
     except Exception:
         return TrainingBridgeResult(

@@ -306,6 +306,90 @@ def test_run_campaign_trains_then_runs_baseline_mo_only_and_mo_rl(tmp_path) -> N
     assert write_calls == [1, 1]
 
 
+def test_run_campaign_passes_verbose_to_training_runner_when_supported(tmp_path) -> None:
+    from src.integration.campaign_runner import run_campaign
+
+    campaign = _build_campaign()
+    case = campaign.build_cases()[0]
+    verbose_values: list[bool] = []
+
+    def fake_train_case(
+        *,
+        campaign_case,
+        campaign_config,
+        target_circuit,
+        coupling_map,
+        case_output_dir,
+        initial_layout=None,
+        verbose=False,
+    ):
+        del campaign_config, target_circuit, coupling_map, case_output_dir, initial_layout
+        assert campaign_case == case
+        verbose_values.append(verbose)
+        return _build_training_result(campaign_case)
+
+    report = run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
+        run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
+        run_mo_only=lambda request, *, circuit: _build_result("MO_Only", case, metrics=_build_metrics(90)),
+        train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            case,
+            metrics=_build_metrics(85),
+        ),
+        run_mo_rl=lambda request, *, circuit, injected_layout: _build_result("MO+RL", case, metrics=_build_metrics(80)),
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+        write_outputs=lambda *, output_dir, report: None,
+        verbose=True,
+    )
+
+    assert report.campaign_status == "completed"
+    assert verbose_values == [True, True]
+
+
+def test_run_campaign_preserves_legacy_training_runner_without_verbose_kwarg(tmp_path) -> None:
+    from src.integration.campaign_runner import run_campaign
+
+    campaign = _build_campaign()
+    case = campaign.build_cases()[0]
+    train_calls: list[str] = []
+
+    def fake_train_case(*, campaign_case, campaign_config, target_circuit, coupling_map, case_output_dir, initial_layout=None):
+        del campaign_config, target_circuit, coupling_map, case_output_dir, initial_layout
+        train_calls.append(campaign_case.case_id)
+        return _build_training_result(campaign_case)
+
+    report = run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
+        run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
+        run_mo_only=lambda request, *, circuit: _build_result("MO_Only", case, metrics=_build_metrics(90)),
+        train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit=None, injected_layout=None, **kwargs: _build_result(
+            "RL_Only",
+            case,
+            metrics=_build_metrics(85),
+        ),
+        run_mo_rl=lambda request, *, circuit, injected_layout: _build_result("MO+RL", case, metrics=_build_metrics(80)),
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+        write_outputs=lambda *, output_dir, report: None,
+        verbose=False,
+    )
+
+    assert report.campaign_status == "completed"
+    assert train_calls == [case.case_id, case.case_id]
+
+
 def test_run_campaign_threads_synthetic_topology_to_requests_and_backend_resolver(tmp_path) -> None:
     from src.integration.campaign_runner import run_campaign
 
