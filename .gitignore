@@ -8,3 +8,4 @@ src/qiskit_interface/docs/
 /experiments
 *.pyc
 /campaigns
+/ssh
