@@ -10,6 +10,7 @@ from src.integration.synthetic_topology import SyntheticTopologySpec, validate_s
 _ALLOWED_CASE_RESULT_STATUSES = frozenset({"completed", "failed", "incomplete", "cancelled"})
 _ALLOWED_CAMPAIGN_MODES = frozenset({"default", "advanced"})
 _ALLOWED_MO_EFFORT_MODES = frozenset({"auto", "custom"})
+_ALLOWED_MO_SELECTION_MODES = frozenset({"compromise", "best_depth", "best_cnot_count", "best_on_objective"})
 _ALLOWED_TOPOLOGY_SOURCES = frozenset({"backend", "synthetic"})
 _ALLOWED_CAMPAIGN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled", "interrupted"})
 _TERMINAL_CAMPAIGN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
@@ -114,6 +115,9 @@ class CampaignConfig:
     rl_n_eval_episodes: int = 5
     mo_effort_mode: str = "auto"
     mo_objective_name: str | None = None
+    seeds: tuple[int, ...] | None = None
+    mo_selection_modes: tuple[str, ...] | None = None
+    parallel_workers: int = 1
     mode: str = "default"
     topology_source: str = "backend"
     synthetic_topology: SyntheticTopologySpec | None = None
@@ -152,6 +156,10 @@ class CampaignConfig:
             raise ValueError("CampaignConfig rl_n_eval_episodes must be greater than zero")
         if self.seed < 0:
             raise ValueError("CampaignConfig seed cannot be negative")
+        normalized_seeds = self._normalize_seeds()
+        normalized_mo_selection_modes = self._normalize_mo_selection_modes()
+        if self.parallel_workers <= 0:
+            raise ValueError("CampaignConfig parallel_workers must be greater than zero")
         if not isinstance(self.mo_use_quick, bool):
             raise ValueError("CampaignConfig mo_use_quick must be a boolean")
         if self.mo_population_size <= 0:
@@ -201,9 +209,59 @@ class CampaignConfig:
         object.__setattr__(self, "circuit_specs", normalized_circuit_specs)
         object.__setattr__(self, "rl_algorithm", normalized_rl_algorithm)
         object.__setattr__(self, "rl_frontier_mode", normalized_frontier_mode)
+        object.__setattr__(self, "seeds", normalized_seeds)
         object.__setattr__(self, "layout_policy", normalized_layout_policy)
         object.__setattr__(self, "mo_objective_name", normalized_objective_name)
+        object.__setattr__(self, "mo_selection_modes", normalized_mo_selection_modes)
         object.__setattr__(self, "topology_source", normalized_topology_source)
+
+    def _normalize_seeds(self) -> tuple[int, ...]:
+        if self.seeds is None:
+            return (self.seed,)
+        if not self.seeds:
+            raise ValueError("CampaignConfig seeds cannot be empty")
+        normalized: list[int] = []
+        for seed in self.seeds:
+            if isinstance(seed, bool) or not isinstance(seed, int):
+                raise ValueError("CampaignConfig seeds must contain integers")
+            if seed < 0:
+                raise ValueError("CampaignConfig seeds cannot contain negative values")
+            if seed not in normalized:
+                normalized.append(seed)
+        return tuple(normalized)
+
+    def _normalize_mo_selection_modes(self) -> tuple[str, ...]:
+        if self.mo_selection_modes is None:
+            return (_selection_mode_from_policy(self.layout_policy, self.mo_objective_name),)
+        if not self.mo_selection_modes:
+            raise ValueError("CampaignConfig mo_selection_modes cannot be empty")
+        normalized: list[str] = []
+        for mode in self.mo_selection_modes:
+            if not isinstance(mode, str) or not mode.strip():
+                raise ValueError("CampaignConfig mo_selection_modes must contain non-empty strings")
+            normalized_mode = mode.strip().lower()
+            if normalized_mode not in _ALLOWED_MO_SELECTION_MODES:
+                raise ValueError(
+                    "CampaignConfig mo_selection_modes must contain only "
+                    "compromise, best_depth, best_cnot_count, or best_on_objective"
+                )
+            if normalized_mode not in normalized:
+                normalized.append(normalized_mode)
+        return tuple(normalized)
+
+
+def _selection_mode_from_policy(
+    layout_policy: LayoutSelectionPolicy,
+    mo_objective_name: str | None,
+) -> str:
+    normalized_layout_policy = LayoutSelectionPolicy(layout_policy)
+    if normalized_layout_policy is LayoutSelectionPolicy.COMPROMISE:
+        return "compromise"
+    if mo_objective_name == "depth":
+        return "best_depth"
+    if mo_objective_name == "cnot_count":
+        return "best_cnot_count"
+    return "best_on_objective"
 
 
 @dataclass(slots=True)

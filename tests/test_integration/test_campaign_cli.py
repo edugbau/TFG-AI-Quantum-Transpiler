@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from src.integration.campaign_contracts import CampaignCircuitSpec
-from src.integration.contracts import LayoutSelectionPolicy
+from src.integration.campaign_contracts import CampaignCase, CampaignCircuitSpec
+from src.integration.campaign_reporting import CampaignCaseReport, build_campaign_report
+from src.integration.contracts import LayoutSelectionPolicy, ScenarioResult
 from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
 
 
@@ -112,6 +113,42 @@ def test_load_campaign_batch_builds_single_campaign_from_json(tmp_path) -> None:
     assert config.mo_effort_mode == "auto"
     assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
     assert config.seed == 42
+    assert config.seeds == (42,)
+    assert config.mo_selection_modes == ("compromise",)
+
+
+def test_load_campaign_batch_accepts_multi_seed_all_mo_selection_modes(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-3-matrix",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                    "backend_names": ["fake_torino"],
+                    "mode": "advanced",
+                    "seeds": [11, 12],
+                    "parallel_workers": 2,
+                    "mo": {
+                        "effort_mode": "auto",
+                        "selection_modes": "all",
+                    },
+                }
+            ]
+        },
+    )
+
+    campaign = load_campaign_batch(batch_path)[0]
+    config = campaign.config
+
+    assert config.seed == 11
+    assert config.seeds == (11, 12)
+    assert config.mo_selection_modes == ("compromise", "best_depth", "best_cnot_count")
+    assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
+    assert config.mo_objective_name is None
+    assert config.parallel_workers == 2
 
 
 def test_load_campaign_batch_preserves_independent_campaign_configs(tmp_path) -> None:
@@ -597,6 +634,94 @@ def test_run_interactive_campaign_cli_collects_best_on_objective_objective_name(
 
     assert captured["campaign"].config.layout_policy is LayoutSelectionPolicy.BEST_ON_OBJECTIVE
     assert captured["campaign"].config.mo_objective_name == "cnot_count"
+    assert captured["campaign"].config.mo_selection_modes == ("best_cnot_count",)
+
+
+def test_run_interactive_campaign_cli_collects_multi_seed_all_mo_modes() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz",
+            "3",
+            "advanced",
+            "backend",
+            "fake_torino",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "41,42",
+            "auto",
+            "all",
+            "2",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def _result(child, scenario_name: str, depth: int) -> ScenarioResult:
+        return ScenarioResult(
+            scenario_name=scenario_name,
+            circuit_name="ghz_3",
+            backend_name="fake_torino",
+            seed=child.config.seed,
+            success=True,
+            selected_layout=None if scenario_name == "Baseline" else [0, 1, 2],
+            transpilation_metrics={
+                "trans_depth": depth,
+                "trans_two_qubit_gates": depth // 2,
+                "trans_cnot_equivalent": float(depth),
+                "elapsed_time_s": float(depth) / 100.0,
+            },
+        )
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured.setdefault("children", []).append(campaign)
+        case = CampaignCase(
+            case_id="ghz_3__fake_torino",
+            circuit_family="ghz",
+            num_qubits=3,
+            backend_name="fake_torino",
+        )
+        return build_campaign_report(
+            campaign_id=campaign.campaign_id,
+            campaign_status="completed",
+            campaign_config=campaign.config,
+            case_reports=[
+                CampaignCaseReport(
+                    case=case,
+                    status="completed",
+                    baseline_result=_result(campaign, "Baseline", 100),
+                    rl_only_result=_result(campaign, "RL_Only", 90),
+                    mo_only_result=_result(campaign, "MO_Only", 80),
+                    mo_rl_result=_result(campaign, "MO+RL", 70),
+                )
+            ],
+        )
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-matrix-cli",
+        output_root=Path("campaigns"),
+    )
+
+    rendered = "\n".join(outputs)
+    assert exit_code == 0
+    assert len(captured["children"]) == 6
+    assert {child.config.seed for child in captured["children"]} == {41, 42}
+    assert {child.config.mo_selection_modes[0] for child in captured["children"]} == {
+        "compromise",
+        "best_depth",
+        "best_cnot_count",
+    }
+    assert "Seeds: 41, 42" in rendered
+    assert "MO Selection Modes: compromise, best_depth, best_cnot_count" in rendered
+    assert "Parallel Workers: 2" in rendered
+    assert "matrix_summary.md" in rendered
 
 
 def test_run_interactive_campaign_cli_reprompts_on_invalid_input() -> None:

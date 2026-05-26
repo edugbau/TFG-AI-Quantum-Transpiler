@@ -8,6 +8,11 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from src.integration.campaign_contracts import Campaign, CampaignCircuitSpec, CampaignConfig
+from src.integration.campaign_matrix import (
+    ALL_MO_SELECTION_MODES,
+    is_matrix_campaign_config,
+    run_campaign_matrix,
+)
 from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE, build_auto_mo_effort_preview
 from src.integration.campaign_runner import run_campaign
 from src.integration.contracts import LayoutSelectionPolicy
@@ -27,6 +32,7 @@ _BACKENDS = ("fake_torino", "fake_brisbane")
 _RL_ALGORITHMS = ("MaskablePPO", "PPO", "DQN")
 _FRONTIER_MODES = ("dag", "sequential")
 _LAYOUT_POLICIES = tuple(policy.value for policy in LayoutSelectionPolicy)
+_MO_SELECTION_MODE_CHOICES = ("all", "compromise", "best_depth", "best_cnot_count", "best_on_objective")
 
 _DEFAULT_RL_ALGORITHM = "MaskablePPO"
 _DEFAULT_RL_TIMESTEPS = 5000
@@ -187,6 +193,15 @@ def _prompt_int(input_fn, output_fn, *, prompt: str, minimum: int = 0) -> int:
         return value
 
 
+def _prompt_seed_values(input_fn, output_fn) -> tuple[int, ...]:
+    while True:
+        raw = input_fn("Seeds (comma-separated non-negative integers): ").strip()
+        try:
+            return _normalize_seed_values(raw, field_name="seeds")
+        except ValueError as exc:
+            output_fn(f"Invalid selection. {exc}")
+
+
 def _prompt_mo_effort_mode(input_fn, output_fn) -> str:
     return _prompt_csv_choices(
         input_fn,
@@ -270,6 +285,36 @@ def _prompt_confirmation(input_fn, output_fn) -> bool:
         output_fn("Invalid selection. Enter y or n.")
 
 
+def _prompt_mo_selection_modes(input_fn, output_fn) -> tuple[str, ...]:
+    while True:
+        values = _prompt_csv_choices(
+            input_fn,
+            output_fn,
+            prompt=f"Choose MO selection mode(s) ({', '.join(_MO_SELECTION_MODE_CHOICES)}): ",
+            valid_values=_MO_SELECTION_MODE_CHOICES,
+            allow_multiple=True,
+        )
+        if "all" in values:
+            if len(values) != 1:
+                output_fn("Invalid selection. Use all by itself.")
+                continue
+            return ALL_MO_SELECTION_MODES
+        if "best_on_objective" in values:
+            if len(values) != 1:
+                output_fn("Invalid selection. best_on_objective must be selected by itself.")
+                continue
+            objective_names = _available_objective_names()
+            objective_name = _prompt_csv_choices(
+                input_fn,
+                output_fn,
+                prompt=f"Choose MO objective ({', '.join(objective_names)}): ",
+                valid_values=objective_names,
+                allow_multiple=False,
+            )[0]
+            return (_selection_mode_from_objective(objective_name),)
+        return tuple(values)
+
+
 def _build_circuit_specs(families: tuple[str, ...], qubit_sizes: tuple[int, ...]) -> tuple[CampaignCircuitSpec, ...]:
     return tuple(CampaignCircuitSpec(family=family, num_qubits=num_qubits) for family in families for num_qubits in qubit_sizes)
 
@@ -309,7 +354,7 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
     )[0]
     rl_lookahead = _prompt_int(input_fn, output_fn, prompt="RL lookahead window: ", minimum=1)
     rl_max_steps = _prompt_int(input_fn, output_fn, prompt="RL max steps: ", minimum=1)
-    seed = _prompt_int(input_fn, output_fn, prompt="Seed: ", minimum=0)
+    seeds = _prompt_seed_values(input_fn, output_fn)
     mo_effort_mode = _prompt_mo_effort_mode(input_fn, output_fn)
     mo_use_quick = _DEFAULT_MO_USE_QUICK
     mo_population_size = _DEFAULT_MO_POPULATION_SIZE
@@ -323,24 +368,11 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
             minimum=MIN_CUSTOM_MO_POPULATION_SIZE,
         )
         mo_n_generations = _prompt_int(input_fn, output_fn, prompt="MO generations: ", minimum=1)
-    layout_policy_name = _prompt_csv_choices(
-        input_fn,
-        output_fn,
-        prompt=f"Choose layout policy ({', '.join(_LAYOUT_POLICIES)}): ",
-        valid_values=_LAYOUT_POLICIES,
-        allow_multiple=False,
-    )[0]
-    layout_policy = LayoutSelectionPolicy(layout_policy_name)
-    mo_objective_name = None
-    if layout_policy is LayoutSelectionPolicy.BEST_ON_OBJECTIVE:
-        objective_names = _available_objective_names()
-        mo_objective_name = _prompt_csv_choices(
-            input_fn,
-            output_fn,
-            prompt=f"Choose MO objective ({', '.join(objective_names)}): ",
-            valid_values=objective_names,
-            allow_multiple=False,
-        )[0]
+    mo_selection_modes = _prompt_mo_selection_modes(input_fn, output_fn)
+    layout_policy, mo_objective_name = _policy_for_selection_mode(mo_selection_modes[0])
+    parallel_workers = 1
+    if len(seeds) * len(mo_selection_modes) > 1:
+        parallel_workers = _prompt_int(input_fn, output_fn, prompt="Parallel workers: ", minimum=1)
 
     return CampaignConfig(
         circuit_specs=circuit_specs,
@@ -354,13 +386,16 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
         rl_target_kl=_DEFAULT_RL_TARGET_KL,
         rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
-        seed=seed,
+        seed=seeds[0],
+        seeds=seeds,
         mo_use_quick=mo_use_quick,
         mo_population_size=mo_population_size,
         mo_n_generations=mo_n_generations,
         mo_effort_mode=mo_effort_mode,
         layout_policy=layout_policy,
         mo_objective_name=mo_objective_name,
+        mo_selection_modes=mo_selection_modes,
+        parallel_workers=parallel_workers,
         mode="advanced",
         topology_source=topology_source,
         synthetic_topology=synthetic_topology,
@@ -406,6 +441,8 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
         f"clip_range={config.rl_clip_range}, target_kl={config.rl_target_kl}, "
         f"n_eval_episodes={config.rl_n_eval_episodes}, seed={config.seed}"
     )
+    if len(config.seeds) > 1:
+        output_fn("Seeds: " + ", ".join(str(seed) for seed in config.seeds))
     output_fn(f"MO Effort Mode: {config.mo_effort_mode}")
     if config.mo_effort_mode == "auto":
         for qubit_count, settings in build_auto_mo_effort_preview(
@@ -423,6 +460,9 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
     output_fn(f"Layout Policy: {config.layout_policy.value}")
     if config.mo_objective_name is not None:
         output_fn(f"MO Objective: {config.mo_objective_name}")
+    output_fn("MO Selection Modes: " + ", ".join(config.mo_selection_modes))
+    if is_matrix_campaign_config(config):
+        output_fn(f"Parallel Workers: {config.parallel_workers}")
 
 
 def _require_mapping(value: object, *, field_name: str) -> dict[str, Any]:
@@ -496,6 +536,76 @@ def _normalize_backend_names(value: object) -> tuple[str, ...]:
     return backends
 
 
+def _normalize_seed_values(value: object, *, field_name: str = "seeds") -> tuple[int, ...]:
+    if isinstance(value, str):
+        raw_values = [part.strip() for part in value.split(",") if part.strip()]
+        if not raw_values:
+            raise ValueError(f"{field_name} must contain at least one seed")
+        try:
+            values = [int(part) for part in raw_values]
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must contain integers") from exc
+    elif isinstance(value, list):
+        if not value:
+            raise ValueError(f"{field_name} must be a non-empty array")
+        values = value
+    else:
+        raise ValueError(f"{field_name} must be a non-empty array")
+
+    normalized: list[int] = []
+    for seed in values:
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ValueError(f"{field_name} must contain integers")
+        if seed < 0:
+            raise ValueError(f"{field_name} cannot contain negative values")
+        if seed not in normalized:
+            normalized.append(seed)
+    return tuple(normalized)
+
+
+def _normalize_mo_selection_modes(value: object, *, field_name: str = "mo.selection_modes") -> tuple[str, ...]:
+    if isinstance(value, str):
+        raw_modes = (value.strip().lower(),)
+    elif isinstance(value, list):
+        if not value:
+            raise ValueError(f"{field_name} must be a non-empty array")
+        raw_modes = tuple(_require_string(mode, field_name=field_name).lower() for mode in value)
+    else:
+        raise ValueError(f"{field_name} must be all or a non-empty array")
+    if raw_modes == ("all",):
+        return ALL_MO_SELECTION_MODES
+    if "all" in raw_modes:
+        raise ValueError(f"{field_name} cannot combine all with explicit modes")
+    normalized: list[str] = []
+    valid_modes = set(ALL_MO_SELECTION_MODES)
+    for mode in raw_modes:
+        if mode not in valid_modes:
+            raise ValueError(
+                f"{field_name} has invalid value {mode!r}; choose all, compromise, best_depth, or best_cnot_count"
+            )
+        if mode not in normalized:
+            normalized.append(mode)
+    return tuple(normalized)
+
+
+def _selection_mode_from_objective(objective_name: str) -> str:
+    if objective_name == "depth":
+        return "best_depth"
+    if objective_name == "cnot_count":
+        return "best_cnot_count"
+    raise ValueError("Only depth and cnot_count are supported as campaign MO selection objectives")
+
+
+def _policy_for_selection_mode(mode: str) -> tuple[LayoutSelectionPolicy, str | None]:
+    if mode == "compromise":
+        return LayoutSelectionPolicy.COMPROMISE, None
+    if mode == "best_depth":
+        return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "depth"
+    if mode == "best_cnot_count":
+        return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "cnot_count"
+    raise ValueError(f"Unsupported MO selection mode: {mode}")
+
+
 def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
     circuit = _require_mapping(entry.get("circuit"), field_name="circuit")
     family = _normalize_choice(circuit.get("family"), field_name="circuit.family", valid_values=_CIRCUIT_FAMILIES)
@@ -526,19 +636,31 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
         field_name="mo.effort_mode",
         valid_values=_MO_EFFORT_MODES,
     )
-    layout_policy_name = _normalize_choice(
-        mo.get("layout_policy", base_config.layout_policy.value),
-        field_name="mo.layout_policy",
-        valid_values=_LAYOUT_POLICIES,
-    )
-    layout_policy = LayoutSelectionPolicy(layout_policy_name)
-    mo_objective_name = mo.get("objective_name")
-    if mo_objective_name is not None:
-        mo_objective_name = _normalize_choice(
-            mo_objective_name,
-            field_name="mo.objective_name",
-            valid_values=_available_objective_names(),
+    if "seeds" in entry:
+        seeds = _normalize_seed_values(entry["seeds"])
+    else:
+        seeds = (_optional_int(entry, "seed", base_config.seed, minimum=0),)
+    if "selection_modes" in mo:
+        mo_selection_modes = _normalize_mo_selection_modes(mo["selection_modes"])
+        layout_policy, mo_objective_name = _policy_for_selection_mode(mo_selection_modes[0])
+    else:
+        layout_policy_name = _normalize_choice(
+            mo.get("layout_policy", base_config.layout_policy.value),
+            field_name="mo.layout_policy",
+            valid_values=_LAYOUT_POLICIES,
         )
+        layout_policy = LayoutSelectionPolicy(layout_policy_name)
+        mo_objective_name = mo.get("objective_name")
+        if mo_objective_name is not None:
+            mo_objective_name = _normalize_choice(
+                mo_objective_name,
+                field_name="mo.objective_name",
+                valid_values=_available_objective_names(),
+            )
+        if layout_policy is LayoutSelectionPolicy.BEST_ON_OBJECTIVE:
+            mo_selection_modes = (_selection_mode_from_objective(mo_objective_name),)
+        else:
+            mo_selection_modes = ("compromise",)
 
     return CampaignConfig(
         circuit_specs=base_config.circuit_specs,
@@ -567,7 +689,8 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
             base_config.rl_n_eval_episodes,
             minimum=1,
         ),
-        seed=_optional_int(entry, "seed", base_config.seed, minimum=0),
+        seed=seeds[0],
+        seeds=seeds,
         mo_use_quick=_optional_bool(mo, "use_quick", base_config.mo_use_quick),
         mo_population_size=_optional_int(
             mo,
@@ -584,6 +707,8 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
         mo_effort_mode=mo_effort_mode,
         layout_policy=layout_policy,
         mo_objective_name=mo_objective_name,
+        mo_selection_modes=mo_selection_modes,
+        parallel_workers=_optional_int(entry, "parallel_workers", 1, minimum=1),
         mode=mode,
         topology_source=topology_source,
     )
@@ -638,13 +763,18 @@ def run_campaign_batch(
     output_root: Path | str = "campaigns",
     dry_run: bool = False,
     run_campaign_fn: Callable[..., object] = run_campaign,
+    run_campaign_matrix_fn: Callable[..., object] = run_campaign_matrix,
 ) -> BatchReport:
     output_path = Path(output_root)
     results: list[BatchCampaignResult] = []
     for campaign in campaigns:
         campaign_output_dir = output_path / campaign.campaign_id
-        summary_document = str(campaign_output_dir / "summary.md")
-        structured_output = str(campaign_output_dir / "campaign.json")
+        if is_matrix_campaign_config(campaign.config):
+            summary_document = str(campaign_output_dir / "matrix_summary.md")
+            structured_output = str(campaign_output_dir / "matrix_summary.json")
+        else:
+            summary_document = str(campaign_output_dir / "summary.md")
+            structured_output = str(campaign_output_dir / "campaign.json")
         if dry_run:
             results.append(
                 BatchCampaignResult(
@@ -657,7 +787,12 @@ def run_campaign_batch(
             continue
 
         try:
-            report = run_campaign_fn(campaign, output_root=output_path)
+            if is_matrix_campaign_config(campaign.config):
+                report = run_campaign_matrix_fn(campaign, output_root=output_path)
+                report_status = report.status
+            else:
+                report = run_campaign_fn(campaign, output_root=output_path)
+                report_status = report.campaign_status
         except Exception as exc:
             results.append(
                 BatchCampaignResult(
@@ -673,7 +808,7 @@ def run_campaign_batch(
         results.append(
             BatchCampaignResult(
                 campaign_id=campaign.campaign_id,
-                status=report.campaign_status,
+                status=report_status,
                 summary_document=summary_document,
                 structured_output=structured_output,
             )
@@ -742,6 +877,11 @@ def run_campaign_cli_from_args(
         output_root=args.output_root,
         dry_run=args.dry_run,
         run_campaign_fn=run_campaign_fn,
+        run_campaign_matrix_fn=lambda campaign, *, output_root: run_campaign_matrix(
+            campaign,
+            output_root=output_root,
+            run_campaign_fn=run_campaign_fn if run_campaign_fn is not run_campaign else None,
+        ),
     )
     for result in report.results:
         output_fn(f"Campaign ID: {result.campaign_id}")
@@ -771,12 +911,25 @@ def run_interactive_campaign_cli(
         return 0
 
     output_fn("Executing campaign...")
-    report = run_campaign_fn(campaign, output_root=output_root)
     campaign_output_dir = Path(output_root) / campaign.campaign_id
+    if is_matrix_campaign_config(campaign.config):
+        report = run_campaign_matrix(
+            campaign,
+            output_root=output_root,
+            run_campaign_fn=run_campaign_fn if run_campaign_fn is not run_campaign else None,
+        )
+        final_status = report.status
+        summary_document = campaign_output_dir / "matrix_summary.md"
+        structured_output = campaign_output_dir / "matrix_summary.json"
+    else:
+        report = run_campaign_fn(campaign, output_root=output_root)
+        final_status = report.campaign_status
+        summary_document = campaign_output_dir / "summary.md"
+        structured_output = campaign_output_dir / "campaign.json"
     output_fn(f"Campaign ID: {campaign.campaign_id}")
-    output_fn(f"Final Status: {report.campaign_status}")
-    output_fn(f"Summary Document: {campaign_output_dir / 'summary.md'}")
-    output_fn(f"Structured Campaign Output: {campaign_output_dir / 'campaign.json'}")
+    output_fn(f"Final Status: {final_status}")
+    output_fn(f"Summary Document: {summary_document}")
+    output_fn(f"Structured Campaign Output: {structured_output}")
     return 0
 
 

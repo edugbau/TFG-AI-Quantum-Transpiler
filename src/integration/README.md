@@ -16,6 +16,7 @@
 | `training_bridge.py` | Seam entre Campaign e `rl_module.training` | `train_case`, `TrainingBridgeResult` |
 | `scenarios.py` | Orquestacion de `Baseline`, `MO_Only`, `RL_Only` y `MO+RL` | `run_baseline_scenario`, `run_mo_only_scenario`, `run_rl_only_scenario`, `run_mo_rl_scenario` |
 | `campaign_runner.py` | Train+eval Campaign por case | `run_campaign` |
+| `campaign_matrix.py` | Expansion multi-seed y multi-modo MO | `expand_campaign_matrix`, `run_campaign_matrix`, `render_matrix_summary_markdown` |
 | `campaign_reporting.py` | Summary Document y persistencia publica | `build_campaign_report`, `render_campaign_summary_markdown`, `write_campaign_outputs` |
 | `campaign_cli.py` | CLI guiada y batch de Campaigns | `build_default_campaign_config`, `load_campaign_batch`, `run_campaign_batch`, `run_interactive_campaign_cli`, `run_campaign_cli_from_args`, `main` |
 | `runner.py` | CLI fina de escenarios | entrada publica ligera |
@@ -45,10 +46,13 @@ Dentro de esa secuencia:
 4. `MO+RL` evalua el mismo layout y el Training Artifact resultante.
 5. Si es posible, Campaign deriva un path-expanded routing subgraph; si no, cae al coupling map completo y deja nota del fallback.
 
+Una Campaign puede expandirse como matrix cuando configura varias `seeds` o varios `mo_selection_modes`. La matrix ejecuta Campaigns hijas `seed x modo MO` y agrega las medias finales por modo MO, usando todos los casos comparables de todas las seeds de ese modo. El alias batch `mo.selection_modes: "all"` equivale a `compromise`, `best_depth` y `best_cnot_count`.
+
 ## Contracts and metadata
 
 - `ScenarioRequest`, `RoutingEpisodeSummary` y `ScenarioResult` validan el contrato publico de evaluacion.
 - `CampaignConfig` distingue `default` y `advanced`, y tambien el modo `mo_effort_mode` (`auto` o `custom`).
+- `CampaignConfig` acepta `seeds`, `mo_selection_modes` y `parallel_workers` para Campaign matrices, manteniendo `seed` y `layout_policy` como contrato legacy de una sola ejecucion.
 - `SyntheticTopologySpec` permite usar topologias sinteticas en modo avanzado.
 - `resolve_routing_model_contract()` lee `run_metadata.json` cuando existe y mantiene fallback legacy para checkpoints antiguos.
 - La metadata versionada de masked routing se consume cuando esta disponible; si no, se mantiene la compatibilidad con modelos PPO/DQN legacy.
@@ -60,6 +64,7 @@ La guided CLI ofrece:
 - un camino **Default Campaign** con valores canonicos compartidos;
 - un camino **Advanced Campaign** con seleccion explicita de backends, RL, MO y topologia;
 - ejecucion batch mediante `load_campaign_batch()` y `run_campaign_batch()`.
+- ejecucion matrix desde JSON o CLI avanzada para varias seeds y modos MO.
 
 La superficie guiada actual expone `fake_torino` y `fake_brisbane` como backends visibles para la Campaign CLI.
 
@@ -68,6 +73,12 @@ Cada Campaign persiste:
 - `summary.md` como Summary Document;
 - `campaign.json` como salida estructurada;
 - `cases/<case>/result.json` para cada caso.
+
+Cada Campaign matrix persiste:
+
+- `matrix_summary.md` con medias por modo MO;
+- `matrix_summary.json` como salida estructurada agregada;
+- `runs/<campaign_id>__seed_<seed>__<mode>/` con los Summary Documents de las Campaigns hijas.
 
 El Summary Document deja clara la comparabilidad real de los casos. Un case puede terminar como `completed` y aun asi no ser comparable si falta un bundle completo de metricas.
 
