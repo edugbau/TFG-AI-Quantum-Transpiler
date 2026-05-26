@@ -234,7 +234,7 @@ def _prompt_synthetic_topology(input_fn, output_fn, *, required_qubits: int) -> 
             allow_multiple=False,
         )[0]
         try:
-            if shape in {"full", "line", "ring"}:
+            if shape in {"full", "line", "ring", "t"}:
                 spec = SyntheticTopologySpec(
                     shape=shape,
                     num_qubits=_prompt_int(input_fn, output_fn, prompt="Synthetic num qubits: ", minimum=1),
@@ -538,6 +538,41 @@ def _normalize_backend_names(value: object) -> tuple[str, ...]:
     return backends
 
 
+def _normalize_synthetic_backend_names(value: object, *, synthetic_topology: SyntheticTopologySpec) -> tuple[str, ...]:
+    if value is None:
+        return (synthetic_topology.backend_name,)
+    if not isinstance(value, list) or not value:
+        raise ValueError("backend_names must be a non-empty array")
+    backends = tuple(_require_string(backend_name, field_name="backend_names") for backend_name in value)
+    if backends != (synthetic_topology.backend_name,):
+        raise ValueError("backend_names must contain the synthetic topology backend_name")
+    return backends
+
+
+def _normalize_synthetic_topology(value: object) -> SyntheticTopologySpec:
+    topology = _require_mapping(value, field_name="synthetic_topology")
+    shape = _normalize_choice(
+        topology.get("shape"),
+        field_name="synthetic_topology.shape",
+        valid_values=SYNTHETIC_TOPOLOGY_SHAPES,
+    )
+    if shape in {"full", "line", "ring", "t"}:
+        return SyntheticTopologySpec(
+            shape=shape,
+            num_qubits=_optional_int(topology, "num_qubits", 0, minimum=1),
+        )
+    if shape in {"grid", "hexagonal_lattice"}:
+        return SyntheticTopologySpec(
+            shape=shape,
+            rows=_optional_int(topology, "rows", 0, minimum=1),
+            cols=_optional_int(topology, "cols", 0, minimum=1),
+        )
+    return SyntheticTopologySpec(
+        shape=shape,
+        distance=_optional_int(topology, "distance", 0, minimum=1),
+    )
+
+
 def _normalize_seed_values(value: object, *, field_name: str = "seeds") -> tuple[int, ...]:
     if isinstance(value, str):
         raw_values = [part.strip() for part in value.split(",") if part.strip()]
@@ -617,9 +652,19 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
     topology_source = _normalize_choice(
         entry.get("topology_source", "backend"),
         field_name="topology_source",
-        valid_values=("backend",),
+        valid_values=_TOPOLOGY_SOURCES,
     )
-    backend_names = _normalize_backend_names(entry.get("backend_names", [_DEFAULT_BACKEND]))
+    synthetic_topology = None
+    if topology_source == "synthetic":
+        synthetic_topology = _normalize_synthetic_topology(entry.get("synthetic_topology"))
+        backend_names = _normalize_synthetic_backend_names(
+            entry.get("backend_names"),
+            synthetic_topology=synthetic_topology,
+        )
+    else:
+        if "synthetic_topology" in entry:
+            raise ValueError("synthetic_topology is only accepted for synthetic topology_source")
+        backend_names = _normalize_backend_names(entry.get("backend_names", [_DEFAULT_BACKEND]))
     base_config = build_default_campaign_config(circuit_specs=circuit_specs, backend_name=backend_names[0])
     rl = _require_mapping(entry.get("rl", {}), field_name="rl")
     mo = _require_mapping(entry.get("mo", {}), field_name="mo")
@@ -713,6 +758,7 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
         parallel_workers=_optional_int(entry, "parallel_workers", 1, minimum=1),
         mode=mode,
         topology_source=topology_source,
+        synthetic_topology=synthetic_topology,
     )
 
 

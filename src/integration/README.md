@@ -53,7 +53,7 @@ Una Campaign puede expandirse como matrix cuando configura varias `seeds` o vari
 - `ScenarioRequest`, `RoutingEpisodeSummary` y `ScenarioResult` validan el contrato publico de evaluacion.
 - `CampaignConfig` distingue `default` y `advanced`, y tambien el modo `mo_effort_mode` (`auto` o `custom`).
 - `CampaignConfig` acepta `seeds`, `mo_selection_modes` y `parallel_workers` para Campaign matrices, manteniendo `seed` y `layout_policy` como contrato legacy de una sola ejecucion.
-- `SyntheticTopologySpec` permite usar topologias sinteticas en modo avanzado.
+- `SyntheticTopologySpec` permite usar topologias sinteticas en modo avanzado, incluida `t` como T balanceada (`synthetic_t_Nq`) para `N >= 5`.
 - `resolve_routing_model_contract()` lee `run_metadata.json` cuando existe y mantiene fallback legacy para checkpoints antiguos.
 - La metadata versionada de masked routing se consume cuando esta disponible; si no, se mantiene la compatibilidad con modelos PPO/DQN legacy.
 
@@ -67,6 +67,19 @@ La guided CLI ofrece:
 - ejecucion matrix desde JSON o CLI avanzada para varias seeds y modos MO.
 
 La superficie guiada actual expone `fake_torino` y `fake_brisbane` como backends visibles para la Campaign CLI.
+
+El batch JSON tambien acepta topologias sinteticas avanzadas. Si se omite `backend_names`,
+se deriva del `SyntheticTopologySpec`:
+
+```json
+{
+  "campaign_id": "ghz-11-synthetic-t",
+  "circuit": {"family": "ghz", "num_qubits": 11},
+  "mode": "advanced",
+  "topology_source": "synthetic",
+  "synthetic_topology": {"shape": "t", "num_qubits": 11}
+}
+```
 
 Cada Campaign persiste:
 

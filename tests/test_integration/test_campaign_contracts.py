@@ -270,6 +270,33 @@ def test_campaign_config_accepts_synthetic_topology_in_advanced_mode() -> None:
     assert campaign.build_cases()[0].case_id == "ghz_3__synthetic_grid_2x2"
 
 
+def test_campaign_config_accepts_t_synthetic_topology_in_advanced_mode() -> None:
+    synthetic_topology = SyntheticTopologySpec(shape="t", num_qubits=8)
+    config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=8)],
+        backend_names=[synthetic_topology.backend_name],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="sequential",
+        rl_lookahead_window=10,
+        rl_max_steps=200,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mode="advanced",
+        topology_source="synthetic",
+        synthetic_topology=synthetic_topology,
+    )
+
+    campaign = Campaign.from_config(campaign_id="campaign-synthetic-t", config=config)
+
+    assert config.topology_source == "synthetic"
+    assert config.backend_names == ("synthetic_t_8q",)
+    assert campaign.build_cases()[0].case_id == "ghz_8__synthetic_t_8q"
+
+
 def test_campaign_config_rejects_synthetic_topology_without_enough_physical_qubits() -> None:
     synthetic_topology = SyntheticTopologySpec(shape="line", num_qubits=2)
 

@@ -45,6 +45,7 @@ Puntos clave:
 - `mo_effort_mode` puede ser `auto` o `custom`.
 - `topology_source` puede ser `backend` o `synthetic`.
 - `SyntheticTopologySpec` solo tiene sentido en modo `advanced`.
+- La forma sintetica `t` usa `num_qubits >= 5`, genera `synthetic_t_Nq` y construye una T balanceada con desempate hacia barra superior mas ancha.
 
 ## 2. Capa de Scenario
 
@@ -137,6 +138,7 @@ Expone la CLI guiada y el modo batch.
 - `run_campaign_cli_from_args()` y `main()` actuan como entrada publica.
 
 La CLI actual expone una superficie controlada: `fake_torino` y `fake_brisbane`. La capa de Campaign tambien soporta topologias sinteticas en modo avanzado.
+En batch JSON, `topology_source: "synthetic"` acepta `synthetic_topology` y puede derivar `backend_names` automaticamente; por ejemplo `{"shape": "t", "num_qubits": 11}` produce `synthetic_t_11q`.
 
 ### `runner.py`
 
@@ -156,4 +158,3 @@ Mantiene una CLI fina para scenarios individuales. Es util cuando se quiere eval
 - `mo_module` aporta layouts candidatos y seleccion de layout.
 - `rl_module` aporta el entorno, el agente y el entrenamiento.
 - `integration` conecta todo y publica los resultados.
-

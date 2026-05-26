@@ -117,6 +117,66 @@ def test_load_campaign_batch_builds_single_campaign_from_json(tmp_path) -> None:
     assert config.mo_selection_modes == ("compromise",)
 
 
+def test_load_campaign_batch_builds_t_synthetic_topology_from_json(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-8-synthetic-t",
+                    "circuit": {"family": "ghz", "num_qubits": 8},
+                    "mode": "advanced",
+                    "topology_source": "synthetic",
+                    "synthetic_topology": {"shape": "t", "num_qubits": 8},
+                    "mo": {
+                        "effort_mode": "auto",
+                        "layout_policy": "compromise",
+                    },
+                    "seed": 42,
+                }
+            ]
+        },
+    )
+
+    campaign = load_campaign_batch(batch_path)[0]
+    config = campaign.config
+
+    assert config.topology_source == "synthetic"
+    assert config.backend_names == ("synthetic_t_8q",)
+    assert config.synthetic_topology.shape == "t"
+    assert config.synthetic_topology.num_qubits == 8
+    assert config.synthetic_topology.physical_qubits == 8
+
+
+def test_load_campaign_batch_rejects_mismatched_synthetic_backend_name(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-8-synthetic-t",
+                    "circuit": {"family": "ghz", "num_qubits": 8},
+                    "backend_names": ["synthetic_t_11q"],
+                    "mode": "advanced",
+                    "topology_source": "synthetic",
+                    "synthetic_topology": {"shape": "t", "num_qubits": 8},
+                }
+            ]
+        },
+    )
+
+    try:
+        load_campaign_batch(batch_path)
+    except ValueError as exc:
+        assert "synthetic topology backend_name" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for mismatched synthetic backend name")
+
+
 def test_load_campaign_batch_accepts_multi_seed_all_mo_selection_modes(tmp_path) -> None:
     from src.integration.campaign_cli import load_campaign_batch
 
@@ -625,6 +685,55 @@ def test_run_interactive_campaign_cli_collects_synthetic_topology_in_advanced_mo
     assert "Topology Source: synthetic" in rendered
     assert "Synthetic Topology: synthetic_grid_2x2" in rendered
     assert "Synthetic Basis Gates: id, rz, sx, x, cx" in rendered
+
+
+def test_run_interactive_campaign_cli_collects_t_synthetic_topology_in_advanced_mode() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz",
+            "8",
+            "advanced",
+            "synthetic",
+            "t",
+            "8",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "42",
+            "auto",
+            "compromise",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured["campaign"] = campaign
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-synth-t-001",
+        output_root=Path("campaigns"),
+        verbose=True,
+    )
+
+    rendered = "\n".join(outputs)
+    config = captured["campaign"].config
+
+    assert exit_code == 0
+    assert config.topology_source == "synthetic"
+    assert config.backend_names == ("synthetic_t_8q",)
+    assert config.synthetic_topology.shape == "t"
+    assert config.synthetic_topology.physical_qubits == 8
+    assert "Synthetic Topology: synthetic_t_8q" in rendered
+    assert "Synthetic Physical Qubits: 8" in rendered
 
 
 def test_run_interactive_campaign_cli_reprompts_when_synthetic_topology_is_too_small() -> None:

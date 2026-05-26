@@ -10,6 +10,7 @@ SYNTHETIC_TOPOLOGY_SHAPES: tuple[str, ...] = (
     "full",
     "line",
     "ring",
+    "t",
     "grid",
     "heavy_hex",
     "heavy_square",
@@ -28,6 +29,46 @@ def _require_odd_positive(value: int | None, field_name: str) -> int:
     if value % 2 == 0:
         raise ValueError(f"{field_name} must be an odd positive integer")
     return value
+
+
+def _require_minimum(value: int | None, field_name: str, minimum: int) -> int:
+    value = _require_positive(value, field_name)
+    if value < minimum:
+        raise ValueError(f"{field_name} must be at least {minimum}")
+    return value
+
+
+def _bidirectional_edges(edges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    directed_edges: list[tuple[int, int]] = []
+    for left, right in edges:
+        directed_edges.append((left, right))
+        directed_edges.append((right, left))
+    return directed_edges
+
+
+def _balanced_t_bar_width(num_qubits: int) -> int:
+    candidates: list[tuple[int, int, int]] = []
+    for bar_width in range(3, num_qubits + 1, 2):
+        stem_height = num_qubits - bar_width + 1
+        if stem_height < 3:
+            continue
+        candidates.append((abs(bar_width - stem_height), -bar_width, bar_width))
+    if not candidates:
+        raise ValueError("num_qubits must support a T topology with bar and stem of at least 3 qubits")
+    return min(candidates)[2]
+
+
+def _build_t_coupling_map(num_qubits: int) -> CouplingMap:
+    bar_width = _balanced_t_bar_width(num_qubits)
+    center = bar_width // 2
+    undirected_edges: list[tuple[int, int]] = [(qubit, qubit + 1) for qubit in range(bar_width - 1)]
+
+    previous = center
+    for qubit in range(bar_width, num_qubits):
+        undirected_edges.append((previous, qubit))
+        previous = qubit
+
+    return CouplingMap(_bidirectional_edges(undirected_edges))
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,8 +97,12 @@ class SyntheticTopologySpec:
         object.__setattr__(self, "shape", normalized_shape)
         object.__setattr__(self, "basis_gates", basis_gates)
 
-        if normalized_shape in {"full", "line", "ring"}:
-            object.__setattr__(self, "num_qubits", _require_positive(self.num_qubits, "num_qubits"))
+        if normalized_shape in {"full", "line", "ring", "t"}:
+            if normalized_shape == "t":
+                num_qubits = _require_minimum(self.num_qubits, "num_qubits", 5)
+            else:
+                num_qubits = _require_positive(self.num_qubits, "num_qubits")
+            object.__setattr__(self, "num_qubits", num_qubits)
             object.__setattr__(self, "rows", None)
             object.__setattr__(self, "cols", None)
             object.__setattr__(self, "distance", None)
@@ -77,7 +122,7 @@ class SyntheticTopologySpec:
 
     @property
     def backend_name(self) -> str:
-        if self.shape in {"full", "line", "ring"}:
+        if self.shape in {"full", "line", "ring", "t"}:
             return f"synthetic_{self.shape}_{self.num_qubits}q"
         if self.shape == "grid":
             return f"synthetic_grid_{self.rows}x{self.cols}"
@@ -96,6 +141,8 @@ class SyntheticTopologySpec:
             return CouplingMap.from_line(self.num_qubits)
         if self.shape == "ring":
             return CouplingMap.from_ring(self.num_qubits)
+        if self.shape == "t":
+            return _build_t_coupling_map(self.num_qubits)
         if self.shape == "grid":
             return CouplingMap.from_grid(self.rows, self.cols)
         if self.shape == "heavy_hex":
