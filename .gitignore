@@ -7,5 +7,7 @@ src/qiskit_interface/docs/
 /tests/test_qiskit_interface/__pycache__
 /experiments
 *.pyc
-/campaigns
 /ssh
+*.zip
+*.0
+*.1

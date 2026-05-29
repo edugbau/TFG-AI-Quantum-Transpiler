@@ -1,0 +1,186 @@
+{
+  "campaign_id": "test-matrix-ghz-3",
+  "status": "completed",
+  "requested_seeds": [
+    41,
+    42
+  ],
+  "mo_selection_modes": [
+    "compromise",
+    "best_depth",
+    "best_cnot_count"
+  ],
+  "parallel_workers": 2,
+  "child_results": [
+    {
+      "campaign_id": "test-matrix-ghz-3__seed_41__compromise",
+      "seed": 41,
+      "mo_selection_mode": "compromise",
+      "status": "completed",
+      "summary_document": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_41__compromise\\summary.md",
+      "structured_output": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_41__compromise\\campaign.json",
+      "error": null
+    },
+    {
+      "campaign_id": "test-matrix-ghz-3__seed_41__best_depth",
+      "seed": 41,
+      "mo_selection_mode": "best_depth",
+      "status": "completed",
+      "summary_document": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_41__best_depth\\summary.md",
+      "structured_output": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_41__best_depth\\campaign.json",
+      "error": null
+    },
+    {
+      "campaign_id": "test-matrix-ghz-3__seed_41__best_cnot_count",
+      "seed": 41,
+      "mo_selection_mode": "best_cnot_count",
+      "status": "completed",
+      "summary_document": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_41__best_cnot_count\\summary.md",
+      "structured_output": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_41__best_cnot_count\\campaign.json",
+      "error": null
+    },
+    {
+      "campaign_id": "test-matrix-ghz-3__seed_42__compromise",
+      "seed": 42,
+      "mo_selection_mode": "compromise",
+      "status": "completed",
+      "summary_document": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_42__compromise\\summary.md",
+      "structured_output": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_42__compromise\\campaign.json",
+      "error": null
+    },
+    {
+      "campaign_id": "test-matrix-ghz-3__seed_42__best_depth",
+      "seed": 42,
+      "mo_selection_mode": "best_depth",
+      "status": "completed",
+      "summary_document": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_42__best_depth\\summary.md",
+      "structured_output": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_42__best_depth\\campaign.json",
+      "error": null
+    },
+    {
+      "campaign_id": "test-matrix-ghz-3__seed_42__best_cnot_count",
+      "seed": 42,
+      "mo_selection_mode": "best_cnot_count",
+      "status": "completed",
+      "summary_document": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_42__best_cnot_count\\summary.md",
+      "structured_output": "campaigns\\test-matrix-ghz-3\\runs\\test-matrix-ghz-3__seed_42__best_cnot_count\\campaign.json",
+      "error": null
+    }
+  ],
+  "mode_summaries": [
+    {
+      "mo_selection_mode": "compromise",
+      "requested_seeds": [
+        41,
+        42
+      ],
+      "comparable_completed_cases": 2,
+      "failed_cases": 0,
+      "incomplete_cases": 0,
+      "cancelled_cases": 0,
+      "aggregate_metrics": {
+        "trans_depth": {
+          "baseline_mean": 11.0,
+          "rl_only_mean": 11.0,
+          "mo_only_mean": 14.5,
+          "mo_rl_mean": 19.0
+        },
+        "trans_two_qubit_gates": {
+          "baseline_mean": 2.0,
+          "rl_only_mean": 2.0,
+          "mo_only_mean": 5.0,
+          "mo_rl_mean": 6.5
+        },
+        "trans_cnot_equivalent": {
+          "baseline_mean": 2.0,
+          "rl_only_mean": 2.0,
+          "mo_only_mean": 5.0,
+          "mo_rl_mean": 6.5
+        },
+        "elapsed_time_s": {
+          "baseline_mean": 0.011334449998685159,
+          "rl_only_mean": 0.013377600000239909,
+          "mo_only_mean": 0.011057300000175019,
+          "mo_rl_mean": 0.014138200000161305
+        }
+      }
+    },
+    {
+      "mo_selection_mode": "best_depth",
+      "requested_seeds": [
+        41,
+        42
+      ],
+      "comparable_completed_cases": 2,
+      "failed_cases": 0,
+      "incomplete_cases": 0,
+      "cancelled_cases": 0,
+      "aggregate_metrics": {
+        "trans_depth": {
+          "baseline_mean": 11.0,
+          "rl_only_mean": 11.0,
+          "mo_only_mean": 13.5,
+          "mo_rl_mean": 16.5
+        },
+        "trans_two_qubit_gates": {
+          "baseline_mean": 2.0,
+          "rl_only_mean": 2.0,
+          "mo_only_mean": 5.0,
+          "mo_rl_mean": 5.0
+        },
+        "trans_cnot_equivalent": {
+          "baseline_mean": 2.0,
+          "rl_only_mean": 2.0,
+          "mo_only_mean": 5.0,
+          "mo_rl_mean": 5.0
+        },
+        "elapsed_time_s": {
+          "baseline_mean": 0.011459700001068995,
+          "rl_only_mean": 0.014121299998805625,
+          "mo_only_mean": 0.013880550000976655,
+          "mo_rl_mean": 0.011681149999276386
+        }
+      }
+    },
+    {
+      "mo_selection_mode": "best_cnot_count",
+      "requested_seeds": [
+        41,
+        42
+      ],
+      "comparable_completed_cases": 2,
+      "failed_cases": 0,
+      "incomplete_cases": 0,
+      "cancelled_cases": 0,
+      "aggregate_metrics": {
+        "trans_depth": {
+          "baseline_mean": 11.0,
+          "rl_only_mean": 11.0,
+          "mo_only_mean": 11.0,
+          "mo_rl_mean": 11.0
+        },
+        "trans_two_qubit_gates": {
+          "baseline_mean": 2.0,
+          "rl_only_mean": 2.0,
+          "mo_only_mean": 2.0,
+          "mo_rl_mean": 2.0
+        },
+        "trans_cnot_equivalent": {
+          "baseline_mean": 2.0,
+          "rl_only_mean": 2.0,
+          "mo_only_mean": 2.0,
+          "mo_rl_mean": 2.0
+        },
+        "elapsed_time_s": {
+          "baseline_mean": 0.011720800001057796,
+          "rl_only_mean": 0.013032200000452576,
+          "mo_only_mean": 0.010178649999943445,
+          "mo_rl_mean": 0.09564365000187536
+        }
+      }
+    }
+  ],
+  "incidents": [],
+  "summary_path": "campaigns\\test-matrix-ghz-3\\matrix_summary.md",
+  "structured_output_path": "campaigns\\test-matrix-ghz-3\\matrix_summary.json"
+}

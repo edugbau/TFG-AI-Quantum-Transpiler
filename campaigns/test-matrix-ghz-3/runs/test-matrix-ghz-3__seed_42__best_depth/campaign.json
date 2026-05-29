@@ -1,0 +1,763 @@
+{
+  "campaign_id": "test-matrix-ghz-3__seed_42__best_depth",
+  "campaign_status": "completed",
+  "campaign_config": {
+    "circuit_specs": [
+      {
+        "family": "ghz",
+        "num_qubits": 3
+      }
+    ],
+    "backend_names": [
+      "fake_torino"
+    ],
+    "rl_algorithm": "MaskablePPO",
+    "rl_total_timesteps": 500,
+    "rl_frontier_mode": "dag",
+    "rl_lookahead_window": 4,
+    "rl_max_steps": 80,
+    "seed": 42,
+    "mo_use_quick": true,
+    "mo_population_size": 30,
+    "mo_n_generations": 10,
+    "layout_policy": "best_on_objective",
+    "rl_learning_rate": 0.0001,
+    "rl_clip_range": 0.1,
+    "rl_target_kl": 0.03,
+    "rl_n_eval_episodes": 1,
+    "mo_effort_mode": "custom",
+    "mo_objective_name": "depth",
+    "seeds": [
+      42
+    ],
+    "mo_selection_modes": [
+      "best_depth"
+    ],
+    "parallel_workers": 1,
+    "mode": "advanced",
+    "topology_source": "backend",
+    "synthetic_topology": null
+  },
+  "summary": {
+    "status": "completed",
+    "total_cases": 1,
+    "comparable_completed_cases": 1,
+    "failed_cases": 0,
+    "incomplete_cases": 0,
+    "cancelled_cases": 0,
+    "case_results": [
+      {
+        "case_id": "ghz_3__fake_torino",
+        "status": "completed"
+      }
+    ]
+  },
+  "case_reports": [
+    {
+      "case": {
+        "case_id": "ghz_3__fake_torino",
+        "circuit_family": "ghz",
+        "num_qubits": 3,
+        "backend_name": "fake_torino"
+      },
+      "status": "completed",
+      "baseline_result": {
+        "scenario_name": "Baseline",
+        "circuit_name": "ghz_3",
+        "backend_name": "fake_torino",
+        "seed": 42,
+        "success": true,
+        "selected_layout": null,
+        "transpilation_metrics": {
+          "circuit_name": "GHZ_3",
+          "backend_name": "fake_torino",
+          "optimization_level": 1,
+          "seed": 42,
+          "elapsed_time_s": 0.010663299999578157,
+          "depth_reduction": -2.6666666666666665,
+          "two_qubit_gate_overhead": 1.0,
+          "baseline_name": "qiskit_level_1",
+          "orig_depth": 3,
+          "orig_num_qubits": 3,
+          "orig_total_gates": 3,
+          "orig_two_qubit_gates": 2,
+          "orig_nonlocal_gates": 2,
+          "orig_cnot_equivalent": 2,
+          "orig_gate_counts": {
+            "cx": 2,
+            "h": 1
+          },
+          "orig_width": 3,
+          "orig_num_clbits": 0,
+          "orig_active_qubits": 3,
+          "trans_depth": 11,
+          "trans_num_qubits": 133,
+          "trans_total_gates": 17,
+          "trans_two_qubit_gates": 2,
+          "trans_nonlocal_gates": 2,
+          "trans_cnot_equivalent": 2,
+          "trans_gate_counts": {
+            "rz": 10,
+            "sx": 5,
+            "cz": 2
+          },
+          "trans_width": 133,
+          "trans_num_clbits": 0,
+          "trans_active_qubits": 3,
+          "qiskit_initial_layout": [
+            0,
+            1,
+            2
+          ]
+        },
+        "transpilation_artifact": {
+          "artifact_version": "transpilation_result.v1",
+          "baseline_name": "qiskit_level_1",
+          "circuit": {
+            "name": "GHZ_3",
+            "num_qubits": 3,
+            "source_kind": "library",
+            "source_format": "library",
+            "source_path": null,
+            "resolved_circuit_name": "ghz"
+          },
+          "backend": {
+            "backend_name": "fake_torino",
+            "backend_kind": "backend",
+            "num_qubits": 133,
+            "two_qubit_gate": "cz",
+            "basis_gates": [
+              "cz",
+              "id",
+              "rz",
+              "sx",
+              "x"
+            ],
+            "coupling_edges_count": 300,
+            "min_error_2q": 0.0014953046446719576,
+            "avg_error_2q": 0.07999846689763981,
+            "max_error_2q": 1.0,
+            "avg_t1": 0.00017360920684329905,
+            "avg_t2": 0.0001451908431230663
+          },
+          "transpilation": {
+            "optimization_level": 1,
+            "seed": 42,
+            "elapsed_time_s": 0.010663299999578157,
+            "baseline_name": "qiskit_level_1",
+            "initial_layout": null,
+            "qiskit_initial_layout": [
+              0,
+              1,
+              2
+            ],
+            "final_layout": [
+              0,
+              1,
+              2
+            ]
+          },
+          "metrics": {
+            "original": {
+              "depth": 3,
+              "num_qubits": 3,
+              "total_gates": 3,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "cx": 2,
+                "h": 1
+              },
+              "width": 3,
+              "num_clbits": 0,
+              "active_qubits": 3
+            },
+            "transpiled": {
+              "depth": 11,
+              "num_qubits": 133,
+              "total_gates": 17,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "rz": 10,
+                "sx": 5,
+                "cz": 2
+              },
+              "width": 133,
+              "num_clbits": 0,
+              "active_qubits": 3
+            }
+          }
+        },
+        "routing_summary": null,
+        "errors": [],
+        "notes": []
+      },
+      "mo_only_result": {
+        "scenario_name": "MO_Only",
+        "circuit_name": "ghz_3",
+        "backend_name": "fake_torino",
+        "seed": 42,
+        "success": true,
+        "selected_layout": [
+          45,
+          44,
+          35
+        ],
+        "transpilation_metrics": {
+          "circuit_name": "GHZ_3",
+          "backend_name": "fake_torino",
+          "optimization_level": 1,
+          "seed": 42,
+          "elapsed_time_s": 0.009991499999159714,
+          "depth_reduction": -2.6666666666666665,
+          "two_qubit_gate_overhead": 1.0,
+          "baseline_name": "custom_layout_level_1",
+          "orig_depth": 3,
+          "orig_num_qubits": 3,
+          "orig_total_gates": 3,
+          "orig_two_qubit_gates": 2,
+          "orig_nonlocal_gates": 2,
+          "orig_cnot_equivalent": 2,
+          "orig_gate_counts": {
+            "cx": 2,
+            "h": 1
+          },
+          "orig_width": 3,
+          "orig_num_clbits": 0,
+          "orig_active_qubits": 3,
+          "trans_depth": 11,
+          "trans_num_qubits": 133,
+          "trans_total_gates": 17,
+          "trans_two_qubit_gates": 2,
+          "trans_nonlocal_gates": 2,
+          "trans_cnot_equivalent": 2,
+          "trans_gate_counts": {
+            "rz": 10,
+            "sx": 5,
+            "cz": 2
+          },
+          "trans_width": 133,
+          "trans_num_clbits": 0,
+          "trans_active_qubits": 3,
+          "initial_layout": [
+            45,
+            44,
+            35
+          ],
+          "qiskit_initial_layout": [
+            45,
+            44,
+            35
+          ]
+        },
+        "transpilation_artifact": {
+          "artifact_version": "transpilation_result.v1",
+          "baseline_name": "custom_layout_level_1",
+          "circuit": {
+            "name": "GHZ_3",
+            "num_qubits": 3,
+            "source_kind": "library",
+            "source_format": "library",
+            "source_path": null,
+            "resolved_circuit_name": "ghz"
+          },
+          "backend": {
+            "backend_name": "fake_torino",
+            "backend_kind": "backend",
+            "num_qubits": 133,
+            "two_qubit_gate": "cz",
+            "basis_gates": [
+              "cz",
+              "id",
+              "rz",
+              "sx",
+              "x"
+            ],
+            "coupling_edges_count": 300,
+            "min_error_2q": 0.0014953046446719576,
+            "avg_error_2q": 0.07999846689763981,
+            "max_error_2q": 1.0,
+            "avg_t1": 0.00017360920684329905,
+            "avg_t2": 0.0001451908431230663
+          },
+          "transpilation": {
+            "optimization_level": 1,
+            "seed": 42,
+            "elapsed_time_s": 0.009991499999159714,
+            "baseline_name": "custom_layout_level_1",
+            "initial_layout": [
+              45,
+              44,
+              35
+            ],
+            "qiskit_initial_layout": [
+              45,
+              44,
+              35
+            ],
+            "final_layout": [
+              45,
+              44,
+              35
+            ]
+          },
+          "metrics": {
+            "original": {
+              "depth": 3,
+              "num_qubits": 3,
+              "total_gates": 3,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "cx": 2,
+                "h": 1
+              },
+              "width": 3,
+              "num_clbits": 0,
+              "active_qubits": 3
+            },
+            "transpiled": {
+              "depth": 11,
+              "num_qubits": 133,
+              "total_gates": 17,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "rz": 10,
+                "sx": 5,
+                "cz": 2
+              },
+              "width": 133,
+              "num_clbits": 0,
+              "active_qubits": 3
+            }
+          }
+        },
+        "routing_summary": null,
+        "errors": [],
+        "notes": []
+      },
+      "rl_only_result": {
+        "scenario_name": "RL_Only",
+        "circuit_name": "ghz_3",
+        "backend_name": "fake_torino",
+        "seed": 42,
+        "success": true,
+        "selected_layout": [
+          0,
+          1,
+          2
+        ],
+        "transpilation_metrics": {
+          "backend_name": "fake_torino",
+          "optimization_level": 1,
+          "seed": 42,
+          "elapsed_time_s": 0.01378629999817349,
+          "depth_reduction": -2.6666666666666665,
+          "two_qubit_gate_overhead": 1.0,
+          "orig_depth": 3,
+          "orig_num_qubits": 3,
+          "orig_total_gates": 3,
+          "orig_two_qubit_gates": 2,
+          "orig_nonlocal_gates": 2,
+          "orig_cnot_equivalent": 2,
+          "orig_gate_counts": {
+            "cx": 2,
+            "h": 1
+          },
+          "orig_width": 3,
+          "orig_num_clbits": 0,
+          "orig_active_qubits": 3,
+          "trans_depth": 11,
+          "trans_num_qubits": 3,
+          "trans_total_gates": 17,
+          "trans_two_qubit_gates": 2,
+          "trans_nonlocal_gates": 2,
+          "trans_cnot_equivalent": 2,
+          "trans_gate_counts": {
+            "rz": 10,
+            "sx": 5,
+            "cz": 2
+          },
+          "trans_width": 3,
+          "trans_num_clbits": 0,
+          "trans_active_qubits": 3,
+          "initial_layout": [
+            0,
+            1,
+            2
+          ]
+        },
+        "transpilation_artifact": {
+          "artifact_version": "transpilation_result.v1",
+          "baseline_name": null,
+          "circuit": {
+            "name": "GHZ_3",
+            "num_qubits": 3,
+            "source_kind": "library",
+            "source_format": "library",
+            "source_path": null,
+            "resolved_circuit_name": "ghz"
+          },
+          "backend": {
+            "backend_name": "fake_torino",
+            "backend_kind": "backend",
+            "num_qubits": 133,
+            "two_qubit_gate": "cz",
+            "basis_gates": [
+              "cz",
+              "id",
+              "rz",
+              "sx",
+              "x"
+            ],
+            "coupling_edges_count": 300,
+            "min_error_2q": 0.0014953046446719576,
+            "avg_error_2q": 0.07999846689763981,
+            "max_error_2q": 1.0,
+            "avg_t1": 0.00017360920684329905,
+            "avg_t2": 0.0001451908431230663
+          },
+          "transpilation": {
+            "optimization_level": 1,
+            "seed": 42,
+            "elapsed_time_s": 0.01378629999817349,
+            "baseline_name": null,
+            "initial_layout": [
+              0,
+              1,
+              2
+            ],
+            "qiskit_initial_layout": null,
+            "final_layout": [
+              0,
+              1,
+              2
+            ]
+          },
+          "metrics": {
+            "original": {
+              "depth": 3,
+              "num_qubits": 3,
+              "total_gates": 3,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "cx": 2,
+                "h": 1
+              },
+              "width": 3,
+              "num_clbits": 0,
+              "active_qubits": 3
+            },
+            "transpiled": {
+              "depth": 11,
+              "num_qubits": 3,
+              "total_gates": 17,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "rz": 10,
+                "sx": 5,
+                "cz": 2
+              },
+              "width": 3,
+              "num_clbits": 0,
+              "active_qubits": 3
+            }
+          }
+        },
+        "routing_summary": {
+          "initial_layout": [
+            0,
+            1,
+            2
+          ],
+          "final_layout": [
+            0,
+            1,
+            2
+          ],
+          "steps_executed": 0,
+          "total_reward": 0.0,
+          "completed": true,
+          "truncated": false,
+          "total_swaps": 0,
+          "gates_executed_count": 3,
+          "swap_trace": [],
+          "executed_gate_trace": [
+            [
+              "h",
+              0,
+              0
+            ],
+            [
+              "cx",
+              0,
+              1
+            ],
+            [
+              "cx",
+              1,
+              2
+            ]
+          ]
+        },
+        "errors": [],
+        "notes": [
+          "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
+          "Routing graph: path_expanded_subgraph with 3 nodes, 2 edges, 0 added intermediate qubits, 2 interacting pairs."
+        ]
+      },
+      "mo_rl_result": {
+        "scenario_name": "MO+RL",
+        "circuit_name": "ghz_3",
+        "backend_name": "fake_torino",
+        "seed": 42,
+        "success": true,
+        "selected_layout": [
+          45,
+          44,
+          35
+        ],
+        "transpilation_metrics": {
+          "backend_name": "fake_torino",
+          "optimization_level": 1,
+          "seed": 42,
+          "elapsed_time_s": 0.009282600000005914,
+          "depth_reduction": -2.6666666666666665,
+          "two_qubit_gate_overhead": 1.0,
+          "orig_depth": 3,
+          "orig_num_qubits": 3,
+          "orig_total_gates": 3,
+          "orig_two_qubit_gates": 2,
+          "orig_nonlocal_gates": 2,
+          "orig_cnot_equivalent": 2,
+          "orig_gate_counts": {
+            "cx": 2,
+            "h": 1
+          },
+          "orig_width": 3,
+          "orig_num_clbits": 0,
+          "orig_active_qubits": 3,
+          "trans_depth": 11,
+          "trans_num_qubits": 46,
+          "trans_total_gates": 17,
+          "trans_two_qubit_gates": 2,
+          "trans_nonlocal_gates": 2,
+          "trans_cnot_equivalent": 2,
+          "trans_gate_counts": {
+            "rz": 10,
+            "sx": 5,
+            "cz": 2
+          },
+          "trans_width": 46,
+          "trans_num_clbits": 0,
+          "trans_active_qubits": 3,
+          "initial_layout": [
+            45,
+            44,
+            35
+          ]
+        },
+        "transpilation_artifact": {
+          "artifact_version": "transpilation_result.v1",
+          "baseline_name": null,
+          "circuit": {
+            "name": "GHZ_3",
+            "num_qubits": 3,
+            "source_kind": "library",
+            "source_format": "library",
+            "source_path": null,
+            "resolved_circuit_name": "ghz"
+          },
+          "backend": {
+            "backend_name": "fake_torino",
+            "backend_kind": "backend",
+            "num_qubits": 133,
+            "two_qubit_gate": "cz",
+            "basis_gates": [
+              "cz",
+              "id",
+              "rz",
+              "sx",
+              "x"
+            ],
+            "coupling_edges_count": 300,
+            "min_error_2q": 0.0014953046446719576,
+            "avg_error_2q": 0.07999846689763981,
+            "max_error_2q": 1.0,
+            "avg_t1": 0.00017360920684329905,
+            "avg_t2": 0.0001451908431230663
+          },
+          "transpilation": {
+            "optimization_level": 1,
+            "seed": 42,
+            "elapsed_time_s": 0.009282600000005914,
+            "baseline_name": null,
+            "initial_layout": [
+              45,
+              44,
+              35
+            ],
+            "qiskit_initial_layout": null,
+            "final_layout": [
+              45,
+              44,
+              35
+            ]
+          },
+          "metrics": {
+            "original": {
+              "depth": 3,
+              "num_qubits": 3,
+              "total_gates": 3,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "cx": 2,
+                "h": 1
+              },
+              "width": 3,
+              "num_clbits": 0,
+              "active_qubits": 3
+            },
+            "transpiled": {
+              "depth": 11,
+              "num_qubits": 46,
+              "total_gates": 17,
+              "two_qubit_gates": 2,
+              "nonlocal_gates": 2,
+              "cnot_equivalent": 2,
+              "gate_counts": {
+                "rz": 10,
+                "sx": 5,
+                "cz": 2
+              },
+              "width": 46,
+              "num_clbits": 0,
+              "active_qubits": 3
+            }
+          }
+        },
+        "routing_summary": {
+          "initial_layout": [
+            45,
+            44,
+            35
+          ],
+          "final_layout": [
+            45,
+            44,
+            35
+          ],
+          "steps_executed": 0,
+          "total_reward": 0.0,
+          "completed": true,
+          "truncated": false,
+          "total_swaps": 0,
+          "gates_executed_count": 3,
+          "swap_trace": [],
+          "executed_gate_trace": [
+            [
+              "h",
+              0,
+              0
+            ],
+            [
+              "cx",
+              0,
+              1
+            ],
+            [
+              "cx",
+              1,
+              2
+            ]
+          ]
+        },
+        "errors": [],
+        "notes": [
+          "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages.",
+          "Routing graph: path_expanded_subgraph with 3 nodes, 2 edges, 0 added intermediate qubits, 2 interacting pairs."
+        ]
+      },
+      "rl_only_training_result": {
+        "status": "completed",
+        "selected_artifact_path": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/rl_only/training/models/rl_20260526_203535_073713/final_routing_MaskablePPO.zip",
+        "best_model_path": null,
+        "final_model_path": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/rl_only/training/models/rl_20260526_203535_073713/final_routing_MaskablePPO.zip",
+        "run_model_dir": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/rl_only/training/models/rl_20260526_203535_073713",
+        "run_log_dir": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/rl_only/training/logs/rl_20260526_203535_073713",
+        "effective_training_config": {
+          "algorithm": "MaskablePPO",
+          "total_timesteps": 500,
+          "frontier_mode": "dag",
+          "lookahead_window": 4,
+          "max_steps": 80,
+          "seed": 42,
+          "learning_rate": 0.0001,
+          "clip_range": 0.1,
+          "target_kl": 0.03,
+          "n_eval_episodes": 1
+        }
+      },
+      "training_result": {
+        "status": "completed",
+        "selected_artifact_path": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/training/models/rl_20260526_203541_897320/final_routing_MaskablePPO.zip",
+        "best_model_path": null,
+        "final_model_path": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/training/models/rl_20260526_203541_897320/final_routing_MaskablePPO.zip",
+        "run_model_dir": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/training/models/rl_20260526_203541_897320",
+        "run_log_dir": "runs/test-matrix-ghz-3__seed_42__best_depth/cases/ghz_3__fake_torino/training/logs/rl_20260526_203541_897320",
+        "effective_training_config": {
+          "algorithm": "MaskablePPO",
+          "total_timesteps": 500,
+          "frontier_mode": "dag",
+          "lookahead_window": 4,
+          "max_steps": 80,
+          "seed": 42,
+          "learning_rate": 0.0001,
+          "clip_range": 0.1,
+          "target_kl": 0.03,
+          "n_eval_episodes": 1
+        }
+      },
+      "incidents": []
+    }
+  ],
+  "aggregate_metrics": {
+    "trans_depth": {
+      "baseline_mean": 11.0,
+      "mo_only_mean": 11.0,
+      "rl_only_mean": 11.0,
+      "mo_rl_mean": 11.0
+    },
+    "trans_two_qubit_gates": {
+      "baseline_mean": 2.0,
+      "mo_only_mean": 2.0,
+      "rl_only_mean": 2.0,
+      "mo_rl_mean": 2.0
+    },
+    "trans_cnot_equivalent": {
+      "baseline_mean": 2.0,
+      "mo_only_mean": 2.0,
+      "rl_only_mean": 2.0,
+      "mo_rl_mean": 2.0
+    },
+    "elapsed_time_s": {
+      "baseline_mean": 0.010663299999578157,
+      "mo_only_mean": 0.009991499999159714,
+      "rl_only_mean": 0.01378629999817349,
+      "mo_rl_mean": 0.009282600000005914
+    }
+  },
+  "incidents": []
+}
