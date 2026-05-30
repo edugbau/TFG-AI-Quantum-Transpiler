@@ -37,6 +37,7 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
+from src.rl_module.routing_mask import DEFAULT_NEW_MASK_SEMANTICS
 from src.rl_module.training import set_global_seeds
 from src.rl_module.gui.routing_view import RoutingView
 from src.rl_module.gui.synthesis_view import SynthesisView
@@ -49,7 +50,7 @@ from src.rl_module.gui.evaluation_panel import (
 logger = logging.getLogger(__name__)
 
 
-MASKED_ROUTING_SEMANTICS = "frontier_restricted_edges.v1"
+MASKED_ROUTING_SEMANTICS = DEFAULT_NEW_MASK_SEMANTICS
 ROUTING_ALGORITHMS = ["PPO", "DQN", "MaskablePPO"]
 SYNTHESIS_ALGORITHMS = ["PPO", "DQN"]
 
@@ -588,6 +589,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
                 basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
+                mask_semantics=cfg.get("mask_semantics"),
             )
             raw_env.reset(seed=cfg["seed"])
             self._env = Monitor(raw_env)
@@ -600,6 +602,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
                 basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
+                mask_semantics=cfg.get("mask_semantics"),
             )
             eval_raw_env.reset(seed=cfg["seed"])
             eval_env = Monitor(eval_raw_env)
@@ -799,6 +802,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 lookahead_window=cfg["lookahead"],
                 max_steps=cfg["max_steps"],
                 basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
+                mask_semantics=cfg.get("mask_semantics"),
             )
 
             eval_agent = self._agent

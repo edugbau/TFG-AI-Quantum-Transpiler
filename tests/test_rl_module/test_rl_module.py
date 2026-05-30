@@ -1400,6 +1400,61 @@ class TestQuantumTranspilationEnv:
             np.array([True, True, True], dtype=bool),
         )
 
+    def test_action_masks_v1_keeps_immediate_undo_swap_enabled(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v1",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        action = env.strategy.edges.index((0, 1))
+        env.step(action)
+
+        assert env.action_masks()[action]
+
+    def test_action_masks_v2_blocks_immediate_undo_swap_when_alternatives_exist(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v2",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        action = env.strategy.edges.index((0, 1))
+        env.step(action)
+
+        assert not env.action_masks()[action]
+        assert np.any(env.action_masks())
+
+    def test_action_masks_v2_keeps_immediate_undo_as_fallback_when_it_is_the_only_candidate(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v2",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 1]})
+        action = env.strategy.edges.index((0, 1))
+        env.step(action)
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            np.array([True], dtype=bool),
+        )
+
     def test_action_masks_keeps_incident_edges_enabled_for_unreachable_blocked_gate(self):
         qc = QuantumCircuit(2)
         qc.cx(0, 1)
@@ -1586,12 +1641,14 @@ class TestQuantumTranspilationEnv:
             coupling_map=[(0, 1), (1, 2)],
             mode="routing",
             max_steps=10,
+            mask_semantics="frontier_restricted_edges.v2",
         )
 
         env.reset(seed=42)
         action = env.strategy.edges.index((1, 2))
 
         _, _, _, _, info1 = env.step(action)
+        assert env.action_masks()[action]
         _, _, terminated, _, info2 = env.step(action)
 
         assert info1["gates_executed"] == 1
@@ -2721,10 +2778,11 @@ class TestTrainingUtilities:
         """Routing con MaskablePPO usa el callback de evaluacion con mascaras."""
         callback_types = []
         maskable_eval_kwargs = {}
+        env_kwargs = []
 
         class DummyEnv:
             def __init__(self, *args, **kwargs):
-                pass
+                env_kwargs.append(kwargs)
 
             def reset(self, seed=None):
                 return {}, {}
@@ -2762,7 +2820,7 @@ class TestTrainingUtilities:
         monkeypatch.setattr(training, "EvalCallback", DummyEvalCallback)
         monkeypatch.setattr(training, "MaskableEvalCallback", DummyMaskableEvalCallback, raising=False)
 
-        training.setup_training_pipeline(
+        agent = training.setup_training_pipeline(
             target_circuit=simple_circuit_3q,
             coupling_map=linear_coupling_3q,
             mode="routing",
@@ -2775,6 +2833,23 @@ class TestTrainingUtilities:
         assert callback_types == ["DummyCheckpointCallback", "DummyMaskableEvalCallback"]
         assert maskable_eval_kwargs["eval_freq"] == 5000
         assert maskable_eval_kwargs["n_eval_episodes"] == 5
+        early_stopping = maskable_eval_kwargs["callback_after_eval"]
+        assert early_stopping.min_evals == 50
+        assert early_stopping.max_no_improvement_evals == 20
+        assert [kwargs["mask_semantics"] for kwargs in env_kwargs] == [
+            "frontier_restricted_edges.v2",
+            "frontier_restricted_edges.v2",
+        ]
+        metadata = json.loads(
+            Path(agent.run_model_dir, "run_metadata.json").read_text(encoding="utf-8")
+        )
+        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v2"
+        assert metadata["evaluation"]["early_stopping"] == {
+            "enabled": True,
+            "callback": "StopTrainingOnNoModelImprovement",
+            "min_evals": 50,
+            "max_no_improvement_evals": 20,
+        }
 
     def test_setup_training_pipeline_rejects_maskableppo_for_synthesis(
         self, monkeypatch, simple_circuit_3q, linear_coupling_3q

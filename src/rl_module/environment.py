@@ -14,6 +14,7 @@ from typing import Optional, Tuple, Dict, Any, List, MutableSequence
 from .env_strategies import RoutingStrategy, SynthesisStrategy
 from .frontier import DagFrontier, FrontierProvider, GateTuple, LookaheadEntry, SequentialFrontier
 from .rewards import RoutingReward, SynthesisReward
+from .routing_mask import FRONTIER_RESTRICTED_EDGES_V2, normalize_mask_semantics
 from .synthesis_clifford import CliffordSynthesisState
 from qiskit import QuantumCircuit
 
@@ -52,6 +53,7 @@ class QuantumTranspilationEnv(gym.Env):
         max_steps: int = 1000,
         render_mode: Optional[str] = None,
         basis_gates: Optional[List[str]] = None,
+        mask_semantics: Optional[str] = None,
     ):
         super().__init__()
         
@@ -64,6 +66,7 @@ class QuantumTranspilationEnv(gym.Env):
         self.lookahead_window = lookahead_window
         self.max_steps = max_steps
         self.basis_gates = list(basis_gates) if basis_gates is not None else None
+        self.mask_semantics = normalize_mask_semantics(mask_semantics)
         self._synthesis_state: Optional[CliffordSynthesisState] = None
         
         # Determinar el número de qubits físicos a partir del coupling map
@@ -339,7 +342,8 @@ class QuantumTranspilationEnv(gym.Env):
         )
 
         if not blocked_entries:
-            return np.ones(strategy.num_edges, dtype=bool)
+            mask = np.ones(strategy.num_edges, dtype=bool)
+            return self._apply_mask_semantics(mask, strategy=strategy)
 
         mask = np.zeros(strategy.num_edges, dtype=bool)
 
@@ -361,7 +365,20 @@ class QuantumTranspilationEnv(gym.Env):
 
             mask |= entry_mask
 
-        return mask
+        return self._apply_mask_semantics(mask, strategy=strategy)
+
+    def _apply_mask_semantics(self, mask: np.ndarray, *, strategy: RoutingStrategy) -> np.ndarray:
+        if self.mask_semantics != FRONTIER_RESTRICTED_EDGES_V2 or self._last_swap_edge is None:
+            return mask
+
+        filtered_mask = mask.copy()
+        for index, edge in enumerate(strategy.edges):
+            if edge == self._last_swap_edge:
+                filtered_mask[index] = False
+                break
+
+        # A narrow graph may require an immediate undo to remain routable.
+        return filtered_mask if np.any(filtered_mask) else mask
 
     def _layout_signature(self) -> Tuple[int, ...]:
         return tuple(int(value) for value in self.current_layout.tolist())

@@ -62,7 +62,7 @@ Toma un `OptimizationResult` de `mo_module` y lo reduce a un layout unico. La de
 Resuelve el contrato de un checkpoint RL.
 
 - Lee `run_metadata.json` cuando existe.
-- Si el metadata trae versioned masked routing, se usa esa variante.
+- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos y `v2` aplica el filtro anti-undo con fallback no vacio.
 - Si no hay metadata, se cae a defaults legacy para no romper checkpoints PPO/DQN antiguos.
 
 ### `routing_evaluator.py`

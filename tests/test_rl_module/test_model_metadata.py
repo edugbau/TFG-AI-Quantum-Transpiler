@@ -69,6 +69,23 @@ def test_build_run_metadata_uses_explicit_masked_routing_schema_when_requested()
     }
 
 
+def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_anti_undo_semantics():
+    metadata = build_run_metadata(
+        mode="routing",
+        algorithm="MaskablePPO",
+        seed=17,
+        frontier_mode="dag",
+        lookahead_window=7,
+        max_steps=256,
+        basis_gates=None,
+    )
+
+    assert metadata["routing_policy"] == {
+        "masked": True,
+        "mask_semantics": "frontier_restricted_edges.v2",
+    }
+
+
 def test_build_run_metadata_records_training_and_evaluation_config():
     metadata = build_run_metadata(
         mode="routing",

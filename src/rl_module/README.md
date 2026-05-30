@@ -34,6 +34,8 @@ El routing usa un action space discreto fijo sobre las aristas del coupling map.
 Puntos clave:
 
 - `MaskablePPO` es el entrenador estandar para checkpoints nuevos de routing enmascarado.
+- `frontier_restricted_edges.v2` bloquea el undo-SWAP inmediato cuando existe otra accion candidata; si bloquearlo vaciaria la mascara, lo conserva como fallback.
+- Los checkpoints `frontier_restricted_edges.v1` mantienen su semantica historica al evaluarse.
 - Los checkpoints legacy `PPO` y `DQN` siguen soportados mediante contratos legacy/default o evaluaciones unmasked.
 - `DagFrontier` usa `front_layer()` para exponer paralelismo real; `SequentialFrontier` mantiene el comportamiento secuencial.
 - `initial_layout` se respeta exactamente cuando llega desde fuera del modulo.
@@ -67,4 +69,3 @@ La GUI no es solo una demostracion: sirve para inspeccionar episodios, ver front
 - [docs/routing_stability_roadmap.md](docs/routing_stability_roadmap.md): roadmap de estabilidad del routing.
 - [docs/synthesis_mode_status.md](docs/synthesis_mode_status.md): estado del modo synthesis.
 - [docs/rl_module_explicacion_tfg.md](docs/rl_module_explicacion_tfg.md): nota de defensa y apunte de memoria.
-

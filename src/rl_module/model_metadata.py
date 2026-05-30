@@ -2,11 +2,12 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from .routing_mask import DEFAULT_NEW_MASK_SEMANTICS
+
 
 _METADATA_FILENAME = "run_metadata.json"
 _SCHEMA_VERSION = "rl_run_metadata.v1"
 _MASKED_ROUTING_SCHEMA_VERSION = "rl_run_metadata.masked_routing.v1"
-_DEFAULT_MASK_SEMANTICS = "frontier_restricted_edges.v1"
 
 
 def metadata_path_for_model(model_path: Path | str) -> Path:
@@ -47,7 +48,7 @@ def build_run_metadata(
         metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION
         metadata["routing_policy"] = {
             "masked": True,
-            "mask_semantics": mask_semantics or _DEFAULT_MASK_SEMANTICS,
+            "mask_semantics": mask_semantics or DEFAULT_NEW_MASK_SEMANTICS,
         }
 
     return metadata

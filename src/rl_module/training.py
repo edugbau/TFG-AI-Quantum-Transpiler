@@ -13,13 +13,18 @@ from inspect import Parameter, signature
 from datetime import datetime
 import numpy as np
 import torch
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import (
+    CheckpointCallback,
+    EvalCallback,
+    StopTrainingOnNoModelImprovement,
+)
 from stable_baselines3.common.monitor import Monitor
 import gymnasium as gym
 
 from .agent import QuantumRLAgent
 from .environment import QuantumTranspilationEnv
 from .model_metadata import build_run_metadata, save_run_metadata
+from .routing_mask import DEFAULT_NEW_MASK_SEMANTICS
 from qiskit import QuantumCircuit
 from typing import Tuple, List, Optional
 
@@ -32,6 +37,8 @@ DEFAULT_PPO_STABILITY_HYPERPARAMS = {
 }
 DEFAULT_N_EVAL_EPISODES = 5
 DEFAULT_EVAL_FREQ = 5_000
+DEFAULT_EARLY_STOPPING_MIN_EVALS = 50
+DEFAULT_EARLY_STOPPING_MAX_NO_IMPROVEMENT_EVALS = 20
 _PPO_LIKE_ALGORITHMS = {"PPO", "MaskablePPO"}
 
 try:
@@ -154,6 +161,11 @@ def setup_training_pipeline(
         raise ValueError("eval_freq must be greater than zero")
 
     effective_hyperparams = _build_effective_hyperparams(algorithm, hyperparams)
+    mask_semantics = (
+        DEFAULT_NEW_MASK_SEMANTICS
+        if algorithm == "MaskablePPO" and mode == "routing"
+        else None
+    )
     
     # 1. Semillas
     set_global_seeds(seed)
@@ -172,6 +184,7 @@ def setup_training_pipeline(
         lookahead_window=lookahead_window,
         max_steps=max_steps,
         basis_gates=basis_gates,
+        mask_semantics=mask_semantics,
     )
     if reset_options is None:
         _, train_reset_info = raw_env.reset(seed=seed)
@@ -195,6 +208,7 @@ def setup_training_pipeline(
         lookahead_window=lookahead_window,
         max_steps=max_steps,
         basis_gates=basis_gates,
+        mask_semantics=mask_semantics,
     )
     if reset_options is None:
         eval_raw_env.reset(seed=seed)
@@ -219,11 +233,24 @@ def setup_training_pipeline(
             lookahead_window=lookahead_window,
             max_steps=max_steps,
             basis_gates=metadata_basis_gates,
+            mask_semantics=mask_semantics,
             training_hyperparams=effective_hyperparams,
             evaluation_config={
                 "eval_freq": eval_freq,
                 "n_eval_episodes": n_eval_episodes,
                 "deterministic": True,
+                **(
+                    {
+                        "early_stopping": {
+                            "enabled": True,
+                            "callback": "StopTrainingOnNoModelImprovement",
+                            "min_evals": DEFAULT_EARLY_STOPPING_MIN_EVALS,
+                            "max_no_improvement_evals": DEFAULT_EARLY_STOPPING_MAX_NO_IMPROVEMENT_EVALS,
+                        }
+                    }
+                    if algorithm == "MaskablePPO" and mode == "routing"
+                    else {}
+                ),
             },
         ),
     )
@@ -235,12 +262,18 @@ def setup_training_pipeline(
     )
 
     eval_callback_cls = EvalCallback
+    eval_callback_kwargs = {}
     if algorithm == "MaskablePPO" and mode == "routing":
         if MaskableEvalCallback is None:
             raise ModuleNotFoundError(
                 "MaskablePPO routing requiere instalar sb3-contrib."
             )
         eval_callback_cls = MaskableEvalCallback
+        eval_callback_kwargs["callback_after_eval"] = StopTrainingOnNoModelImprovement(
+            min_evals=DEFAULT_EARLY_STOPPING_MIN_EVALS,
+            max_no_improvement_evals=DEFAULT_EARLY_STOPPING_MAX_NO_IMPROVEMENT_EVALS,
+            verbose=1 if verbose else 0,
+        )
     
     eval_callback = eval_callback_cls(
         eval_env, 
@@ -249,7 +282,8 @@ def setup_training_pipeline(
         eval_freq=eval_freq,
         n_eval_episodes=n_eval_episodes,
         deterministic=True,
-        render=False
+        render=False,
+        **eval_callback_kwargs,
     )
     
     callbacks = [checkpoint_callback, eval_callback]

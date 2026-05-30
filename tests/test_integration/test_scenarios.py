@@ -755,6 +755,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
             "masked": False,
+            "mask_semantics": None,
         }
     ]
 
@@ -899,6 +900,7 @@ def test_run_rl_only_scenario_forwards_masked_contract_fields(monkeypatch, tmp_p
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
     assert eval_calls[0]["masked"] is True
+    assert eval_calls[0]["mask_semantics"] == "frontier_restricted_edges.v1"
     assert result.notes == [
         "RL_Only rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
     ]
@@ -1143,6 +1145,7 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
             "masked": False,
+            "mask_semantics": None,
         }
     ]
     assert rebuild_calls == [
@@ -1797,6 +1800,7 @@ def test_run_mo_rl_scenario_forwards_masked_contract_fields(monkeypatch, tmp_pat
     assert eval_calls[0]["max_steps"] == 333
     assert eval_calls[0]["frontier_mode"] == "dag"
     assert eval_calls[0]["masked"] is True
+    assert eval_calls[0]["mask_semantics"] == "frontier_restricted_edges.v1"
     assert result.notes == [
         "MO+RL rebuilds the routed circuit from the RL swap trace before running Qiskit post-routing stages."
     ]

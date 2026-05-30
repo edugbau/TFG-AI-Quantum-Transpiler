@@ -478,7 +478,7 @@ class TestRLGuiModeViews:
         assert app._training_cfg is not None
         assert app._training_cfg["algorithm"] == "MaskablePPO"
         assert app._training_cfg["masked"] is True
-        assert app._training_cfg["mask_semantics"] == "frontier_restricted_edges.v1"
+        assert app._training_cfg["mask_semantics"] == "frontier_restricted_edges.v2"
 
     def test_start_training_blocks_maskableppo_for_synthesis_mode(self):
         app = RLBenchmarkGUI()

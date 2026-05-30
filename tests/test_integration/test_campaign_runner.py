@@ -1288,9 +1288,10 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
             algorithm="PPO",
             frontier_mode="dag",
             max_steps=256,
-            lookahead_window=4,
-            masked=False,
-            metadata_source="defaults",
+                lookahead_window=4,
+                masked=False,
+                mask_semantics=None,
+                metadata_source="defaults",
         ),
     )
     monkeypatch.setattr(scenarios, "_load_agent", lambda request, *, algorithm="PPO": "agent-object")

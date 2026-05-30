@@ -77,6 +77,30 @@ def test_resolve_routing_model_contract_reads_explicit_masked_routing_schema(tmp
     assert contract.metadata_source == "sidecar"
 
 
+def test_resolve_routing_model_contract_accepts_anti_undo_mask_semantics(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="MaskablePPO",
+            seed=31,
+            frontier_mode="dag",
+            lookahead_window=8,
+            max_steps=144,
+            basis_gates=None,
+            mask_semantics="frontier_restricted_edges.v2",
+        ),
+    )
+
+    contract = resolve_routing_model_contract(model_path)
+
+    assert contract.mask_semantics == "frontier_restricted_edges.v2"
+
+
 def test_resolve_routing_model_contract_falls_back_to_legacy_defaults(tmp_path):
     from src.integration.rl_model_contract import resolve_routing_model_contract
 
@@ -270,7 +294,7 @@ def test_resolve_routing_model_contract_rejects_unsupported_mask_semantics(tmp_p
         basis_gates=None,
         mask_semantics="frontier_restricted_edges.v1",
     )
-    metadata["routing_policy"]["mask_semantics"] = "frontier_restricted_edges.v2"
+    metadata["routing_policy"]["mask_semantics"] = "frontier_restricted_edges.v3"
     save_run_metadata(tmp_path, metadata)
 
     with pytest.raises(ValueError, match="mask_semantics"):

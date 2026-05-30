@@ -5,6 +5,7 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from src.rl_module.model_metadata import load_run_metadata_for_model
+from src.rl_module.routing_mask import SUPPORTED_MASK_SEMANTICS
 
 
 _DEFAULT_ALGORITHM = "PPO"
@@ -13,7 +14,6 @@ _DEFAULT_LOOKAHEAD_WINDOW = 4
 _DEFAULT_MAX_STEPS = 256
 _SUPPORTED_SCHEMA_VERSION = "rl_run_metadata.v1"
 _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION = "rl_run_metadata.masked_routing.v1"
-_SUPPORTED_MASK_SEMANTICS = "frontier_restricted_edges.v1"
 _SUPPORTED_LEGACY_ALGORITHMS = frozenset({"PPO", "DQN"})
 _SUPPORTED_MASKED_ALGORITHM = "MaskablePPO"
 _SUPPORTED_FRONTIER_MODES = frozenset({"sequential", "dag"})
@@ -152,10 +152,10 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
             raise _contract_error(
                 f"masked routing schema requires algorithm '{_SUPPORTED_MASKED_ALGORITHM}'"
             )
-        if mask_semantics != _SUPPORTED_MASK_SEMANTICS:
+        if mask_semantics not in SUPPORTED_MASK_SEMANTICS:
             raise _contract_error(
                 "unsupported 'routing_policy.mask_semantics'; "
-                f"expected '{_SUPPORTED_MASK_SEMANTICS}'"
+                f"expected one of {sorted(SUPPORTED_MASK_SEMANTICS)}"
             )
 
     return RoutingModelContract(

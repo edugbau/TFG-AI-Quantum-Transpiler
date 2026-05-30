@@ -9,7 +9,15 @@ from src.integration.contracts import RoutingEpisodeSummary
 from src.rl_module.frontier import DagFrontier, GateTuple, SequentialFrontier
 
 
-def _create_routing_env(*, circuit, coupling_edges, frontier_mode, max_steps, lookahead_window):
+def _create_routing_env(
+    *,
+    circuit,
+    coupling_edges,
+    frontier_mode,
+    max_steps,
+    lookahead_window,
+    mask_semantics=None,
+):
     from src.rl_module.environment import QuantumTranspilationEnv
 
     return QuantumTranspilationEnv(
@@ -19,6 +27,7 @@ def _create_routing_env(*, circuit, coupling_edges, frontier_mode, max_steps, lo
         frontier_mode=frontier_mode,
         max_steps=max_steps,
         lookahead_window=lookahead_window,
+        mask_semantics=mask_semantics,
     )
 
 
@@ -262,6 +271,7 @@ def evaluate_routing_episode(
     max_steps,
     lookahead_window,
     masked=False,
+    mask_semantics=None,
 ) -> RoutingEpisodeSummary:
     env = _create_routing_env(
         circuit=circuit,
@@ -269,6 +279,7 @@ def evaluate_routing_episode(
         frontier_mode=frontier_mode,
         max_steps=max_steps,
         lookahead_window=lookahead_window,
+        mask_semantics=mask_semantics,
     )
 
     try:

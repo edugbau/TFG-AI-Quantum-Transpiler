@@ -71,6 +71,8 @@ El regimen nuevo de `masked routing` no redefine el entorno:
 - `MaskablePPO` es el trainer estandar para checkpoints nuevos;
 - `PPO` y `DQN` siguen soportados como legacy;
 - la mascara es determinista, frontier-aware y compatible con la codificacion fija de acciones.
+- `frontier_restricted_edges.v2` elimina el undo-SWAP inmediato si quedan alternativas y lo conserva como fallback si la mascara quedaria vacia.
+- `frontier_restricted_edges.v1` sigue disponible para reproducir checkpoints historicos.
 
 ## 3. Synthesis v1
 
@@ -100,6 +102,8 @@ Responsable de:
 - registrar callbacks;
 - guardar modelos y artefactos.
 
+Para routing con `MaskablePPO`, el pipeline conecta `StopTrainingOnNoModelImprovement` con calentamiento conservador de 50 evaluaciones y paciencia de 20 evaluaciones sin mejora. La GUI mantiene control manual y no activa este corte automatico.
+
 ### `model_metadata.py`
 
 Es el contrato que conecta entrenamiento y evaluacion.
@@ -108,7 +112,7 @@ Es el contrato que conecta entrenamiento y evaluacion.
 - `save_run_metadata()` guarda el sidecar.
 - `load_run_metadata_for_model()` lo recupera cuando `integration` evalua un checkpoint.
 
-Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Si falta, `integration` cae a defaults legacy.
+Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Los productores nuevos usan `frontier_restricted_edges.v2`; `integration` conserva `v1` para checkpoints historicos y cae a defaults legacy si falta el sidecar.
 
 ## 5. GUI e inspeccion
 
@@ -136,4 +140,3 @@ La GUI sirve para explicar por que una politica se comporta como lo hace y para 
 - [routing_stability_roadmap.md](routing_stability_roadmap.md): roadmap de estabilidad y masking.
 - [synthesis_mode_status.md](synthesis_mode_status.md): estado del modo synthesis.
 - [rl_module_explicacion_tfg.md](rl_module_explicacion_tfg.md): nota de defensa y apunte para la memoria.
-

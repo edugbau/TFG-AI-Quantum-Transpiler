@@ -328,6 +328,7 @@ def _run_rl_reconstruction_flow(
         max_steps=contract.max_steps,
         lookahead_window=contract.lookahead_window,
         masked=contract.masked,
+        mask_semantics=contract.mask_semantics,
     )
     if not routing_summary.completed or routing_summary.truncated:
         return ScenarioResult(
