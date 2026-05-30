@@ -466,7 +466,11 @@ def _publicize_case_training_path(
         except ValueError:
             continue
         return case_public_root / relative_path
-    return path
+    try:
+        relative_path = path.relative_to(output_path.parent)
+    except ValueError:
+        return path
+    return public_campaign_root.parent / relative_path
 
 
 def _normalize_training_result_for_persistence(

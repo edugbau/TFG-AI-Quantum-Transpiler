@@ -1239,6 +1239,54 @@ def test_run_mo_rl_scenario_reuses_injected_layout_without_running_mo(monkeypatc
     assert rebuild_calls[0]["initial_layout"] == selected_layout
 
 
+def test_run_mo_only_scenario_reuses_injected_layout_without_running_mo(monkeypatch) -> None:
+    from src.integration import scenarios
+
+    circuit = QuantumCircuit(3)
+    request = _make_request("MO_Only")
+    bundle = SimpleNamespace(
+        backend_name="fake_backend",
+        backend=SimpleNamespace(num_qubits=3),
+        coupling_edges=[(0, 1), (1, 2)],
+    )
+    selected_layout = [1, 2, 0]
+    baseline_calls = []
+
+    monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
+    monkeypatch.setattr(
+        scenarios,
+        "optimize_mo_layouts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("MO should not run when layout is injected")
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "select_layout_from_mo_result",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("layout selection should not run when layout is injected")
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "_run_named_baseline_with_artifact",
+        lambda request, circuit, baseline_name, *, layout=None: baseline_calls.append(
+            (baseline_name, layout)
+        )
+        or ({"trans_depth": 8}, {"transpilation": {"initial_layout": layout}}),
+    )
+
+    result = scenarios.run_mo_only_scenario(
+        request,
+        circuit=circuit,
+        injected_layout=selected_layout,
+    )
+
+    assert result.success is True
+    assert result.selected_layout == selected_layout
+    assert baseline_calls == [("custom_layout_level_1", selected_layout)]
+
+
 def test_run_mo_rl_scenario_uses_injected_coupling_edges_for_campaign_internal_seam(monkeypatch) -> None:
     from src.integration import scenarios
 

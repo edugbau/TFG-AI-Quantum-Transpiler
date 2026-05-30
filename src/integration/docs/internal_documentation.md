@@ -117,6 +117,15 @@ Orquesta la Campaign caso a caso.
 - usa el layout exacto seleccionado por `MO_Only` como base del camino hibrido;
 - deriva un path-expanded routing subgraph cuando es posible y cae al coupling map completo si la derivacion falla.
 
+Tambien expone el runner interno agrupado por seed usado por Campaign matrix. Para cada case, este runner:
+
+- ejecuta una sola vez `Baseline`, `RL_Only` y la optimizacion MO;
+- selecciona los layouts de todos los modos sobre el mismo frente de Pareto;
+- deduplica layouts fisicos equivalentes;
+- pasa cada layout seleccionado como `initial_layout` al training hibrido y como `injected_layout` a `MO+RL`.
+
+Los Scenarios aislados mantienen su fallback. Dentro del runner agrupado, `MO+RL` siempre recibe un layout inyectado y no vuelve a ejecutar MO.
+
 ### `campaign_reporting.py`
 
 Construye la salida publica de la Campaign.

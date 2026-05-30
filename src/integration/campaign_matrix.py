@@ -95,33 +95,51 @@ def run_campaign_matrix(
     matrix_root = output_path / campaign.campaign_id
     runs_root = matrix_root / "runs"
     children = expand_campaign_matrix(campaign)
-    workers = min(campaign.config.parallel_workers, len(children))
     child_reports: dict[str, CampaignReport] = {}
     child_results: list[MatrixChildResult] = []
 
-    if run_campaign_fn is None and workers > 1:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            future_map = {
-                executor.submit(_run_child_campaign, child, runs_root, verbose=verbose): child
-                for child in children
-            }
-            for future in as_completed(future_map):
-                child = future_map[future]
+    if run_campaign_fn is None:
+        seed_groups = _group_children_by_seed(children)
+        workers = min(campaign.config.parallel_workers, len(seed_groups))
+        if workers > 1:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(_run_seed_group_campaigns, group, runs_root, verbose=verbose): group
+                    for group in seed_groups
+                }
+                for future in as_completed(future_map):
+                    group = future_map[future]
+                    try:
+                        reports = future.result()
+                    except Exception as exc:
+                        child_results.extend(_child_failure(child, runs_root, str(exc)) for child in group)
+                        continue
+                    _record_seed_group_reports(
+                        group=group,
+                        reports=reports,
+                        runs_root=runs_root,
+                        child_reports=child_reports,
+                        child_results=child_results,
+                    )
+        else:
+            for group in seed_groups:
                 try:
-                    report = future.result()
+                    reports = _run_seed_group_campaigns(group, runs_root, verbose=verbose)
                 except Exception as exc:
-                    child_results.append(_child_failure(child, runs_root, str(exc)))
+                    child_results.extend(_child_failure(child, runs_root, str(exc)) for child in group)
                     continue
-                child_reports[child.campaign_id] = report
-                child_results.append(_child_success(child, runs_root, report.campaign_status))
+                _record_seed_group_reports(
+                    group=group,
+                    reports=reports,
+                    runs_root=runs_root,
+                    child_reports=child_reports,
+                    child_results=child_results,
+                )
     else:
-        runner = run_campaign_fn or _run_child_campaign
+        workers = min(campaign.config.parallel_workers, len(children))
         for child in children:
             try:
-                if run_campaign_fn is None:
-                    report = runner(child, runs_root, verbose=verbose)
-                else:
-                    report = _invoke_campaign_runner(runner, child, output_root=runs_root, verbose=verbose)
+                report = _invoke_campaign_runner(run_campaign_fn, child, output_root=runs_root, verbose=verbose)
             except Exception as exc:
                 child_results.append(_child_failure(child, runs_root, str(exc)))
                 continue
@@ -138,6 +156,47 @@ def run_campaign_matrix(
     )
     write_matrix_outputs(report=report)
     return report
+
+
+def _group_children_by_seed(children: tuple[Campaign, ...]) -> tuple[tuple[Campaign, ...], ...]:
+    groups: dict[int, list[Campaign]] = {}
+    for child in children:
+        groups.setdefault(child.config.seed, []).append(child)
+    return tuple(tuple(group) for group in groups.values())
+
+
+def _record_seed_group_reports(
+    *,
+    group: tuple[Campaign, ...],
+    reports: dict[str, CampaignReport],
+    runs_root: Path,
+    child_reports: dict[str, CampaignReport],
+    child_results: list[MatrixChildResult],
+) -> None:
+    for child in group:
+        report = reports.get(child.campaign_id)
+        if report is None:
+            child_results.append(
+                _child_failure(
+                    child,
+                    runs_root,
+                    "Grouped Campaign runner did not return a report for this child.",
+                )
+            )
+            continue
+        child_reports[child.campaign_id] = report
+        child_results.append(_child_success(child, runs_root, report.campaign_status))
+
+
+def _run_seed_group_campaigns(
+    campaigns: tuple[Campaign, ...],
+    output_root: Path | str,
+    *,
+    verbose: bool = False,
+) -> dict[str, CampaignReport]:
+    from src.integration.campaign_runner import run_campaign_seed_group
+
+    return run_campaign_seed_group(campaigns, output_root=output_root, verbose=verbose)
 
 
 def build_matrix_report(
@@ -261,12 +320,6 @@ def _invoke_campaign_runner(run_campaign_fn: Callable[..., CampaignReport], camp
     if not _runner_accepts_kwarg(run_campaign_fn, "verbose"):
         call_kwargs.pop("verbose", None)
     return run_campaign_fn(campaign, **call_kwargs)
-
-
-def _run_child_campaign(campaign: Campaign, output_root: Path | str, *, verbose: bool = False) -> CampaignReport:
-    from src.integration.campaign_runner import run_campaign
-
-    return run_campaign(campaign, output_root=output_root, verbose=verbose)
 
 
 def _child_config_for(config: CampaignConfig, *, seed: int, mo_selection_mode: str) -> CampaignConfig:

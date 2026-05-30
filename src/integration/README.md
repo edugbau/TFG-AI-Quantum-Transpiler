@@ -46,7 +46,7 @@ Dentro de esa secuencia:
 4. `MO+RL` evalua el mismo layout y el Training Artifact resultante.
 5. Si es posible, Campaign deriva un path-expanded routing subgraph; si no, cae al coupling map completo y deja nota del fallback.
 
-Una Campaign puede expandirse como matrix cuando configura varias `seeds` o varios `mo_selection_modes`. La matrix ejecuta Campaigns hijas `seed x modo MO` y agrega las medias finales por modo MO, usando todos los casos comparables de todas las seeds de ese modo. El alias batch `mo.selection_modes: "all"` equivale a `compromise`, `best_depth` y `best_cnot_count`.
+Una Campaign puede expandirse como matrix cuando configura varias `seeds` o varios `mo_selection_modes`. La matrix conserva Campaigns hijas `seed x modo MO`, pero ejecuta juntas las hijas de una misma seed. Para cada `circuit x backend x seed`, reutiliza `Baseline`, `RL_Only` y un unico frente de Pareto; cada modo selecciona su layout sobre ese frente. Si varios modos seleccionan el mismo layout fisico, tambien comparten `MO_Only`, training hibrido y evaluacion `MO+RL`. El alias batch `mo.selection_modes: "all"` equivale a `compromise`, `best_depth` y `best_cnot_count`.
 
 ## Contracts and metadata
 
@@ -92,6 +92,9 @@ Cada Campaign matrix persiste:
 - `matrix_summary.md` con medias por modo MO;
 - `matrix_summary.json` como salida estructurada agregada;
 - `runs/<campaign_id>__seed_<seed>__<mode>/` con los Summary Documents de las Campaigns hijas.
+- `runs/<campaign_id>__seed_<seed>__shared/` con `mo_front.json`, training `RL_Only` y training hibrido deduplicado por layout.
+
+En una Campaign matrix, `parallel_workers` paraleliza seeds completas. Los modos MO de una misma seed se procesan juntos para poder reutilizar el frente y los artefactos comunes.
 
 El Summary Document deja clara la comparabilidad real de los casos. Un case puede terminar como `completed` y aun asi no ser comparable si falta un bundle completo de metricas.
 

@@ -399,6 +399,32 @@ def _run_mo(request: ScenarioRequest, circuit, backend_bundle):
     )
 
 
+def optimize_mo_layouts(request: ScenarioRequest, *, circuit=None, backend_bundle=None):
+    if request.scenario_name not in {"MO_Only", "MO+RL"}:
+        raise ValueError("MO optimization requires an MO_Only or MO+RL request")
+    if circuit is None:
+        circuit = _load_circuit(request)
+    if backend_bundle is None:
+        backend_bundle = _resolve_backend_bundle_for_request(request)
+    return _run_mo(request, circuit, backend_bundle)
+
+
+def select_mo_layout(request: ScenarioRequest, mo_result, *, circuit, backend_bundle=None) -> list[int]:
+    if request.scenario_name not in {"MO_Only", "MO+RL"}:
+        raise ValueError("MO layout selection requires an MO_Only or MO+RL request")
+    if backend_bundle is None:
+        backend_bundle = _resolve_backend_bundle_for_request(request)
+    return _validate_selected_layout(
+        select_layout_from_mo_result(
+            mo_result,
+            policy=request.layout_policy,
+            objective_index=request.mo_objective_index,
+        ),
+        _get_request_num_qubits(request, circuit),
+        backend_bundle.backend,
+    )
+
+
 def run_baseline_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
     _require_scenario(request, "Baseline")
     if circuit is None:
@@ -421,21 +447,32 @@ def run_baseline_scenario(request: ScenarioRequest, *, circuit=None) -> Scenario
     )
 
 
-def run_mo_only_scenario(request: ScenarioRequest, *, circuit=None) -> ScenarioResult:
+def run_mo_only_scenario(
+    request: ScenarioRequest,
+    *,
+    circuit=None,
+    injected_layout: list[int] | None = None,
+    mo_result=None,
+) -> ScenarioResult:
     _require_scenario(request, "MO_Only")
     if circuit is None:
         circuit = _load_circuit(request)
     backend_bundle = _resolve_backend_bundle_for_request(request)
-    mo_result = _run_mo(request, circuit, backend_bundle)
-    selected_layout = _validate_selected_layout(
-        select_layout_from_mo_result(
+    if injected_layout is None:
+        if mo_result is None:
+            mo_result = optimize_mo_layouts(request, circuit=circuit, backend_bundle=backend_bundle)
+        selected_layout = select_mo_layout(
+            request,
             mo_result,
-            policy=request.layout_policy,
-            objective_index=request.mo_objective_index,
-        ),
-        _get_request_num_qubits(request, circuit),
-        backend_bundle.backend,
-    )
+            circuit=circuit,
+            backend_bundle=backend_bundle,
+        )
+    else:
+        selected_layout = _validate_selected_layout(
+            injected_layout,
+            _get_request_num_qubits(request, circuit),
+            backend_bundle.backend,
+        )
     transpilation_metrics, transpilation_artifact = _run_named_baseline_with_artifact(
         request,
         circuit,
@@ -522,15 +559,12 @@ def run_mo_rl_scenario(
         circuit = _load_circuit(request)
     backend_bundle = _resolve_backend_bundle_for_request(request)
     if injected_layout is None:
-        mo_result = _run_mo(request, circuit, backend_bundle)
-        selected_layout = _validate_selected_layout(
-            select_layout_from_mo_result(
-                mo_result,
-                policy=request.layout_policy,
-                objective_index=request.mo_objective_index,
-            ),
-            _get_request_num_qubits(request, circuit),
-            backend_bundle.backend,
+        mo_result = optimize_mo_layouts(request, circuit=circuit, backend_bundle=backend_bundle)
+        selected_layout = select_mo_layout(
+            request,
+            mo_result,
+            circuit=circuit,
+            backend_bundle=backend_bundle,
         )
     else:
         selected_layout = _validate_selected_layout(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from inspect import Parameter, signature
 from pathlib import Path
 from typing import Callable
@@ -10,6 +11,7 @@ from src.integration.backend_adapter import resolve_backend_bundle as _resolve_b
 from src.integration.campaign_contracts import Campaign, CampaignCase
 from src.integration.campaign_reporting import (
     CampaignCaseReport,
+    CampaignReport,
     build_campaign_report,
     build_case_directory_name_map,
     write_campaign_outputs,
@@ -18,10 +20,12 @@ from src.integration.contracts import LayoutSelectionPolicy, ScenarioRequest
 from src.integration.mo_effort import resolve_effective_mo_settings
 from src.integration.routing_subgraph import build_path_expanded_subgraph
 from src.integration.scenarios import (
+    optimize_mo_layouts as _optimize_mo_layouts,
     run_baseline_scenario as _run_baseline_scenario,
     run_mo_only_scenario as _run_mo_only_scenario,
     run_mo_rl_scenario as _run_mo_rl_scenario,
     run_rl_only_scenario as _run_rl_only_scenario,
+    select_mo_layout as _select_mo_layout,
 )
 
 
@@ -220,6 +224,100 @@ def _resolve_case_backend_bundle(resolve_backend_bundle: Callable[..., object], 
     if campaign.config.synthetic_topology is not None and _runner_accepts_kwarg(resolve_backend_bundle, "synthetic_topology"):
         return resolve_backend_bundle(backend_name, synthetic_topology=campaign.config.synthetic_topology)
     return resolve_backend_bundle(backend_name)
+
+
+def _shared_seed_output_dir(output_root: Path | str, campaigns: tuple[Campaign, ...]) -> Path:
+    child_prefix, separator, _ = campaigns[0].campaign_id.rpartition("__")
+    if not separator:
+        child_prefix = campaigns[0].campaign_id
+    return Path(output_root) / f"{child_prefix}__shared"
+
+
+def _shared_layout_output_dir(shared_case_output_dir: Path, layout: tuple[int, ...]) -> Path:
+    layout_id = "_".join(str(entry) for entry in layout)
+    return shared_case_output_dir / "layouts" / f"layout_{layout_id}"
+
+
+def _write_mo_front_artifact(path: Path, mo_result) -> None:
+    pareto_fitness = getattr(mo_result, "pareto_fitness", None)
+    payload = {
+        "artifact_version": "mo_front.v1",
+        "pareto_layouts": [
+            [int(entry) for entry in layout]
+            for layout in getattr(mo_result, "pareto_layouts", [])
+        ],
+        "pareto_fitness": pareto_fitness.tolist() if pareto_fitness is not None else None,
+        "objective_names": list(getattr(mo_result, "objective_names", [])),
+        "metadata": mo_result.to_dict() if hasattr(mo_result, "to_dict") else {},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _validate_seed_group(campaigns: tuple[Campaign, ...]) -> None:
+    if not campaigns:
+        raise ValueError("Campaign seed group cannot be empty")
+    seed = campaigns[0].config.seed
+    expected_cases = campaigns[0].build_cases()
+    seen_modes: set[str] = set()
+    for campaign in campaigns:
+        if campaign.config.seed != seed:
+            raise ValueError("Campaign seed group must contain a single seed")
+        if campaign.build_cases() != expected_cases:
+            raise ValueError("Campaign seed group must contain the same cases for every MO mode")
+        if len(campaign.config.mo_selection_modes) != 1:
+            raise ValueError("Campaign seed group children must contain exactly one MO selection mode")
+        mode = campaign.config.mo_selection_modes[0]
+        if mode in seen_modes:
+            raise ValueError("Campaign seed group cannot contain duplicate MO selection modes")
+        seen_modes.add(mode)
+
+
+def _persist_seed_group_state(
+    *,
+    output_root: Path | str,
+    campaigns: tuple[Campaign, ...],
+    case_reports: dict[str, list[CampaignCaseReport]],
+    campaign_status: str,
+    write_outputs,
+    persist_terminal_state: bool,
+) -> dict[str, CampaignReport]:
+    return {
+        campaign.campaign_id: _persist_campaign_state(
+            output_root=output_root,
+            campaign=campaign,
+            case_reports=case_reports[campaign.campaign_id],
+            campaign_status=campaign_status,
+            write_outputs=write_outputs,
+            persist_terminal_state=persist_terminal_state,
+        )
+        for campaign in campaigns
+    }
+
+
+def _copy_common_case_report(
+    *,
+    campaign_case: CampaignCase,
+    status: str,
+    baseline_result,
+    rl_only_training_result,
+    rl_only_result,
+    incidents: list[str],
+    mo_only_result=None,
+    training_result=None,
+    mo_rl_result=None,
+) -> CampaignCaseReport:
+    return CampaignCaseReport(
+        case=campaign_case,
+        status=status,
+        baseline_result=baseline_result,
+        mo_only_result=mo_only_result,
+        rl_only_result=rl_only_result,
+        mo_rl_result=mo_rl_result,
+        rl_only_training_result=rl_only_training_result,
+        training_result=training_result,
+        incidents=list(incidents),
+    )
 
 
 def _cancel_remaining_cases(case_reports: list[CampaignCaseReport], remaining_cases: list[CampaignCase]) -> None:
@@ -501,3 +599,291 @@ def run_campaign(
         campaign.status = final_report.campaign_status
         campaign.summary = final_report.summary
     return final_report
+
+
+def run_campaign_seed_group(
+    campaigns: tuple[Campaign, ...] | list[Campaign],
+    *,
+    output_root: Path | str = "campaigns",
+    load_case_circuit: Callable[..., object] | None = None,
+    run_baseline: Callable[..., object] = _run_baseline_scenario,
+    optimize_mo: Callable[..., object] = _optimize_mo_layouts,
+    select_mo_layout: Callable[..., list[int]] = _select_mo_layout,
+    run_mo_only: Callable[..., object] = _run_mo_only_scenario,
+    train_case_fn: Callable[..., object] | None = None,
+    run_rl_only: Callable[..., object] = _run_rl_only_scenario,
+    run_mo_rl: Callable[..., object] = _run_mo_rl_scenario,
+    resolve_backend_bundle: Callable[[str], object] = _resolve_backend_bundle,
+    write_outputs: Callable[..., object] = write_campaign_outputs,
+    verbose: bool = False,
+) -> dict[str, CampaignReport]:
+    normalized_campaigns = tuple(campaigns)
+    _validate_seed_group(normalized_campaigns)
+    anchor_campaign = normalized_campaigns[0]
+    if load_case_circuit is None:
+        load_case_circuit = lambda campaign_case: _default_load_case_circuit(anchor_campaign, campaign_case)
+    train_case_fn = train_case_fn or _default_train_case
+
+    for campaign in normalized_campaigns:
+        campaign.status = "running"
+
+    cases = anchor_campaign.build_cases()
+    shared_output_dir = _shared_seed_output_dir(output_root, normalized_campaigns)
+    shared_case_dir_names = build_case_directory_name_map([campaign_case.case_id for campaign_case in cases])
+    child_case_reports: dict[str, list[CampaignCaseReport]] = {
+        campaign.campaign_id: []
+        for campaign in normalized_campaigns
+    }
+
+    for campaign_case in cases:
+        baseline_result = None
+        rl_only_training_result = None
+        rl_only_result = None
+        common_status = "completed"
+        common_incidents: list[str] = []
+        shared_case_output_dir = shared_output_dir / "cases" / shared_case_dir_names[campaign_case.case_id]
+
+        try:
+            circuit = load_case_circuit(campaign_case)
+            effective_mo_settings = resolve_effective_mo_settings(
+                qubit_count=campaign_case.num_qubits,
+                mo_effort_mode=anchor_campaign.config.mo_effort_mode,
+                mo_use_quick=anchor_campaign.config.mo_use_quick,
+                mo_population_size=anchor_campaign.config.mo_population_size,
+                mo_n_generations=anchor_campaign.config.mo_n_generations,
+            )
+            baseline_request = _build_scenario_request(
+                campaign=anchor_campaign,
+                campaign_case=campaign_case,
+                scenario_name="Baseline",
+            )
+            baseline_result = _invoke_scenario_runner(run_baseline, baseline_request, circuit=circuit)
+            if not baseline_result.success:
+                common_status = "failed"
+                common_incidents.extend(baseline_result.errors)
+                raise ValueError("Shared Baseline scenario failed.")
+
+            qiskit_initial_layout = _extract_qiskit_initial_layout_from_baseline(
+                baseline_result,
+                num_qubits=campaign_case.num_qubits,
+            )
+            backend_bundle = _resolve_case_backend_bundle(
+                resolve_backend_bundle,
+                anchor_campaign,
+                campaign_case.backend_name,
+            )
+            qiskit_routing_subgraph = build_path_expanded_subgraph(
+                circuit=circuit,
+                selected_layout=qiskit_initial_layout,
+                coupling_edges=backend_bundle.coupling_edges,
+            )
+            qiskit_coupling_edges = list(qiskit_routing_subgraph.coupling_edges)
+            rl_only_training_result = _invoke_train_case(
+                train_case_fn,
+                campaign_case=campaign_case,
+                campaign_config=anchor_campaign.config,
+                target_circuit=circuit,
+                coupling_map=qiskit_coupling_edges,
+                case_output_dir=shared_case_output_dir / "rl_only",
+                initial_layout=list(qiskit_initial_layout),
+                verbose=verbose,
+            )
+            if (
+                rl_only_training_result.status != "completed"
+                or rl_only_training_result.selected_artifact_path is None
+            ):
+                common_status = "incomplete"
+                common_incidents.append("RL training failed before RL_Only evaluation.")
+            else:
+                rl_only_request = _build_scenario_request(
+                    campaign=anchor_campaign,
+                    campaign_case=campaign_case,
+                    scenario_name="RL_Only",
+                    initial_layout=list(qiskit_initial_layout),
+                    rl_model_path=str(rl_only_training_result.selected_artifact_path),
+                )
+                rl_only_result = _invoke_scenario_runner(
+                    run_rl_only,
+                    rl_only_request,
+                    circuit=circuit,
+                    injected_layout=list(qiskit_initial_layout),
+                    injected_coupling_edges=qiskit_coupling_edges,
+                    injected_routing_graph=qiskit_routing_subgraph,
+                )
+                if not rl_only_result.success:
+                    common_status = "incomplete"
+                    common_incidents.extend(rl_only_result.errors)
+
+            anchor_mo_request = _build_scenario_request(
+                campaign=anchor_campaign,
+                campaign_case=campaign_case,
+                scenario_name="MO_Only",
+                effective_mo_settings=effective_mo_settings,
+            )
+            mo_result = optimize_mo(
+                anchor_mo_request,
+                circuit=circuit,
+                backend_bundle=backend_bundle,
+            )
+            _write_mo_front_artifact(shared_case_output_dir / "mo_front.json", mo_result)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            if not common_incidents or str(exc) not in common_incidents:
+                common_incidents.append(f"Shared seed phase failed: {exc}")
+            for campaign in normalized_campaigns:
+                child_case_reports[campaign.campaign_id].append(
+                    _copy_common_case_report(
+                        campaign_case=campaign_case,
+                        status="failed",
+                        baseline_result=baseline_result,
+                        rl_only_training_result=rl_only_training_result,
+                        rl_only_result=rl_only_result,
+                        incidents=common_incidents,
+                    )
+                )
+            _persist_seed_group_state(
+                output_root=output_root,
+                campaigns=normalized_campaigns,
+                case_reports=child_case_reports,
+                campaign_status="running",
+                write_outputs=write_outputs,
+                persist_terminal_state=False,
+            )
+            continue
+
+        selected_layouts: dict[str, tuple[ScenarioRequest, tuple[int, ...]]] = {}
+        for campaign in normalized_campaigns:
+            mo_only_request = _build_scenario_request(
+                campaign=campaign,
+                campaign_case=campaign_case,
+                scenario_name="MO_Only",
+                effective_mo_settings=effective_mo_settings,
+            )
+            try:
+                selected_layout = select_mo_layout(
+                    mo_only_request,
+                    mo_result,
+                    circuit=circuit,
+                    backend_bundle=backend_bundle,
+                )
+            except Exception as exc:
+                child_case_reports[campaign.campaign_id].append(
+                    _copy_common_case_report(
+                        campaign_case=campaign_case,
+                        status="failed",
+                        baseline_result=baseline_result,
+                        rl_only_training_result=rl_only_training_result,
+                        rl_only_result=rl_only_result,
+                        incidents=common_incidents + [f"MO layout selection failed: {exc}"],
+                    )
+                )
+                continue
+            selected_layouts[campaign.campaign_id] = (mo_only_request, tuple(selected_layout))
+
+        layout_groups: dict[tuple[int, ...], list[Campaign]] = {}
+        for campaign in normalized_campaigns:
+            selection = selected_layouts.get(campaign.campaign_id)
+            if selection is None:
+                continue
+            layout_groups.setdefault(selection[1], []).append(campaign)
+
+        for selected_layout_tuple, layout_campaigns in layout_groups.items():
+            selected_layout = list(selected_layout_tuple)
+            representative = layout_campaigns[0]
+            mo_only_request = selected_layouts[representative.campaign_id][0]
+            branch_incidents = list(common_incidents)
+            mo_only_result = None
+            training_result = None
+            mo_rl_result = None
+            branch_status = common_status
+            try:
+                mo_only_result = _invoke_scenario_runner(
+                    run_mo_only,
+                    mo_only_request,
+                    circuit=circuit,
+                    injected_layout=list(selected_layout),
+                )
+                if not mo_only_result.success:
+                    branch_status = "failed"
+                    branch_incidents.extend(mo_only_result.errors)
+                else:
+                    routing_subgraph = build_path_expanded_subgraph(
+                        circuit=circuit,
+                        selected_layout=selected_layout,
+                        coupling_edges=backend_bundle.coupling_edges,
+                    )
+                    coupling_edges = list(routing_subgraph.coupling_edges)
+                    training_result = _invoke_train_case(
+                        train_case_fn,
+                        campaign_case=campaign_case,
+                        campaign_config=representative.config,
+                        target_circuit=circuit,
+                        coupling_map=coupling_edges,
+                        case_output_dir=_shared_layout_output_dir(
+                            shared_case_output_dir,
+                            selected_layout_tuple,
+                        ),
+                        initial_layout=list(selected_layout),
+                        verbose=verbose,
+                    )
+                    if training_result.status != "completed" or training_result.selected_artifact_path is None:
+                        branch_status = "failed"
+                        branch_incidents.append("RL training failed before MO+RL evaluation.")
+                    else:
+                        mo_rl_request = _build_scenario_request(
+                            campaign=representative,
+                            campaign_case=campaign_case,
+                            scenario_name="MO+RL",
+                            effective_mo_settings=effective_mo_settings,
+                            rl_model_path=str(training_result.selected_artifact_path),
+                        )
+                        mo_rl_result = _invoke_scenario_runner(
+                            run_mo_rl,
+                            mo_rl_request,
+                            circuit=circuit,
+                            injected_layout=list(selected_layout),
+                            injected_coupling_edges=coupling_edges,
+                            injected_routing_graph=routing_subgraph,
+                        )
+                        if not mo_rl_result.success:
+                            branch_status = "incomplete"
+                            branch_incidents.extend(mo_rl_result.errors)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                branch_status = "failed"
+                branch_incidents.append(f"Shared layout branch failed: {exc}")
+
+            for campaign in layout_campaigns:
+                child_case_reports[campaign.campaign_id].append(
+                    _copy_common_case_report(
+                        campaign_case=campaign_case,
+                        status=branch_status,
+                        baseline_result=baseline_result,
+                        rl_only_training_result=rl_only_training_result,
+                        rl_only_result=rl_only_result,
+                        mo_only_result=mo_only_result,
+                        training_result=training_result,
+                        mo_rl_result=mo_rl_result,
+                        incidents=branch_incidents,
+                    )
+                )
+
+        _persist_seed_group_state(
+            output_root=output_root,
+            campaigns=normalized_campaigns,
+            case_reports=child_case_reports,
+            campaign_status="running",
+            write_outputs=write_outputs,
+            persist_terminal_state=False,
+        )
+
+    return _persist_seed_group_state(
+        output_root=output_root,
+        campaigns=normalized_campaigns,
+        case_reports=child_case_reports,
+        campaign_status="completed",
+        write_outputs=write_outputs,
+        persist_terminal_state=True,
+    )

@@ -3,6 +3,7 @@ from pathlib import Path
 from src.integration.campaign_contracts import Campaign, CampaignCase, CampaignCircuitSpec, CampaignConfig
 from src.integration.campaign_matrix import (
     ALL_MO_SELECTION_MODES,
+    _group_children_by_seed,
     build_matrix_report,
     expand_campaign_matrix,
     render_matrix_summary_markdown,
@@ -104,6 +105,25 @@ def test_expand_campaign_matrix_builds_seed_by_mo_mode_children() -> None:
     assert children[2].config.mo_objective_name == "cnot_count"
 
 
+def test_group_children_by_seed_keeps_mo_modes_together() -> None:
+    campaign = Campaign.from_config(campaign_id="campaign-matrix", config=_build_config())
+
+    groups = _group_children_by_seed(expand_campaign_matrix(campaign))
+
+    assert [[child.campaign_id for child in group] for group in groups] == [
+        [
+            "campaign-matrix__seed_1__compromise",
+            "campaign-matrix__seed_1__best_depth",
+            "campaign-matrix__seed_1__best_cnot_count",
+        ],
+        [
+            "campaign-matrix__seed_2__compromise",
+            "campaign-matrix__seed_2__best_depth",
+            "campaign-matrix__seed_2__best_cnot_count",
+        ],
+    ]
+
+
 def test_matrix_report_aggregates_all_comparable_seed_results_by_mo_mode(tmp_path) -> None:
     campaign = Campaign.from_config(campaign_id="campaign-matrix", config=_build_config())
     child_reports = {
@@ -191,3 +211,38 @@ def test_run_campaign_matrix_continues_after_child_failure_and_writes_outputs(tm
     assert summaries["best_depth"].failed_cases == 1
     assert Path(report.summary_path).exists()
     assert Path(report.structured_output_path).exists()
+
+
+def test_run_campaign_matrix_uses_grouped_runner_once_per_seed_by_default(monkeypatch, tmp_path) -> None:
+    campaign = Campaign.from_config(
+        campaign_id="campaign-matrix",
+        config=_build_config(seeds=(1,), mo_selection_modes=ALL_MO_SELECTION_MODES),
+    )
+    grouped_calls: list[list[str]] = []
+
+    def fake_run_seed_group(campaigns, output_root, *, verbose=False):
+        del output_root, verbose
+        grouped_calls.append([child.campaign_id for child in campaigns])
+        return {
+            child.campaign_id: _child_report(
+                campaign_id=child.campaign_id,
+                seed=child.config.seed,
+                mode=child.config.mo_selection_modes[0],
+                base_depth=80,
+            )
+            for child in campaigns
+        }
+
+    monkeypatch.setattr(
+        "src.integration.campaign_matrix._run_seed_group_campaigns",
+        fake_run_seed_group,
+    )
+
+    report = run_campaign_matrix(campaign, output_root=tmp_path / "campaigns")
+
+    assert grouped_calls == [[
+        "campaign-matrix__seed_1__compromise",
+        "campaign-matrix__seed_1__best_depth",
+        "campaign-matrix__seed_1__best_cnot_count",
+    ]]
+    assert report.status == "completed"

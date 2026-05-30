@@ -1,7 +1,9 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 from qiskit import QuantumCircuit
 
 from src.integration.campaign_contracts import Campaign, CampaignCase, CampaignCircuitSpec, CampaignConfig
@@ -1769,3 +1771,185 @@ def test_run_campaign_aligns_training_case_anchor_with_persisted_case_directory(
     expected_case_dir = tmp_path / "campaigns" / campaign.campaign_id / "cases" / "ghz_bad_3__fake_torino"
     assert captured_case_output_dirs == [expected_case_dir / "rl_only", expected_case_dir]
     assert (expected_case_dir / "result.json").exists()
+
+
+def test_run_campaign_seed_group_reuses_common_work_and_deduplicates_layout_branches(tmp_path) -> None:
+    from src.integration.campaign_matrix import ALL_MO_SELECTION_MODES, expand_campaign_matrix
+    from src.integration.campaign_runner import run_campaign_seed_group
+
+    base_campaign = _build_campaign()
+    matrix_campaign = Campaign.from_config(
+        campaign_id="campaign-matrix",
+        config=replace(
+            base_campaign.config,
+            seeds=(42,),
+            mo_selection_modes=ALL_MO_SELECTION_MODES,
+        ),
+    )
+    children = expand_campaign_matrix(matrix_campaign)
+    case = children[0].build_cases()[0]
+    circuit = _make_case_circuit()
+    call_counts = {
+        "baseline": 0,
+        "rl_only": 0,
+        "optimize_mo": 0,
+        "mo_only": 0,
+        "mo_rl": 0,
+    }
+    train_calls: list[tuple[list[int] | None, Path]] = []
+    selected_from_results: list[object] = []
+    mo_rl_layouts: list[list[int]] = []
+
+    class FakeMoResult:
+        pareto_layouts = [[2, 1, 0], [0, 2, 1]]
+        pareto_fitness = np.array([[8.0, 5.0], [10.0, 3.0]])
+        objective_names = ["depth", "cnot_count"]
+
+        def to_dict(self):
+            return {"algorithm_name": "fake_nsga2", "n_pareto_solutions": 2}
+
+    mo_result = FakeMoResult()
+
+    def result_for(request, scenario_name: str, depth: int, layout=None) -> ScenarioResult:
+        return ScenarioResult(
+            scenario_name=scenario_name,
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=request.seed,
+            success=True,
+            selected_layout=list(layout) if layout is not None else None,
+            transpilation_metrics=_build_metrics(depth),
+            transpilation_artifact=(
+                {
+                    "artifact_version": "transpilation_result.v1",
+                    "baseline_name": "qiskit_level_1",
+                    "transpilation": {
+                        "qiskit_initial_layout": [0, 1, 2],
+                        "final_layout": [0, 1, 2],
+                    },
+                }
+                if scenario_name == "Baseline"
+                else None
+            ),
+        )
+
+    def fake_train_case(
+        *,
+        campaign_case,
+        campaign_config,
+        target_circuit,
+        coupling_map,
+        case_output_dir,
+        initial_layout=None,
+    ):
+        del campaign_config, target_circuit, coupling_map
+        assert campaign_case == case
+        output_path = Path(case_output_dir)
+        normalized_layout = list(initial_layout) if initial_layout is not None else None
+        train_calls.append((normalized_layout, output_path))
+        artifact_path = output_path / "training" / "models" / "run-001" / "best_model.zip"
+        return TrainingBridgeResult(
+            status="completed",
+            selected_artifact_path=artifact_path,
+            best_model_path=artifact_path,
+            final_model_path=artifact_path.parent / "final_model.zip",
+            run_model_dir=artifact_path.parent,
+            run_log_dir=output_path / "training" / "logs" / "run-001",
+            effective_training_config=TrainingConfigSummary(
+                algorithm="MaskablePPO",
+                total_timesteps=5000,
+                frontier_mode="dag",
+                lookahead_window=12,
+                max_steps=256,
+                seed=42,
+            ),
+        )
+
+    def fake_select_mo_layout(request, result, *, circuit, backend_bundle):
+        del circuit, backend_bundle
+        selected_from_results.append(result)
+        if request.layout_policy is LayoutSelectionPolicy.COMPROMISE:
+            return [2, 1, 0]
+        if request.mo_objective_index == 0:
+            return [2, 1, 0]
+        return [0, 2, 1]
+
+    def fake_run_mo_only(request, *, circuit, injected_layout):
+        del circuit
+        call_counts["mo_only"] += 1
+        return result_for(request, "MO_Only", 90, injected_layout)
+
+    def fake_run_mo_rl(request, *, circuit, injected_layout, **kwargs):
+        del circuit, kwargs
+        call_counts["mo_rl"] += 1
+        mo_rl_layouts.append(list(injected_layout))
+        return result_for(request, "MO+RL", 80, injected_layout)
+
+    reports = run_campaign_seed_group(
+        children,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: circuit,
+        run_baseline=lambda request, *, circuit: call_counts.__setitem__(
+            "baseline", call_counts["baseline"] + 1
+        )
+        or result_for(request, "Baseline", 100),
+        optimize_mo=lambda request, *, circuit, backend_bundle: call_counts.__setitem__(
+            "optimize_mo", call_counts["optimize_mo"] + 1
+        )
+        or mo_result,
+        select_mo_layout=fake_select_mo_layout,
+        run_mo_only=fake_run_mo_only,
+        train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, circuit, injected_layout, **kwargs: call_counts.__setitem__(
+            "rl_only", call_counts["rl_only"] + 1
+        )
+        or result_for(request, "RL_Only", 85, injected_layout),
+        run_mo_rl=fake_run_mo_rl,
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend=SimpleNamespace(num_qubits=5),
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+    )
+
+    assert call_counts == {
+        "baseline": 1,
+        "rl_only": 1,
+        "optimize_mo": 1,
+        "mo_only": 2,
+        "mo_rl": 2,
+    }
+    assert selected_from_results == [mo_result, mo_result, mo_result]
+    assert [layout for layout, _ in train_calls] == [
+        [0, 1, 2],
+        [2, 1, 0],
+        [0, 2, 1],
+    ]
+    assert mo_rl_layouts == [[2, 1, 0], [0, 2, 1]]
+
+    compromise = reports["campaign-matrix__seed_42__compromise"].case_reports[0]
+    best_depth = reports["campaign-matrix__seed_42__best_depth"].case_reports[0]
+    best_cnot = reports["campaign-matrix__seed_42__best_cnot_count"].case_reports[0]
+    assert compromise.training_result is best_depth.training_result
+    assert compromise.mo_rl_result is best_depth.mo_rl_result
+    assert compromise.training_result is not best_cnot.training_result
+
+    shared_case_dir = (
+        tmp_path
+        / "campaigns"
+        / "campaign-matrix__seed_42__shared"
+        / "cases"
+        / case.case_id
+    )
+    mo_front = json.loads((shared_case_dir / "mo_front.json").read_text(encoding="utf-8"))
+    assert mo_front["artifact_version"] == "mo_front.v1"
+    assert mo_front["pareto_layouts"] == [[2, 1, 0], [0, 2, 1]]
+
+    child_json = (
+        tmp_path
+        / "campaigns"
+        / "campaign-matrix__seed_42__compromise"
+        / "campaign.json"
+    ).read_text(encoding="utf-8")
+    assert str(tmp_path) not in child_json
+    assert "campaigns/campaign-matrix__seed_42__shared/cases/ghz_3__fake_torino/layouts/layout_2_1_0" in child_json
