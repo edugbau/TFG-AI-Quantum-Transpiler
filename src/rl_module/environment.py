@@ -689,7 +689,9 @@ class QuantumTranspilationEnv(gym.Env):
                 "is_truncated": self.current_step >= self.max_steps,
                 "steps_without_progress": 0,
                 "stagnation_patience": None,
+                "termination_reason": None,
                 "truncation_reason": "max_steps" if self.current_step >= self.max_steps else None,
+                "remaining_gates": 0,
             }
             reward = self.reward_function.compute_reward(prev_obs, action, obs, info)
             return obs, reward, True, info["is_truncated"], info
@@ -718,6 +720,7 @@ class QuantumTranspilationEnv(gym.Env):
             "estimated_routing_depth": prev_routing_depth,
             "steps_without_progress": self._steps_without_progress,
             "stagnation_patience": self._routing_stagnation_patience(),
+            "termination_reason": None,
             "truncation_reason": None,
         }
         
@@ -789,22 +792,18 @@ class QuantumTranspilationEnv(gym.Env):
               
         # Evaluar estado final
         if self.mode == "synthesis":
-            terminated = self._synthesis_state.is_complete()
+            completed = self._synthesis_state.is_complete()
         else:
-            terminated = self._frontier.remaining_gate_count == 0
-        truncated = False
+            completed = self._frontier.remaining_gate_count == 0
 
         # Solo dar is_completed si acaba de terminar AHORA (y no lo estaba en el reset)
-        if terminated and not getattr(self, "was_completed_at_reset", False):
+        if completed and not getattr(self, "was_completed_at_reset", False):
             info["is_completed"] = True
-        elif terminated and getattr(self, "was_completed_at_reset", False):
+        elif completed and getattr(self, "was_completed_at_reset", False):
             # Si ya estaba terminado en el reset, forzamos la finalización de la partida 
             # sin entregar un "is_completed" que activaría el bonus masivo repetidamente.
             info["is_completed"] = False
 
-        # Marcar si el episodio fue truncado (para la función de recompensa)
-        info["is_truncated"] = truncated
-            
         # 4. Calcular Recompensa
         obs = self._build_observation(step_progress=self.current_step / self.max_steps)
         if self.mode == "routing":
@@ -842,9 +841,17 @@ class QuantumTranspilationEnv(gym.Env):
             and stagnation_patience is not None
             and self._steps_without_progress >= stagnation_patience
         )
-        truncated = not terminated and (hit_max_steps or hit_stagnation)
+        terminated = completed or (not completed and hit_stagnation)
+        truncated = not terminated and hit_max_steps
+        if hit_stagnation and not completed:
+            info["termination_reason"] = "stagnation"
         if truncated:
-            info["truncation_reason"] = "max_steps" if hit_max_steps else "stagnation"
+            info["truncation_reason"] = "max_steps"
+        info["remaining_gates"] = (
+            self._frontier.remaining_gate_count
+            if self.mode == "routing"
+            else 0
+        )
         info["steps_without_progress"] = self._steps_without_progress
         info["stagnation_patience"] = stagnation_patience
         info["is_truncated"] = truncated

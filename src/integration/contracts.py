@@ -151,6 +151,7 @@ class RoutingEpisodeSummary:
     total_swaps: int
     gates_executed_count: int
     truncation_reason: str | None = None
+    termination_reason: str | None = None
     swap_trace: list[tuple[int, int]] = field(default_factory=list)
     executed_gate_trace: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -167,6 +168,10 @@ class RoutingEpisodeSummary:
             raise ValueError("truncation_reason must be one of None, max_steps, stagnation")
         if self.truncation_reason is not None and not self.truncated:
             raise ValueError("truncation_reason requires truncated=True")
+        if self.termination_reason not in {None, "stagnation"}:
+            raise ValueError("termination_reason must be one of None, stagnation")
+        if self.termination_reason is not None and (self.completed or self.truncated):
+            raise ValueError("termination_reason requires a non-completed, non-truncated episode")
         self._validate_layout(self.initial_layout, "initial_layout")
         self._validate_layout(self.final_layout, "final_layout")
         if self.initial_layout is not None and self.final_layout is not None:

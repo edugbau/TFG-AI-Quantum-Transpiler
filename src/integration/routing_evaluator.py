@@ -301,8 +301,10 @@ def evaluate_routing_episode(
         total_gates_executed = _count_gates_executed_at_reset(env, info)
         executed_gate_trace = _normalize_executed_gates(info.get("executed_gates", []))
         terminated = bool(info.get("already_completed_at_reset", False))
+        completed = terminated
         truncated = False
         truncation_reason = None
+        termination_reason = None
 
         while not (terminated or truncated):
             if action_selector is not None:
@@ -317,6 +319,14 @@ def evaluate_routing_episode(
                 action, _ = agent.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, step_info = env.step(action)
             truncation_reason = step_info.get("truncation_reason")
+            termination_reason = step_info.get("termination_reason")
+            if terminated:
+                completed = bool(
+                    step_info.get(
+                        "is_completed",
+                        termination_reason is None,
+                    )
+                )
             steps_executed += 1
             total_reward += float(reward)
             total_gates_executed += int(step_info.get("gates_executed", 0))
@@ -332,9 +342,10 @@ def evaluate_routing_episode(
             final_layout=final_layout,
             steps_executed=steps_executed,
             total_reward=total_reward,
-            completed=bool(terminated),
+            completed=bool(completed),
             truncated=bool(truncated),
             truncation_reason=truncation_reason,
+            termination_reason=termination_reason,
             total_swaps=len(swap_trace),
             gates_executed_count=total_gates_executed,
             swap_trace=swap_trace,

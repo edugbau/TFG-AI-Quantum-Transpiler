@@ -952,6 +952,7 @@ class RLBenchmarkGUI(ctk.CTk):
                     steps_without_progress=int(info.get("steps_without_progress", 0)),
                     stagnation_patience=info.get("stagnation_patience"),
                     truncation_reason=info.get("truncation_reason"),
+                    termination_reason=info.get("termination_reason"),
                     primitive_name=info.get("primitive_name"),
                     primitive_physical_qargs=tuple(info.get("primitive_physical_qargs", ())),
                     primitive_cost=float(info.get("primitive_cost", 0.0)),
@@ -973,6 +974,8 @@ class RLBenchmarkGUI(ctk.CTk):
                 status = "CICLO DETECTADO ⚠ (agente oscila sin avanzar)"
             elif info.get("is_completed") or info.get("already_completed_at_reset"):
                 status = "COMPLETADO ✓"
+            elif info.get("termination_reason"):
+                status = f"TERMINADO ({info['termination_reason']})"
             else:
                 status = f"TRUNCADO ({info.get('truncation_reason') or 'max_steps'})"
             self.after(0, self._eval_log_write, f"\nResultado: {status}")

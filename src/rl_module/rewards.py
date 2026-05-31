@@ -36,6 +36,10 @@ class RewardStrategy(ABC):
                   - ``unproductive_swap``: ``bool``
                   - ``is_completed``: ``bool``
                   - ``is_truncated``: ``bool`` — ``True`` si se agotó ``max_steps``
+                  - ``termination_reason``: ``"stagnation"`` si el episodio
+                    termina por falta de progreso
+                  - ``remaining_gates``: puertas objetivo pendientes al cerrar
+                    el episodio
                   
         Returns:
             float: Recompensa escalar.
@@ -63,6 +67,13 @@ class RoutingReward(RewardStrategy):
         sin haber completado el circuito.  Un valor negativo grande
         incentiva al agente a resolver el circuito dentro del límite
         de pasos.  Configurar a ``0.0`` para deshabilitar la penalización.
+    stagnation_penalty : float
+        Penalización cuando el episodio termina por estancamiento. Se separa
+        de ``truncation_penalty`` porque el estancamiento es un fallo terminal,
+        no un corte externo por límite temporal.
+    incomplete_gate_penalty : float
+        Penalización adicional por cada puerta pendiente cuando el episodio
+        termina sin completar el circuito.
     repeated_layout_penalty : float
         Penalización aplicada si la transición vuelve a un layout ya visto
         recientemente, incluyendo auto-bucles inmediatos.
@@ -86,6 +97,8 @@ class RoutingReward(RewardStrategy):
         invalid_action_penalty: float = -5.0,
         completion_bonus: float = 100.0,
         truncation_penalty: float = -100.0,
+        stagnation_penalty: float = -100.0,
+        incomplete_gate_penalty: float = -3.0,
         repeated_layout_penalty: float = -1.0,
         undo_swap_penalty: float = -1.0,
         unproductive_swap_penalty: float = -1.0,
@@ -97,6 +110,8 @@ class RoutingReward(RewardStrategy):
         self.invalid_action_penalty = invalid_action_penalty
         self.completion_bonus = completion_bonus
         self.truncation_penalty = truncation_penalty
+        self.stagnation_penalty = stagnation_penalty
+        self.incomplete_gate_penalty = incomplete_gate_penalty
         self.repeated_layout_penalty = repeated_layout_penalty
         self.undo_swap_penalty = undo_swap_penalty
         self.unproductive_swap_penalty = unproductive_swap_penalty
@@ -110,6 +125,8 @@ class RoutingReward(RewardStrategy):
             "invalid_action_penalty": self.invalid_action_penalty,
             "completion_bonus": self.completion_bonus,
             "truncation_penalty": self.truncation_penalty,
+            "stagnation_penalty": self.stagnation_penalty,
+            "incomplete_gate_penalty": self.incomplete_gate_penalty,
             "repeated_layout_penalty": self.repeated_layout_penalty,
             "undo_swap_penalty": self.undo_swap_penalty,
             "unproductive_swap_penalty": self.unproductive_swap_penalty,
@@ -149,9 +166,19 @@ class RoutingReward(RewardStrategy):
         if info.get('is_completed', False):
             reward += self.completion_bonus
 
-        # 5. Penalización si el episodio fue truncado sin completarse
+        # 5. Penalización terminal si el episodio acaba sin completar
+        incomplete_episode = not info.get('is_completed', False) and (
+            info.get('is_truncated', False)
+            or info.get('termination_reason') == 'stagnation'
+        )
         if info.get('is_truncated', False) and not info.get('is_completed', False):
             reward += self.truncation_penalty
+        elif info.get('termination_reason') == 'stagnation' and not info.get('is_completed', False):
+            reward += self.stagnation_penalty
+
+        if incomplete_episode:
+            remaining_gates = max(float(info.get('remaining_gates', 0.0)), 0.0)
+            reward += self.incomplete_gate_penalty * remaining_gates
             
         return reward
 

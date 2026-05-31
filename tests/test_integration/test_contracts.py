@@ -489,6 +489,7 @@ def test_routing_episode_summary_captures_episode_level_outputs() -> None:
         "total_swaps": 2,
         "gates_executed_count": 11,
         "truncation_reason": None,
+        "termination_reason": None,
         "swap_trace": [(4, 6), (6, 8)],
         "executed_gate_trace": [],
     }
@@ -567,6 +568,23 @@ def test_routing_episode_summary_rejects_completed_and_truncated() -> None:
         assert "truncated" in str(exc)
     else:
         raise AssertionError("Expected ValueError for completed and truncated summary")
+
+
+def test_routing_episode_summary_accepts_terminal_stagnation_failure() -> None:
+    summary = RoutingEpisodeSummary(
+        initial_layout=[0, 1],
+        final_layout=[1, 0],
+        steps_executed=4,
+        total_reward=-10.0,
+        completed=False,
+        truncated=False,
+        termination_reason="stagnation",
+        total_swaps=1,
+        gates_executed_count=1,
+        swap_trace=[(0, 1)],
+    )
+
+    assert summary.termination_reason == "stagnation"
 
 
 def test_routing_episode_summary_rejects_invalid_layout_entries() -> None:

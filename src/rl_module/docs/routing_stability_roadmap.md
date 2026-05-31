@@ -40,7 +40,7 @@ Task 5 clarifies the intended public contract of the masked-routing regime:
 `frontier_restricted_edges.v3` keeps the fixed action space and adds:
 
 - short-cycle filtering over `(layout, frontier_revision)`;
-- stagnation truncation after a configurable number of steps without newly best routing distance or executed gates;
+- terminal stagnation failure after a configurable number of steps without newly best routing distance or executed gates, keeping time-limit truncation reserved for `max_steps`;
 - optional SABRE-style top-k pruning with deterministic action-index tie breaking;
 - layer-local fallbacks whenever a heuristic filter would empty the candidate mask;
 - persisted `mask_config` metadata under `rl_run_metadata.masked_routing.v2`.

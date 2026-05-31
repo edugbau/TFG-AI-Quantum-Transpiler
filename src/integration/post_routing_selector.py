@@ -123,6 +123,7 @@ class PostRoutingCheckpointSelector(BaseCallback):
                     swaps=routing_summary.total_swaps,
                     remaining_gates=remaining_gates,
                     truncation_reason=routing_summary.truncation_reason,
+                    termination_reason=routing_summary.termination_reason,
                 )
             else:
                 attempt, improved = self._evaluate_completed_routing(routing_summary)
@@ -155,6 +156,7 @@ class PostRoutingCheckpointSelector(BaseCallback):
         swaps: int | None = None,
         remaining_gates: int | None = None,
         truncation_reason: str | None = None,
+        termination_reason: str | None = None,
         score: tuple[float, int, int] | None = None,
         error_type: str | None = None,
         error_message: str | None = None,
@@ -166,6 +168,7 @@ class PostRoutingCheckpointSelector(BaseCallback):
             "swaps": swaps,
             "remaining_gates": remaining_gates,
             "truncation_reason": truncation_reason,
+            "termination_reason": termination_reason,
             "score": list(score) if score is not None else None,
             "error_type": error_type,
             "error_message": error_message,

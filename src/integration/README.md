@@ -33,7 +33,7 @@ La capa de Scenario cubre cuatro rutas:
 
 `Baseline` y `MO_Only` aceptan entrada `qasm_file`. Los escenarios basados en RL se centran en circuitos y trazas, no en una entrada QASM publica equivalente.
 
-`RL_Only` y `MO+RL` reconstruyen el circuito ruteado cuando el episodio completa. Para ello, `routing_evaluator.py` prioriza `executed_gate_trace` y usa `swap_trace` para materializar swaps fisicos. Si el episodio no completa, devuelven un resultado controlado sin post-routing final.
+`RL_Only` y `MO+RL` reconstruyen el circuito ruteado cuando el episodio completa. Para ello, `routing_evaluator.py` prioriza `executed_gate_trace` y usa `swap_trace` para materializar swaps fisicos. Si el episodio no completa, devuelven un resultado controlado sin post-routing final. `RL_Only` reutiliza el layout inicial resuelto por `qiskit_level_1` salvo que el llamador inyecte uno explicitamente, de modo que la comparacion aisle el routing.
 
 ## Campaign layer
 
@@ -57,7 +57,7 @@ Una Campaign puede expandirse como matrix cuando configura varias `seeds` o vari
 - `hybrid_probe` requiere `MaskablePPO`; si ninguna sonda MO completa el routing, registra el fallback y usa `compromise`.
 - `SyntheticTopologySpec` permite usar topologias sinteticas en modo avanzado, incluida `t` como T balanceada (`synthetic_t_Nq`) para `N >= 5`.
 - `resolve_routing_model_contract()` lee `run_metadata.json` cuando existe y mantiene fallback legacy para checkpoints antiguos.
-- La metadata versionada de masked routing se consume cuando esta disponible: `v4` anade decay SABRE, `v3` anade anti-ciclo, truncacion por estancamiento y top-k SABRE opcional; `v2` evita undo-SWAPs inmediatos y `v1` conserva la evaluacion historica. Si falta, se mantiene la compatibilidad con modelos PPO/DQN legacy.
+- La metadata versionada de masked routing se consume cuando esta disponible: `v4` anade decay SABRE, `v3` anade anti-ciclo, terminacion por estancamiento y top-k SABRE opcional; `v2` evita undo-SWAPs inmediatos y `v1` conserva la evaluacion historica. Si falta, se mantiene la compatibilidad con modelos PPO/DQN legacy.
 
 ## CLI y persistencia
 

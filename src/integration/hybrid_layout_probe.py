@@ -31,6 +31,7 @@ class HybridLayoutProbeAttempt:
     completed: bool
     truncated: bool
     truncation_reason: str | None
+    termination_reason: str | None
     total_swaps: int | None
     score: list[float | int] | None
     error_type: str | None = None
@@ -107,6 +108,7 @@ def _evaluate_layout(
                 completed=bool(routing_summary.completed),
                 truncated=bool(routing_summary.truncated),
                 truncation_reason=routing_summary.truncation_reason,
+                termination_reason=routing_summary.termination_reason,
                 total_swaps=routing_summary.total_swaps,
                 score=None,
             )
@@ -144,6 +146,7 @@ def _evaluate_layout(
             completed=True,
             truncated=False,
             truncation_reason=None,
+            termination_reason=None,
             total_swaps=routing_summary.total_swaps,
             score=score,
         )
@@ -157,6 +160,7 @@ def _evaluate_layout(
             completed=False,
             truncated=False,
             truncation_reason=None,
+            termination_reason=None,
             total_swaps=None,
             score=None,
             error_type=type(exc).__name__,

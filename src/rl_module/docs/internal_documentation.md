@@ -61,7 +61,7 @@ La recompensa separa progreso util de ruido:
 
 - bonifica puertas ejecutadas;
 - penaliza SWAPs inutiles, layouts repetidos y deshacer el ultimo SWAP;
-- castiga truncaciones y acciones invalidas;
+- castiga truncaciones, terminaciones por estancamiento y acciones invalidas;
 - en `synthesis`, la recompensa se centra en reducir el residual.
 
 ### Masked routing
@@ -74,7 +74,7 @@ El regimen nuevo de `masked routing` no redefine el entorno:
 - `frontier_restricted_edges.v4` aplica la tuberia v3 y suma decay SABRE para reducir reutilizacion serial de qubits fisicos.
 - Cada filtro conserva la salida anterior si vaciaria la mascara.
 - Los ciclos se identifican mediante `(layout, frontier_revision)`, de modo que volver a un layout tras ejecutar puertas sigue permitido.
-- Los episodios se truncan si no ejecutan puertas ni mejoran una nueva mejor distancia durante `stagnation_patience`.
+- Los episodios terminan como fallo si no ejecutan puertas ni mejoran una nueva mejor distancia durante `stagnation_patience`; solo `max_steps` conserva semantica de truncacion temporal.
 - `frontier_restricted_edges.v1`, `frontier_restricted_edges.v2` y `frontier_restricted_edges.v3` siguen disponibles para reproducir checkpoints historicos.
 
 ## 3. Synthesis v1

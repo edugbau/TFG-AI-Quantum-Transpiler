@@ -62,7 +62,7 @@ Toma un `OptimizationResult` de `mo_module` y lo reduce a un layout unico. La de
 Resuelve el contrato de un checkpoint RL.
 
 - Lee `run_metadata.json` cuando existe.
-- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo, `v3` anade anti-ciclo, truncacion por estancamiento y top-k SABRE opcional con fallbacks no vacios, y `v4` incorpora decay SABRE.
+- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo, `v3` anade anti-ciclo, terminacion por estancamiento y top-k SABRE opcional con fallbacks no vacios, y `v4` incorpora decay SABRE.
 - Si no hay metadata, se cae a defaults legacy para no romper checkpoints PPO/DQN antiguos.
 
 ### `routing_evaluator.py`
@@ -108,6 +108,7 @@ Limitaciones importantes:
 
 - `Baseline` y `MO_Only` aceptan `qasm_file`.
 - Los escenarios RL siguen centrados en trazas y no exponen una entrada QASM publica equivalente.
+- `RL_Only` reutiliza por defecto el layout inicial resuelto por `qiskit_level_1`; un layout inyectado explicitamente conserva prioridad.
 - `MO+RL` reconstruye el circuito y ejecuta post-routing de Qiskit solo cuando el episodio completa.
 
 ## 3. Capa de Campaign

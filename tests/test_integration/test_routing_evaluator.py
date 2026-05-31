@@ -647,6 +647,49 @@ def test_evaluate_routing_episode_uses_injected_action_selector_without_agent(mo
     assert summary.completed is True
 
 
+def test_evaluate_routing_episode_keeps_stagnation_distinct_from_completion(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [0, 1]
+            self.total_swaps = 0
+
+        def reset(self, *, seed=None, options=None):
+            return {"obs": "reset"}, {"already_completed_at_reset": False}
+
+        def step(self, action):
+            return {
+                "obs": "done"
+            }, -120.0, True, False, {
+                "gates_executed": 0,
+                "is_completed": False,
+                "termination_reason": "stagnation",
+            }
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(2),
+        coupling_edges=[(0, 1)],
+        agent=StubAgent(),
+        seed=5,
+        initial_layout=[0, 1],
+        frontier_mode="dag",
+        max_steps=3,
+        lookahead_window=2,
+    )
+
+    assert summary.completed is False
+    assert summary.truncated is False
+    assert summary.truncation_reason is None
+    assert summary.termination_reason == "stagnation"
+
+
 def test_build_routed_circuit_replays_swap_trace_into_physical_circuit() -> None:
     from src.integration.routing_evaluator import build_routed_circuit
 

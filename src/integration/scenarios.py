@@ -494,6 +494,32 @@ def run_mo_only_scenario(
     )
 
 
+def _resolve_qiskit_initial_layout_for_rl_only(
+    request: ScenarioRequest,
+    circuit,
+) -> list[int]:
+    row, artifact = _run_named_baseline_with_artifact(
+        request,
+        circuit,
+        "qiskit_level_1",
+    )
+    transpilation = artifact.get("transpilation")
+    candidates = []
+    if isinstance(transpilation, dict):
+        candidates.extend(
+            [
+                transpilation.get("qiskit_initial_layout"),
+                transpilation.get("final_layout"),
+            ]
+        )
+    candidates.append(row.get("qiskit_initial_layout"))
+
+    for candidate in candidates:
+        if candidate is not None:
+            return [int(entry) for entry in candidate]
+    return list(range(circuit.num_qubits))
+
+
 def run_rl_only_scenario(
     request: ScenarioRequest,
     *,
@@ -522,7 +548,7 @@ def run_rl_only_scenario(
         )
     else:
         selected_layout = _validate_selected_layout(
-            list(range(_get_request_num_qubits(request, circuit))),
+            _resolve_qiskit_initial_layout_for_rl_only(request, circuit),
             _get_request_num_qubits(request, circuit),
             backend_bundle.backend,
         )

@@ -96,9 +96,10 @@ Para checkpoints nuevos de este régimen, `MaskablePPO` es el trainer estándar.
 acumulativos con fallback: anti-undo, anti-ciclo sobre
 `(layout, frontier_revision)` y top-k SABRE opcional. La configuracion efectiva
 se persiste en el sidecar del checkpoint para reproducir exactamente la
-evaluacion. La version v3 tambien puede truncar episodios estancados cuando no
+evaluacion. La version v3 tambien puede terminar como fallo episodios estancados cuando no
 se ejecutan puertas ni se alcanza una nueva mejor distancia durante la
-paciencia configurada.
+paciencia configurada. Solo alcanzar `max_steps` se representa como truncacion
+temporal.
 
 ## Comportamiento de `reset()`
 

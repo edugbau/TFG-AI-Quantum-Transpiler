@@ -55,8 +55,8 @@ def _incomplete_summary() -> RoutingEpisodeSummary:
         steps_executed=10,
         total_reward=-100.0,
         completed=False,
-        truncated=True,
-        truncation_reason="stagnation",
+        truncated=False,
+        termination_reason="stagnation",
         total_swaps=0,
         gates_executed_count=0,
     )
@@ -96,6 +96,7 @@ def test_incomplete_attempts_before_first_solution_do_not_consume_patience(monke
     assert selector.no_improvement_evals == 0
     assert selector.model.saved_paths == []
     assert [attempt["status"] for attempt in selector.attempts] == ["incomplete_routing"] * 3
+    assert [attempt["termination_reason"] for attempt in selector.attempts] == ["stagnation"] * 3
 
 
 def test_incomplete_regression_after_first_solution_consumes_patience(monkeypatch, tmp_path) -> None:

@@ -696,6 +696,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
     from src.integration import scenarios
 
     circuit = QuantumCircuit(3)
+    qiskit_initial_layout = [2, 0, 1]
     bundle = SimpleNamespace(
         backend_name="fake_backend",
         backend="backend-object",
@@ -718,6 +719,18 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
     monkeypatch.setattr(scenarios, "resolve_backend_bundle", lambda backend_name: bundle)
     monkeypatch.setattr(
         scenarios,
+        "_run_named_baseline_with_artifact",
+        lambda request, circuit, baseline_name: (
+            {"qiskit_initial_layout": qiskit_initial_layout},
+            {
+                "transpilation": {
+                    "qiskit_initial_layout": qiskit_initial_layout,
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        scenarios,
         "_load_agent",
         lambda request, *, algorithm="PPO": "agent-object",
     )
@@ -733,7 +746,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
     )
 
     assert result.success is True
-    assert result.selected_layout == [0, 1, 2]
+    assert result.selected_layout == qiskit_initial_layout
     assert result.transpilation_metrics == {
         "backend_name": "fake_backend",
         "trans_depth": 12,
@@ -750,7 +763,7 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
             "coupling_edges": [(0, 1), (1, 2)],
             "agent": "agent-object",
             "seed": 17,
-            "initial_layout": [0, 1, 2],
+            "initial_layout": qiskit_initial_layout,
             "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
@@ -820,7 +833,7 @@ def test_run_rl_only_scenario_uses_saved_contract(monkeypatch, tmp_path) -> None
     _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
-        _make_request("RL_Only", rl_model_path=str(model_path))
+        _make_request("RL_Only", rl_model_path=str(model_path), initial_layout=[0, 1, 2])
     )
 
     assert load_calls == [{"path": str(model_path), "algorithm": "DQN", "env": None}]
@@ -893,7 +906,7 @@ def test_run_rl_only_scenario_forwards_masked_contract_fields(monkeypatch, tmp_p
     _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
-        _make_request("RL_Only", rl_model_path=str(model_path))
+        _make_request("RL_Only", rl_model_path=str(model_path), initial_layout=[0, 1, 2])
     )
 
     assert load_calls == [{"path": str(model_path), "algorithm": "MaskablePPO", "env": None}]
@@ -946,7 +959,7 @@ def test_run_rl_only_scenario_adds_fallback_note_when_metadata_is_missing(monkey
     _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
-        _make_request("RL_Only", rl_model_path=str(model_path))
+        _make_request("RL_Only", rl_model_path=str(model_path), initial_layout=[0, 1, 2])
     )
 
     assert result.notes == [
@@ -999,7 +1012,7 @@ def test_run_rl_only_scenario_recovers_dqn_algorithm_when_metadata_is_missing(mo
     _patch_successful_post_routing(monkeypatch, scenarios)
 
     result = scenarios.run_rl_only_scenario(
-        _make_request("RL_Only", rl_model_path=str(model_path))
+        _make_request("RL_Only", rl_model_path=str(model_path), initial_layout=[0, 1, 2])
     )
 
     assert load_calls == ["DQN"]

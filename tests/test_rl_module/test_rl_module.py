@@ -55,6 +55,7 @@ from src.rl_module import agent as agent_module
 # ---------------------------------------------------------------------------
 from qiskit import QuantumCircuit
 import gymnasium as gym
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 
 # ===========================================================================
@@ -667,6 +668,27 @@ class TestRoutingReward:
         info = {"action_type": None, "gates_executed": 0, "is_valid_action": True, "is_completed": False, "is_truncated": True}
         reward = reward_fn.compute_reward(None, None, None, info)
         assert reward == 0.0
+
+    def test_stagnation_penalty_scales_with_remaining_gates(self):
+        """Un loop termina como fallo y penaliza también el trabajo pendiente."""
+        reward_fn = RoutingReward(
+            swap_penalty=0.0,
+            stagnation_penalty=-20.0,
+            incomplete_gate_penalty=-3.0,
+        )
+        info = {
+            "action_type": None,
+            "gates_executed": 0,
+            "is_valid_action": True,
+            "is_completed": False,
+            "is_truncated": False,
+            "termination_reason": "stagnation",
+            "remaining_gates": 4,
+        }
+
+        reward = reward_fn.compute_reward(None, None, None, info)
+
+        assert reward == -32.0
 
     def test_combined_reward_swap_plus_gates_plus_completion(self):
         """Recompensa combinada: SWAP + ejecución de puerta + completar."""
@@ -1600,7 +1622,7 @@ class TestQuantumTranspilationEnv:
         assert mask[env.strategy.edges.index((1, 3))]
         assert int(np.sum(mask)) == 2
 
-    def test_routing_v3_truncates_after_recovering_only_an_already_seen_best_distance(self):
+    def test_routing_v3_terminates_after_recovering_only_an_already_seen_best_distance(self):
         qc = QuantumCircuit(2)
         qc.cx(0, 1)
         env = QuantumTranspilationEnv(
@@ -1614,17 +1636,67 @@ class TestQuantumTranspilationEnv:
 
         env.reset(seed=42, options={"initial_layout": [0, 3]})
         action = env.strategy.edges.index((0, 1))
-        _, _, _, truncated1, info1 = env.step(action)
-        _, _, _, truncated2, info2 = env.step(action)
-        _, _, _, truncated3, info3 = env.step(action)
+        _, _, terminated1, truncated1, info1 = env.step(action)
+        _, _, terminated2, truncated2, info2 = env.step(action)
+        _, _, terminated3, truncated3, info3 = env.step(action)
 
+        assert terminated1 is False
         assert truncated1 is False
         assert info1["steps_without_progress"] == 0
+        assert terminated2 is False
         assert truncated2 is False
         assert info2["steps_without_progress"] == 1
-        assert truncated3 is True
+        assert terminated3 is True
+        assert truncated3 is False
         assert info3["steps_without_progress"] == 2
-        assert info3["truncation_reason"] == "stagnation"
+        assert info3["termination_reason"] == "stagnation"
+        assert info3["truncation_reason"] is None
+
+    def test_routing_v3_stagnation_is_not_exposed_as_time_limit_truncation(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+            routing_mask_config=RoutingMaskConfig(stagnation_patience=2),
+        )
+        vec_env = DummyVecEnv([lambda: env])
+
+        vec_env.set_options({"initial_layout": [0, 3]})
+        vec_env.reset()
+        action = env.strategy.edges.index((0, 1))
+        _, _, dones1, infos1 = vec_env.step([action])
+        _, _, dones2, infos2 = vec_env.step([action])
+        _, _, dones3, infos3 = vec_env.step([action])
+
+        assert not dones1[0]
+        assert not dones2[0]
+        assert dones3[0]
+        assert infos3[0]["termination_reason"] == "stagnation"
+        assert infos3[0]["TimeLimit.truncated"] is False
+
+    def test_max_steps_is_still_exposed_as_time_limit_truncation(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=1,
+        )
+        vec_env = DummyVecEnv([lambda: env])
+
+        vec_env.set_options({"initial_layout": [0, 3]})
+        vec_env.reset()
+        action = env.strategy.edges.index((0, 1))
+        _, _, dones, infos = vec_env.step([action])
+
+        assert dones[0]
+        assert infos[0]["truncation_reason"] == "max_steps"
+        assert infos[0]["TimeLimit.truncated"] is True
 
     def test_routing_v3_completion_takes_priority_over_stagnation(self):
         qc = QuantumCircuit(2)
