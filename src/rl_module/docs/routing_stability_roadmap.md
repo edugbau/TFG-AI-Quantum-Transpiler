@@ -35,6 +35,20 @@ Task 5 clarifies the intended public contract of the masked-routing regime:
 - `MaskablePPO` is the standard trainer for new masked-routing checkpoints only;
 - legacy PPO/DQN checkpoints remain supported through legacy/default or otherwise unmasked evaluation contracts.
 
+## Implemented v3 escalation
+
+`frontier_restricted_edges.v3` keeps the fixed action space and adds:
+
+- short-cycle filtering over `(layout, frontier_revision)`;
+- stagnation truncation after a configurable number of steps without newly best routing distance or executed gates;
+- optional SABRE-style top-k pruning with deterministic action-index tie breaking;
+- layer-local fallbacks whenever a heuristic filter would empty the candidate mask;
+- persisted `mask_config` metadata under `rl_run_metadata.masked_routing.v2`.
+
+Historical `frontier_restricted_edges.v1` and `frontier_restricted_edges.v2`
+checkpoints retain their original evaluation contracts. Use
+`notebooks/benchmark_routing_mask_v3.py` for manual v2/v3 ablations.
+
 ## Migration Risks
 
 - Action-mask semantics can drift from environment validity semantics if they are maintained separately.

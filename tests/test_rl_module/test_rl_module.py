@@ -47,6 +47,7 @@ from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.training import set_global_seeds, setup_training_pipeline
 from src.rl_module.synthesis_clifford import CliffordSynthesisState
 from src.rl_module.frontier import LookaheadEntry
+from src.rl_module.routing_mask import RoutingMaskConfig
 from src.rl_module import agent as agent_module
 
 # ---------------------------------------------------------------------------
@@ -595,6 +596,29 @@ class TestSynthesisStrategy:
 class TestRoutingReward:
     """Tests de la función de recompensa de enrutamiento."""
 
+    def test_default_reward_prioritizes_low_cost_completion(self):
+        """Los valores por defecto penalizan coste y concentran el premio al completar."""
+        reward_fn = RoutingReward()
+
+        unproductive_swap = {
+            "action_type": "swap",
+            "gates_executed": 0,
+            "is_valid_action": True,
+            "is_completed": False,
+            "is_truncated": False,
+            "unproductive_swap": True,
+        }
+        completing_swap = {
+            "action_type": "swap",
+            "gates_executed": 1,
+            "is_valid_action": True,
+            "is_completed": True,
+            "is_truncated": False,
+        }
+
+        assert reward_fn.compute_reward(None, None, None, unproductive_swap) == -4.0
+        assert reward_fn.compute_reward(None, None, None, completing_swap) == 98.0
+
     def test_swap_penalty(self):
         """Aplicar un SWAP genera la penalización configurada."""
         reward_fn = RoutingReward(swap_penalty=-1.0)
@@ -711,6 +735,26 @@ class TestRoutingReward:
         reward = reward_fn.compute_reward(None, None, None, info)
 
         assert reward == pytest.approx(-3.0)
+
+    def test_unproductive_swap_penalty_is_configurable(self):
+        """Un SWAP improductivo recibe su penalización adicional configurable."""
+        reward_fn = RoutingReward(
+            swap_penalty=0.0,
+            gate_execution_reward=0.0,
+            unproductive_swap_penalty=-2.5,
+        )
+        info = {
+            "action_type": "swap",
+            "gates_executed": 0,
+            "is_valid_action": True,
+            "is_completed": False,
+            "is_truncated": False,
+            "unproductive_swap": True,
+        }
+
+        reward = reward_fn.compute_reward(None, None, None, info)
+
+        assert reward == pytest.approx(-2.5)
 
 
 # ===========================================================================
@@ -1270,6 +1314,7 @@ class TestQuantumTranspilationEnv:
         assert "action_type" in info
         assert "is_valid_action" in info
         assert "gates_executed" in info
+        assert "unproductive_swap" in info
         assert "is_completed" in info
         assert "is_truncated" in info
         assert info["action_type"] == "swap"
@@ -1455,6 +1500,153 @@ class TestQuantumTranspilationEnv:
             np.array([True], dtype=bool),
         )
 
+    def test_action_masks_v3_blocks_short_cycle_without_mutating_history(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        action = env.strategy.edges.index((0, 1))
+        env.step(action)
+        env._last_swap_edge = None
+        history_before = list(env._recent_routing_states)
+
+        assert not env.action_masks()[action]
+        assert list(env._recent_routing_states) == history_before
+        assert list(env._recent_routing_states) == history_before
+
+    def test_action_masks_v3_cycle_filter_falls_back_when_every_candidate_is_recent(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        base_mask = env._build_frontier_incident_mask(strategy=env.strategy)
+        for index in np.flatnonzero(base_mask):
+            candidate_layout = env._simulate_swap_layout(env.strategy.edges[int(index)])
+            env._recent_routing_states.append(
+                (tuple(int(value) for value in candidate_layout.tolist()), env._frontier_revision)
+            )
+
+        np.testing.assert_array_equal(env.action_masks(), base_mask)
+
+    def test_action_masks_v3_allows_revisited_layout_after_frontier_revision_advances(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        action = env.strategy.edges.index((0, 1))
+        candidate_layout = env._simulate_swap_layout(env.strategy.edges[action])
+        env._recent_routing_states.append(
+            (tuple(int(value) for value in candidate_layout.tolist()), env._frontier_revision)
+        )
+        env._frontier_revision += 1
+
+        assert env.action_masks()[action]
+
+    def test_action_masks_v3_without_top_k_preserves_frontier_candidates(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+
+        np.testing.assert_array_equal(
+            env.action_masks(),
+            env._build_frontier_incident_mask(strategy=env.strategy),
+        )
+
+    def test_action_masks_v3_top_k_is_deterministic_and_keeps_productive_swaps(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (0, 2), (1, 3), (3, 4)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+            routing_mask_config=RoutingMaskConfig(sabre_top_k=1),
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        mask = env.action_masks()
+
+        assert mask[env.strategy.edges.index((0, 1))]
+        assert mask[env.strategy.edges.index((1, 3))]
+        assert int(np.sum(mask)) == 2
+
+    def test_routing_v3_truncates_after_recovering_only_an_already_seen_best_distance(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+            routing_mask_config=RoutingMaskConfig(stagnation_patience=2),
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        action = env.strategy.edges.index((0, 1))
+        _, _, _, truncated1, info1 = env.step(action)
+        _, _, _, truncated2, info2 = env.step(action)
+        _, _, _, truncated3, info3 = env.step(action)
+
+        assert truncated1 is False
+        assert info1["steps_without_progress"] == 0
+        assert truncated2 is False
+        assert info2["steps_without_progress"] == 1
+        assert truncated3 is True
+        assert info3["steps_without_progress"] == 2
+        assert info3["truncation_reason"] == "stagnation"
+
+    def test_routing_v3_completion_takes_priority_over_stagnation(self):
+        qc = QuantumCircuit(2)
+        qc.cx(0, 1)
+        env = QuantumTranspilationEnv(
+            target_circuit=qc,
+            coupling_map=[(0, 1), (1, 2), (2, 3)],
+            mode="routing",
+            max_steps=10,
+            mask_semantics="frontier_restricted_edges.v3",
+            routing_mask_config=RoutingMaskConfig(stagnation_patience=1),
+        )
+
+        env.reset(seed=42, options={"initial_layout": [0, 3]})
+        env.step(env.strategy.edges.index((0, 1)))
+        _, _, terminated, truncated, info = env.step(env.strategy.edges.index((1, 2)))
+
+        assert terminated is True
+        assert truncated is False
+        assert info["is_completed"] is True
+        assert info["truncation_reason"] is None
+
     def test_action_masks_keeps_incident_edges_enabled_for_unreachable_blocked_gate(self):
         qc = QuantumCircuit(2)
         qc.cx(0, 1)
@@ -1548,6 +1740,7 @@ class TestQuantumTranspilationEnv:
         assert info["action_type"] == "swap"
         assert info["is_valid_action"] is False
         assert info["gates_executed"] == 0
+        assert info["unproductive_swap"] is False
         assert terminated is False
         assert truncated is False
         assert env.total_swaps == 1
@@ -1575,9 +1768,11 @@ class TestQuantumTranspilationEnv:
         assert info1["repeated_layout"] is False
         assert info1["undo_swap"] is False
         assert info1["routing_progress_delta"] == pytest.approx(1.0)
+        assert info1["unproductive_swap"] is False
         assert info2["repeated_layout"] is True
         assert info2["undo_swap"] is True
         assert info2["routing_progress_delta"] == pytest.approx(-1.0)
+        assert info2["unproductive_swap"] is True
 
     def test_step_reports_zero_routing_progress_when_frontier_already_executable(self, routing_env):
         """Si no hay distancia de routing pendiente, el delta informado es 0."""
@@ -1630,6 +1825,7 @@ class TestQuantumTranspilationEnv:
 
         assert info["gates_executed"] == 1
         assert info["routing_progress_delta"] == pytest.approx(0.0)
+        assert info["unproductive_swap"] is False
 
     def test_reusing_swap_after_frontier_advances_is_not_undo_or_repeated_layout(self):
         """Reutilizar la misma arista tras ejecutar puertas no cuenta como undo ni repetición vacía."""
@@ -2493,7 +2689,7 @@ class TestTrainingUtilities:
         }
         assert metadata["evaluation"] == {
             "eval_freq": 5000,
-            "n_eval_episodes": 5,
+            "n_eval_episodes": 1,
             "deterministic": True,
         }
 
@@ -2832,18 +3028,20 @@ class TestTrainingUtilities:
 
         assert callback_types == ["DummyCheckpointCallback", "DummyMaskableEvalCallback"]
         assert maskable_eval_kwargs["eval_freq"] == 5000
-        assert maskable_eval_kwargs["n_eval_episodes"] == 5
+        assert maskable_eval_kwargs["n_eval_episodes"] == 1
         early_stopping = maskable_eval_kwargs["callback_after_eval"]
         assert early_stopping.min_evals == 50
         assert early_stopping.max_no_improvement_evals == 20
         assert [kwargs["mask_semantics"] for kwargs in env_kwargs] == [
-            "frontier_restricted_edges.v2",
-            "frontier_restricted_edges.v2",
+            "frontier_restricted_edges.v3",
+            "frontier_restricted_edges.v3",
         ]
+        assert [kwargs["routing_mask_config"].stagnation_patience for kwargs in env_kwargs] == [8, 8]
         metadata = json.loads(
             Path(agent.run_model_dir, "run_metadata.json").read_text(encoding="utf-8")
         )
-        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v2"
+        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v3"
+        assert metadata["routing_policy"]["mask_config"]["stagnation_patience"] == 8
         assert metadata["evaluation"]["early_stopping"] == {
             "enabled": True,
             "callback": "StopTrainingOnNoModelImprovement",

@@ -213,6 +213,9 @@ def _render_config(report: CampaignReport) -> list[str]:
         f"RL Clip Range: `{config.rl_clip_range}`",
         f"RL Target KL: `{config.rl_target_kl}`",
         f"RL Eval Episodes: `{config.rl_n_eval_episodes}`",
+        f"RL Cycle Window: `{config.rl_cycle_window}`",
+        f"RL Stagnation Patience: `{config.rl_stagnation_patience}`",
+        f"RL SABRE Top-k: `{config.rl_sabre_top_k}`",
         f"Seed: `{config.seed}`",
         f"Topology Source: `{config.topology_source}`",
         f"MO Effort Mode: `{config.mo_effort_mode}`",
@@ -310,6 +313,9 @@ def _render_effective_config(training_result: TrainingBridgeResult | None) -> st
         f"rl_clip_range={config.clip_range}, "
         f"rl_target_kl={config.target_kl}, "
         f"rl_n_eval_episodes={config.n_eval_episodes}, "
+        f"rl_cycle_window={config.cycle_window}, "
+        f"rl_stagnation_patience={config.stagnation_patience}, "
+        f"rl_sabre_top_k={config.sabre_top_k}, "
         f"seed={config.seed}"
     )
 
@@ -344,6 +350,9 @@ def _render_training_summary(training_result: TrainingBridgeResult | None, *, la
         f"- Clip Range: `{config.clip_range}`",
         f"- Target KL: `{config.target_kl}`",
         f"- Eval Episodes: `{config.n_eval_episodes}`",
+        f"- Cycle Window: `{config.cycle_window}`",
+        f"- Stagnation Patience: `{config.stagnation_patience}`",
+        f"- SABRE Top-k: `{config.sabre_top_k}`",
         f"- Seed: `{config.seed}`",
         f"- Selected Artifact: `{artifact_path}`",
     ]

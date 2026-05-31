@@ -488,6 +488,7 @@ def test_routing_episode_summary_captures_episode_level_outputs() -> None:
         "truncated": False,
         "total_swaps": 2,
         "gates_executed_count": 11,
+        "truncation_reason": None,
         "swap_trace": [(4, 6), (6, 8)],
         "executed_gate_trace": [],
     }

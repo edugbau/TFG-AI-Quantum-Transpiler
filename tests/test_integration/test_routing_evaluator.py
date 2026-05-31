@@ -64,6 +64,7 @@ def test_create_routing_env_forwards_frontier_mode(monkeypatch) -> None:
                 "max_steps": 5,
                 "lookahead_window": 2,
                 "mask_semantics": None,
+                "routing_mask_config": None,
             }
         ]
 
@@ -93,6 +94,36 @@ def test_create_routing_env_forwards_mask_semantics(monkeypatch) -> None:
     )
 
     assert init_calls[0]["mask_semantics"] == "frontier_restricted_edges.v2"
+
+
+def test_create_routing_env_forwards_routing_mask_config(monkeypatch) -> None:
+    from src.integration.routing_evaluator import _create_routing_env
+    from src.rl_module.routing_mask import RoutingMaskConfig
+
+    init_calls = []
+    config = RoutingMaskConfig(stagnation_patience=8)
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            init_calls.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.rl_module.environment",
+        SimpleNamespace(QuantumTranspilationEnv=FakeEnv),
+    )
+
+    _create_routing_env(
+        circuit=QuantumCircuit(2),
+        coupling_edges=[(0, 1)],
+        frontier_mode="dag",
+        max_steps=5,
+        lookahead_window=2,
+        mask_semantics="frontier_restricted_edges.v3",
+        routing_mask_config=config,
+    )
+
+    assert init_calls[0]["routing_mask_config"] == config
 
 
 def test_evaluate_routing_episode_uses_initial_layout(monkeypatch) -> None:

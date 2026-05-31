@@ -47,7 +47,7 @@ def test_build_default_campaign_config_uses_canonical_defaults() -> None:
     assert config.rl_learning_rate == 1e-4
     assert config.rl_clip_range == 0.1
     assert config.rl_target_kl == 0.03
-    assert config.rl_n_eval_episodes == 5
+    assert config.rl_n_eval_episodes == 1
     assert config.seed == 42
     assert config.mo_use_quick is True
     assert config.mo_population_size == 30
@@ -82,6 +82,9 @@ def test_load_campaign_batch_builds_single_campaign_from_json(tmp_path) -> None:
                         "clip_range": 0.1,
                         "target_kl": 0.03,
                         "n_eval_episodes": 5,
+                        "cycle_window": 6,
+                        "stagnation_patience": 11,
+                        "sabre_top_k": 3,
                     },
                     "mo": {
                         "effort_mode": "auto",
@@ -110,6 +113,9 @@ def test_load_campaign_batch_builds_single_campaign_from_json(tmp_path) -> None:
     assert config.rl_clip_range == 0.1
     assert config.rl_target_kl == 0.03
     assert config.rl_n_eval_episodes == 5
+    assert config.rl_cycle_window == 6
+    assert config.rl_stagnation_patience == 11
+    assert config.rl_sabre_top_k == 3
     assert config.mo_effort_mode == "auto"
     assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
     assert config.seed == 42
@@ -524,6 +530,7 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
             "dag",
             "15",
             "300",
+            "4",
             "123",
             "custom",
             "false",
@@ -566,7 +573,8 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
     assert captured["campaign"].config.rl_learning_rate == 1e-4
     assert captured["campaign"].config.rl_clip_range == 0.1
     assert captured["campaign"].config.rl_target_kl == 0.03
-    assert captured["campaign"].config.rl_n_eval_episodes == 5
+    assert captured["campaign"].config.rl_n_eval_episodes == 1
+    assert captured["campaign"].config.rl_sabre_top_k == 4
     assert captured["campaign"].config.seed == 123
     assert captured["campaign"].config.mo_effort_mode == "custom"
     assert captured["campaign"].config.mo_use_quick is False
@@ -578,6 +586,7 @@ def test_run_interactive_campaign_cli_allows_multiple_backends_in_advanced_mode(
     assert "MO Population Size: 40" in rendered
     assert "MO Generations: 60" in rendered
     assert "MO Auto Preview" not in rendered
+    assert "SABRE top-k (blank to disable): " in rendered
 
 
 def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prints_preview() -> None:
@@ -595,6 +604,7 @@ def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prin
             "dag",
             "10",
             "200",
+            "",
             "42",
             "auto",
             "compromise",
@@ -624,6 +634,7 @@ def test_run_interactive_campaign_cli_auto_effort_skips_manual_mo_knobs_and_prin
     assert config.mo_use_quick is True
     assert config.mo_population_size == 30
     assert config.mo_n_generations == 50
+    assert config.rl_sabre_top_k is None
     assert "MO population size:" not in rendered
     assert "MO generations:" not in rendered
     assert "MO Effort Mode: auto" in rendered
@@ -651,6 +662,7 @@ def test_run_interactive_campaign_cli_collects_synthetic_topology_in_advanced_mo
             "dag",
             "10",
             "200",
+            "",
             "42",
             "auto",
             "compromise",
@@ -703,6 +715,7 @@ def test_run_interactive_campaign_cli_collects_t_synthetic_topology_in_advanced_
             "dag",
             "10",
             "200",
+            "",
             "42",
             "auto",
             "compromise",
@@ -754,6 +767,7 @@ def test_run_interactive_campaign_cli_reprompts_when_synthetic_topology_is_too_s
             "dag",
             "10",
             "200",
+            "",
             "42",
             "auto",
             "compromise",
@@ -797,6 +811,7 @@ def test_run_interactive_campaign_cli_collects_best_on_objective_objective_name(
             "dag",
             "10",
             "200",
+            "",
             "42",
             "custom",
             "true",
@@ -841,6 +856,7 @@ def test_run_interactive_campaign_cli_collects_multi_seed_all_mo_modes() -> None
             "dag",
             "10",
             "200",
+            "",
             "41,42",
             "auto",
             "all",
@@ -956,6 +972,7 @@ def test_run_interactive_campaign_cli_reprompts_when_custom_mo_population_is_bel
             "dag",
             "10",
             "200",
+            "",
             "42",
             "custom",
             "false",

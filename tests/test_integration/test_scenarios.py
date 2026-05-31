@@ -754,8 +754,9 @@ def test_run_rl_only_scenario_returns_routing_summary_and_note(monkeypatch) -> N
             "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
-            "masked": False,
-            "mask_semantics": None,
+                "masked": False,
+                "mask_semantics": None,
+                "routing_mask_config": None,
         }
     ]
 
@@ -1144,8 +1145,9 @@ def test_run_mo_rl_scenario_returns_selected_layout_routing_summary_and_note(mon
             "frontier_mode": "sequential",
             "max_steps": scenarios._DEFAULT_RL_MAX_STEPS,
             "lookahead_window": scenarios._DEFAULT_RL_LOOKAHEAD_WINDOW,
-            "masked": False,
-            "mask_semantics": None,
+                "masked": False,
+                "mask_semantics": None,
+                "routing_mask_config": None,
         }
     ]
     assert rebuild_calls == [

@@ -16,6 +16,9 @@ def _build_campaign_config() -> CampaignConfig:
         rl_frontier_mode="dag",
         rl_lookahead_window=12,
         rl_max_steps=256,
+        rl_cycle_window=6,
+        rl_stagnation_patience=11,
+        rl_sabre_top_k=3,
         seed=42,
         mo_use_quick=True,
         mo_population_size=30,
@@ -82,7 +85,10 @@ def test_train_case_returns_best_model_when_available(monkeypatch, tmp_path) -> 
         "clip_range": 0.1,
         "target_kl": 0.03,
     }
-    assert captured_kwargs["n_eval_episodes"] == 5
+    assert captured_kwargs["n_eval_episodes"] == 1
+    assert captured_kwargs["routing_mask_config"].cycle_window == 6
+    assert captured_kwargs["routing_mask_config"].stagnation_patience == 11
+    assert captured_kwargs["routing_mask_config"].sabre_top_k == 3
     assert Path(captured_kwargs["log_dir"]) == expected_log_base_dir
     assert Path(captured_kwargs["model_save_dir"]) == expected_model_base_dir
     assert result.status == "completed"
@@ -100,7 +106,10 @@ def test_train_case_returns_best_model_when_available(monkeypatch, tmp_path) -> 
     assert result.effective_training_config.learning_rate == 1e-4
     assert result.effective_training_config.clip_range == 0.1
     assert result.effective_training_config.target_kl == 0.03
-    assert result.effective_training_config.n_eval_episodes == 5
+    assert result.effective_training_config.n_eval_episodes == 1
+    assert result.effective_training_config.cycle_window == 6
+    assert result.effective_training_config.stagnation_patience == 11
+    assert result.effective_training_config.sabre_top_k == 3
 
 
 def test_train_case_forwards_initial_layout_to_setup_training_pipeline(monkeypatch, tmp_path) -> None:

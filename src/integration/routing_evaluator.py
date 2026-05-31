@@ -17,6 +17,7 @@ def _create_routing_env(
     max_steps,
     lookahead_window,
     mask_semantics=None,
+    routing_mask_config=None,
 ):
     from src.rl_module.environment import QuantumTranspilationEnv
 
@@ -28,6 +29,7 @@ def _create_routing_env(
         max_steps=max_steps,
         lookahead_window=lookahead_window,
         mask_semantics=mask_semantics,
+        routing_mask_config=routing_mask_config,
     )
 
 
@@ -272,6 +274,7 @@ def evaluate_routing_episode(
     lookahead_window,
     masked=False,
     mask_semantics=None,
+    routing_mask_config=None,
 ) -> RoutingEpisodeSummary:
     env = _create_routing_env(
         circuit=circuit,
@@ -280,6 +283,7 @@ def evaluate_routing_episode(
         max_steps=max_steps,
         lookahead_window=lookahead_window,
         mask_semantics=mask_semantics,
+        routing_mask_config=routing_mask_config,
     )
 
     try:
@@ -296,6 +300,7 @@ def evaluate_routing_episode(
         executed_gate_trace = _normalize_executed_gates(info.get("executed_gates", []))
         terminated = bool(info.get("already_completed_at_reset", False))
         truncated = False
+        truncation_reason = None
 
         while not (terminated or truncated):
             if masked:
@@ -307,6 +312,7 @@ def evaluate_routing_episode(
             else:
                 action, _ = agent.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, step_info = env.step(action)
+            truncation_reason = step_info.get("truncation_reason")
             steps_executed += 1
             total_reward += float(reward)
             total_gates_executed += int(step_info.get("gates_executed", 0))
@@ -324,6 +330,7 @@ def evaluate_routing_episode(
             total_reward=total_reward,
             completed=bool(terminated),
             truncated=bool(truncated),
+            truncation_reason=truncation_reason,
             total_swaps=len(swap_trace),
             gates_executed_count=total_gates_executed,
             swap_trace=swap_trace,

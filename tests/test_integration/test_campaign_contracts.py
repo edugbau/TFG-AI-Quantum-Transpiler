@@ -240,7 +240,7 @@ def test_campaign_config_defaults_to_default_mode_and_accepts_advanced_mode() ->
     assert default_config.rl_learning_rate == 1e-4
     assert default_config.rl_clip_range == 0.1
     assert default_config.rl_target_kl == 0.03
-    assert default_config.rl_n_eval_episodes == 5
+    assert default_config.rl_n_eval_episodes == 1
 
 
 def test_campaign_config_accepts_synthetic_topology_in_advanced_mode() -> None:

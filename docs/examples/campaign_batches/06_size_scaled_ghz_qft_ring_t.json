@@ -1,0 +1,400 @@
+{
+  "campaigns": [
+    {
+      "campaign_id": "ghz-5-ring-matrix",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 5
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 5
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 5000,
+        "frontier_mode": "dag",
+        "lookahead_window": 8,
+        "max_steps": 150,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 3
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": true,
+        "population_size": 18,
+        "n_generations": 36,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "ghz-5-t-matrix",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 5
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 5
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 5000,
+        "frontier_mode": "dag",
+        "lookahead_window": 8,
+        "max_steps": 150,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 3
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": true,
+        "population_size": 18,
+        "n_generations": 36,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "ghz-8-ring-matrix",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 8
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 8
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 12000,
+        "frontier_mode": "dag",
+        "lookahead_window": 12,
+        "max_steps": 250,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 5
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 30,
+        "n_generations": 60,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "ghz-8-t-matrix",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 8
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 8
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 12000,
+        "frontier_mode": "dag",
+        "lookahead_window": 12,
+        "max_steps": 250,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 5
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 30,
+        "n_generations": 60,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "ghz-11-ring-matrix",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 11
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 11
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 20000,
+        "frontier_mode": "dag",
+        "lookahead_window": 16,
+        "max_steps": 350,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 7
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 42,
+        "n_generations": 84,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "ghz-11-t-matrix",
+      "circuit": {
+        "family": "ghz",
+        "num_qubits": 11
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 11
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 20000,
+        "frontier_mode": "dag",
+        "lookahead_window": 16,
+        "max_steps": 350,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 7
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 42,
+        "n_generations": 84,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-5-ring-matrix",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 5
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 5
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 7000,
+        "frontier_mode": "dag",
+        "lookahead_window": 8,
+        "max_steps": 170,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 3
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": true,
+        "population_size": 24,
+        "n_generations": 48,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-5-t-matrix",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 5
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 5
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 7000,
+        "frontier_mode": "dag",
+        "lookahead_window": 8,
+        "max_steps": 170,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 3
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": true,
+        "population_size": 24,
+        "n_generations": 48,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-8-ring-matrix",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 8
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 8
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 14000,
+        "frontier_mode": "dag",
+        "lookahead_window": 12,
+        "max_steps": 275,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 5
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 30,
+        "n_generations": 60,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-8-t-matrix",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 8
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 8
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 14000,
+        "frontier_mode": "dag",
+        "lookahead_window": 12,
+        "max_steps": 275,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 5
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 30,
+        "n_generations": 60,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-11-ring-matrix",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 11
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 11
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 22000,
+        "frontier_mode": "dag",
+        "lookahead_window": 16,
+        "max_steps": 375,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 7
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 42,
+        "n_generations": 84,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-11-t-matrix",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 11
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 11
+      },
+      "seed": 42,
+      "parallel_workers": 1,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 22000,
+        "frontier_mode": "dag",
+        "lookahead_window": 16,
+        "max_steps": 375,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 7
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 42,
+        "n_generations": 84,
+        "selection_modes": "all"
+      }
+    }
+  ]
+}

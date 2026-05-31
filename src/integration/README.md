@@ -55,7 +55,7 @@ Una Campaign puede expandirse como matrix cuando configura varias `seeds` o vari
 - `CampaignConfig` acepta `seeds`, `mo_selection_modes` y `parallel_workers` para Campaign matrices, manteniendo `seed` y `layout_policy` como contrato legacy de una sola ejecucion.
 - `SyntheticTopologySpec` permite usar topologias sinteticas en modo avanzado, incluida `t` como T balanceada (`synthetic_t_Nq`) para `N >= 5`.
 - `resolve_routing_model_contract()` lee `run_metadata.json` cuando existe y mantiene fallback legacy para checkpoints antiguos.
-- La metadata versionada de masked routing se consume cuando esta disponible: `v2` evita undo-SWAPs inmediatos cuando existen alternativas y `v1` conserva la evaluacion historica. Si falta, se mantiene la compatibilidad con modelos PPO/DQN legacy.
+- La metadata versionada de masked routing se consume cuando esta disponible: `v3` anade anti-ciclo, truncacion por estancamiento y top-k SABRE opcional; `v2` evita undo-SWAPs inmediatos y `v1` conserva la evaluacion historica. Si falta, se mantiene la compatibilidad con modelos PPO/DQN legacy.
 
 ## CLI y persistencia
 
@@ -67,6 +67,7 @@ La guided CLI ofrece:
 - ejecucion matrix desde JSON o CLI avanzada para varias seeds y modos MO.
 
 La superficie guiada actual expone `fake_torino` y `fake_brisbane` como backends visibles para la Campaign CLI.
+En modo avanzado, al seleccionar `MaskablePPO`, el prompt `SABRE top-k (blank to disable)` permite activar la poda heuristica con un entero positivo o mantenerla desactivada pulsando Enter.
 
 El batch JSON tambien acepta topologias sinteticas avanzadas. Si se omite `backend_names`,
 se deriva del `SyntheticTopologySpec`:

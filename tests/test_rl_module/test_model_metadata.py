@@ -9,6 +9,7 @@ from src.rl_module.model_metadata import (
     metadata_path_for_model,
     save_run_metadata,
 )
+from src.rl_module.routing_mask import RoutingMaskConfig
 
 
 def test_metadata_path_for_model_uses_model_directory_sidecar(tmp_path):
@@ -69,7 +70,7 @@ def test_build_run_metadata_uses_explicit_masked_routing_schema_when_requested()
     }
 
 
-def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_anti_undo_semantics():
+def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v3_semantics():
     metadata = build_run_metadata(
         mode="routing",
         algorithm="MaskablePPO",
@@ -78,12 +79,38 @@ def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_anti_undo
         lookahead_window=7,
         max_steps=256,
         basis_gates=None,
+        routing_mask_config=RoutingMaskConfig(stagnation_patience=14),
     )
 
+    assert metadata["schema_version"] == "rl_run_metadata.masked_routing.v2"
     assert metadata["routing_policy"] == {
         "masked": True,
-        "mask_semantics": "frontier_restricted_edges.v2",
+        "mask_semantics": "frontier_restricted_edges.v3",
+        "mask_config": {
+            "cycle_window": 8,
+            "stagnation_patience": 14,
+            "sabre_top_k": None,
+            "sabre_lookahead_weight": 0.5,
+            "distance_improvement_epsilon": 1e-6,
+        },
     }
+
+
+def test_build_run_metadata_rejects_v3_without_resolved_mask_config():
+    try:
+        build_run_metadata(
+            mode="routing",
+            algorithm="MaskablePPO",
+            seed=17,
+            frontier_mode="dag",
+            lookahead_window=7,
+            max_steps=256,
+            basis_gates=None,
+        )
+    except ValueError as exc:
+        assert "routing_mask_config" in str(exc)
+    else:
+        raise AssertionError("Expected v3 metadata to require resolved routing_mask_config")
 
 
 def test_build_run_metadata_records_training_and_evaluation_config():

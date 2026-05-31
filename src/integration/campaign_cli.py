@@ -44,7 +44,7 @@ _DEFAULT_RL_MAX_STEPS = 200
 _DEFAULT_RL_LEARNING_RATE = 1e-4
 _DEFAULT_RL_CLIP_RANGE = 0.1
 _DEFAULT_RL_TARGET_KL = 0.03
-_DEFAULT_RL_N_EVAL_EPISODES = 5
+_DEFAULT_RL_N_EVAL_EPISODES = 1
 _DEFAULT_SEED = 42
 _DEFAULT_MO_USE_QUICK = True
 _DEFAULT_MO_POPULATION_SIZE = 30
@@ -191,6 +191,22 @@ def _prompt_int(input_fn, output_fn, *, prompt: str, minimum: int = 0) -> int:
             continue
         if value < minimum:
             output_fn(f"Invalid selection. Enter an integer >= {minimum}.")
+            continue
+        return value
+
+
+def _prompt_optional_int(input_fn, output_fn, *, prompt: str, minimum: int = 0) -> int | None:
+    while True:
+        raw = input_fn(prompt).strip().lower()
+        if raw in {"", "none", "null", "off"}:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            output_fn(f"Invalid selection. Enter an integer >= {minimum} or leave blank to disable.")
+            continue
+        if value < minimum:
+            output_fn(f"Invalid selection. Enter an integer >= {minimum} or leave blank to disable.")
             continue
         return value
 
@@ -356,6 +372,14 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
     )[0]
     rl_lookahead = _prompt_int(input_fn, output_fn, prompt="RL lookahead window: ", minimum=1)
     rl_max_steps = _prompt_int(input_fn, output_fn, prompt="RL max steps: ", minimum=1)
+    rl_sabre_top_k = None
+    if rl_algorithm == "MaskablePPO":
+        rl_sabre_top_k = _prompt_optional_int(
+            input_fn,
+            output_fn,
+            prompt="SABRE top-k (blank to disable): ",
+            minimum=1,
+        )
     seeds = _prompt_seed_values(input_fn, output_fn)
     mo_effort_mode = _prompt_mo_effort_mode(input_fn, output_fn)
     mo_use_quick = _DEFAULT_MO_USE_QUICK
@@ -388,6 +412,7 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
         rl_target_kl=_DEFAULT_RL_TARGET_KL,
         rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
+        rl_sabre_top_k=rl_sabre_top_k,
         seed=seeds[0],
         seeds=seeds,
         mo_use_quick=mo_use_quick,
@@ -441,7 +466,9 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
         f"frontier_mode={config.rl_frontier_mode}, lookahead={config.rl_lookahead_window}, "
         f"max_steps={config.rl_max_steps}, learning_rate={config.rl_learning_rate}, "
         f"clip_range={config.rl_clip_range}, target_kl={config.rl_target_kl}, "
-        f"n_eval_episodes={config.rl_n_eval_episodes}, seed={config.seed}"
+        f"n_eval_episodes={config.rl_n_eval_episodes}, cycle_window={config.rl_cycle_window}, "
+        f"stagnation_patience={config.rl_stagnation_patience}, sabre_top_k={config.rl_sabre_top_k}, "
+        f"seed={config.seed}"
     )
     if len(config.seeds) > 1:
         output_fn("Seeds: " + ", ".join(str(seed) for seed in config.seeds))
@@ -488,6 +515,18 @@ def _optional_int(mapping: dict[str, Any], key: str, default: int, *, minimum: i
     if value < minimum:
         raise ValueError(f"{key} must be an integer >= {minimum}")
     return value
+
+
+def _optional_nullable_int(
+    mapping: dict[str, Any],
+    key: str,
+    default: int | None,
+    *,
+    minimum: int = 0,
+) -> int | None:
+    if key not in mapping or mapping[key] is None:
+        return default
+    return _optional_int(mapping, key, 0, minimum=minimum)
 
 
 def _optional_float(mapping: dict[str, Any], key: str, default: float, *, minimum_exclusive: float = 0.0) -> float:
@@ -734,6 +773,24 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
             rl,
             "n_eval_episodes",
             base_config.rl_n_eval_episodes,
+            minimum=1,
+        ),
+        rl_cycle_window=_optional_int(
+            rl,
+            "cycle_window",
+            base_config.rl_cycle_window,
+            minimum=1,
+        ),
+        rl_stagnation_patience=_optional_nullable_int(
+            rl,
+            "stagnation_patience",
+            base_config.rl_stagnation_patience,
+            minimum=1,
+        ),
+        rl_sabre_top_k=_optional_nullable_int(
+            rl,
+            "sabre_top_k",
+            base_config.rl_sabre_top_k,
             minimum=1,
         ),
         seed=seeds[0],

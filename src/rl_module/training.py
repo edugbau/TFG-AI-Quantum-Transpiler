@@ -24,7 +24,12 @@ import gymnasium as gym
 from .agent import QuantumRLAgent
 from .environment import QuantumTranspilationEnv
 from .model_metadata import build_run_metadata, save_run_metadata
-from .routing_mask import DEFAULT_NEW_MASK_SEMANTICS
+from .routing_mask import (
+    DEFAULT_NEW_MASK_SEMANTICS,
+    FRONTIER_RESTRICTED_EDGES_V3,
+    RoutingMaskConfig,
+    resolve_routing_mask_config,
+)
 from qiskit import QuantumCircuit
 from typing import Tuple, List, Optional
 
@@ -35,7 +40,7 @@ DEFAULT_PPO_STABILITY_HYPERPARAMS = {
     "clip_range": 0.1,
     "target_kl": 0.03,
 }
-DEFAULT_N_EVAL_EPISODES = 5
+DEFAULT_N_EVAL_EPISODES = 1
 DEFAULT_EVAL_FREQ = 5_000
 DEFAULT_EARLY_STOPPING_MIN_EVALS = 50
 DEFAULT_EARLY_STOPPING_MAX_NO_IMPROVEMENT_EVALS = 20
@@ -126,6 +131,7 @@ def setup_training_pipeline(
     hyperparams: Optional[dict] = None,
     basis_gates: Optional[List[str]] = None,
     initial_layout: Optional[List[int]] = None,
+    routing_mask_config: RoutingMaskConfig | dict | None = None,
     n_eval_episodes: int = DEFAULT_N_EVAL_EPISODES,
     eval_freq: int = DEFAULT_EVAL_FREQ,
     verbose: bool = False,
@@ -166,6 +172,14 @@ def setup_training_pipeline(
         if algorithm == "MaskablePPO" and mode == "routing"
         else None
     )
+    resolved_routing_mask_config = (
+        resolve_routing_mask_config(
+            routing_mask_config,
+            num_qubits=target_circuit.num_qubits,
+        )
+        if mask_semantics == FRONTIER_RESTRICTED_EDGES_V3
+        else None
+    )
     
     # 1. Semillas
     set_global_seeds(seed)
@@ -185,6 +199,7 @@ def setup_training_pipeline(
         max_steps=max_steps,
         basis_gates=basis_gates,
         mask_semantics=mask_semantics,
+        routing_mask_config=resolved_routing_mask_config,
     )
     if reset_options is None:
         _, train_reset_info = raw_env.reset(seed=seed)
@@ -209,6 +224,7 @@ def setup_training_pipeline(
         max_steps=max_steps,
         basis_gates=basis_gates,
         mask_semantics=mask_semantics,
+        routing_mask_config=resolved_routing_mask_config,
     )
     if reset_options is None:
         eval_raw_env.reset(seed=seed)
@@ -234,6 +250,7 @@ def setup_training_pipeline(
             max_steps=max_steps,
             basis_gates=metadata_basis_gates,
             mask_semantics=mask_semantics,
+            routing_mask_config=resolved_routing_mask_config,
             training_hyperparams=effective_hyperparams,
             evaluation_config={
                 "eval_freq": eval_freq,

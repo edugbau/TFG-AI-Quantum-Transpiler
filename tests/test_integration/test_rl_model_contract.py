@@ -4,6 +4,7 @@ from zipfile import ZipFile
 import pytest
 
 from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
+from src.rl_module.routing_mask import RoutingMaskConfig
 
 
 def _write_legacy_sb3_model(tmp_path, model_name: str, *, policy_module: str) -> None:
@@ -99,6 +100,85 @@ def test_resolve_routing_model_contract_accepts_anti_undo_mask_semantics(tmp_pat
     contract = resolve_routing_model_contract(model_path)
 
     assert contract.mask_semantics == "frontier_restricted_edges.v2"
+
+
+def test_resolve_routing_model_contract_accepts_v3_with_explicit_config(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="MaskablePPO",
+            seed=31,
+            frontier_mode="dag",
+            lookahead_window=8,
+            max_steps=144,
+            basis_gates=None,
+            mask_semantics="frontier_restricted_edges.v3",
+            routing_mask_config=RoutingMaskConfig(
+                cycle_window=6,
+                stagnation_patience=16,
+                sabre_top_k=3,
+            ),
+        ),
+    )
+
+    contract = resolve_routing_model_contract(model_path)
+
+    assert contract.mask_semantics == "frontier_restricted_edges.v3"
+    assert contract.routing_mask_config == RoutingMaskConfig(
+        cycle_window=6,
+        stagnation_patience=16,
+        sabre_top_k=3,
+    )
+
+
+def test_resolve_routing_model_contract_rejects_v3_without_mask_config(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    metadata = build_run_metadata(
+        mode="routing",
+        algorithm="MaskablePPO",
+        seed=31,
+        frontier_mode="dag",
+        lookahead_window=8,
+        max_steps=144,
+        basis_gates=None,
+        mask_semantics="frontier_restricted_edges.v3",
+        routing_mask_config=RoutingMaskConfig(stagnation_patience=16),
+    )
+    del metadata["routing_policy"]["mask_config"]
+    save_run_metadata(tmp_path, metadata)
+
+    with pytest.raises(ValueError, match="mask_config"):
+        resolve_routing_model_contract(model_path)
+
+
+def test_resolve_routing_model_contract_rejects_v3_under_historical_masked_schema(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    metadata = build_run_metadata(
+        mode="routing",
+        algorithm="MaskablePPO",
+        seed=31,
+        frontier_mode="dag",
+        lookahead_window=8,
+        max_steps=144,
+        basis_gates=None,
+        mask_semantics="frontier_restricted_edges.v1",
+    )
+    metadata["routing_policy"]["mask_semantics"] = "frontier_restricted_edges.v3"
+    save_run_metadata(tmp_path, metadata)
+
+    with pytest.raises(ValueError, match="mask_semantics"):
+        resolve_routing_model_contract(model_path)
 
 
 def test_resolve_routing_model_contract_falls_back_to_legacy_defaults(tmp_path):
@@ -294,7 +374,7 @@ def test_resolve_routing_model_contract_rejects_unsupported_mask_semantics(tmp_p
         basis_gates=None,
         mask_semantics="frontier_restricted_edges.v1",
     )
-    metadata["routing_policy"]["mask_semantics"] = "frontier_restricted_edges.v3"
+    metadata["routing_policy"]["mask_semantics"] = "frontier_restricted_edges.v4"
     save_run_metadata(tmp_path, metadata)
 
     with pytest.raises(ValueError, match="mask_semantics"):

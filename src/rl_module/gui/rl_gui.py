@@ -37,7 +37,11 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from src.rl_module.environment import QuantumTranspilationEnv
 from src.rl_module.agent import QuantumRLAgent
 from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
-from src.rl_module.routing_mask import DEFAULT_NEW_MASK_SEMANTICS
+from src.rl_module.routing_mask import (
+    DEFAULT_NEW_MASK_SEMANTICS,
+    FRONTIER_RESTRICTED_EDGES_V3,
+    resolve_routing_mask_config,
+)
 from src.rl_module.training import set_global_seeds
 from src.rl_module.gui.routing_view import RoutingView
 from src.rl_module.gui.synthesis_view import SynthesisView
@@ -75,8 +79,14 @@ def _normalize_masked_routing_config(cfg: dict) -> dict:
             "mask_semantics",
             MASKED_ROUTING_SEMANTICS,
         )
+        if normalized_cfg["mask_semantics"] == FRONTIER_RESTRICTED_EDGES_V3:
+            normalized_cfg["routing_mask_config"] = resolve_routing_mask_config(
+                normalized_cfg.get("routing_mask_config"),
+                num_qubits=normalized_cfg["circuit"].num_qubits,
+            )
     else:
         normalized_cfg.pop("mask_semantics", None)
+        normalized_cfg.pop("routing_mask_config", None)
     return normalized_cfg
 
 
@@ -561,6 +571,14 @@ class RLBenchmarkGUI(ctk.CTk):
         self._log(f"Circuito: {cfg['circuit_name']}  |  Qubits: {cfg['circuit'].num_qubits}")
         self._log(f"Coupling: {cfg['coupling_name']}")
         self._log(f"Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}  |  Algoritmo: {cfg['algorithm']}")
+        if cfg.get("routing_mask_config") is not None:
+            mask_cfg = cfg["routing_mask_config"]
+            self._log(
+                "Mascara v3: "
+                f"cycle_window={mask_cfg.cycle_window}  |  "
+                f"stagnation_patience={mask_cfg.stagnation_patience}  |  "
+                f"sabre_top_k={mask_cfg.sabre_top_k}"
+            )
         if cfg["mode"] == "synthesis":
             self._log(f"Basis Gates: {cfg['basis_gates']}")
         self._log(f"Timesteps: {cfg['timesteps']:,}  |  Max Steps/Ep: {cfg['max_steps']}  |  Lookahead: {cfg['lookahead']}")
@@ -590,6 +608,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 max_steps=cfg["max_steps"],
                 basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
                 mask_semantics=cfg.get("mask_semantics"),
+                routing_mask_config=cfg.get("routing_mask_config"),
             )
             raw_env.reset(seed=cfg["seed"])
             self._env = Monitor(raw_env)
@@ -603,6 +622,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 max_steps=cfg["max_steps"],
                 basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
                 mask_semantics=cfg.get("mask_semantics"),
+                routing_mask_config=cfg.get("routing_mask_config"),
             )
             eval_raw_env.reset(seed=cfg["seed"])
             eval_env = Monitor(eval_raw_env)
@@ -642,6 +662,7 @@ class RLBenchmarkGUI(ctk.CTk):
                         cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None
                     ),
                     mask_semantics=cfg.get("mask_semantics"),
+                    routing_mask_config=cfg.get("routing_mask_config"),
                 ),
             )
 
@@ -803,6 +824,7 @@ class RLBenchmarkGUI(ctk.CTk):
                 max_steps=cfg["max_steps"],
                 basis_gates=cfg.get("basis_gates") if cfg["mode"] == "synthesis" else None,
                 mask_semantics=cfg.get("mask_semantics"),
+                routing_mask_config=cfg.get("routing_mask_config"),
             )
 
             eval_agent = self._agent
@@ -833,6 +855,16 @@ class RLBenchmarkGUI(ctk.CTk):
             self.after(0, self._eval_log_write, "  EVALUACIÓN DE EPISODIO (Política Determinista)")
             self.after(0, self._eval_log_write, "=" * 70)
             self.after(0, self._eval_log_write, f"Circuito: {cfg['circuit_name']}  |  Modo: {cfg['mode']}  |  Frontier: {cfg['frontier_mode']}")
+            if cfg.get("routing_mask_config") is not None:
+                mask_cfg = cfg["routing_mask_config"]
+                self.after(
+                    0,
+                    self._eval_log_write,
+                    "Mascara v3: "
+                    f"cycle_window={mask_cfg.cycle_window}  |  "
+                    f"stagnation_patience={mask_cfg.stagnation_patience}  |  "
+                    f"sabre_top_k={mask_cfg.sabre_top_k}",
+                )
             self.after(0, self._eval_log_write, f"Layout inicial: {eval_env.current_layout.tolist()}")
             self.after(0, self._eval_log_write, f"Puertas totales: {info['total_gates']}")
             if cfg["mode"] == "synthesis":
@@ -916,6 +948,9 @@ class RLBenchmarkGUI(ctk.CTk):
                     routing_progress_delta=float(info.get("routing_progress_delta", 0.0)),
                     repeated_layout=bool(info.get("repeated_layout", False)),
                     undo_swap=bool(info.get("undo_swap", False)),
+                    steps_without_progress=int(info.get("steps_without_progress", 0)),
+                    stagnation_patience=info.get("stagnation_patience"),
+                    truncation_reason=info.get("truncation_reason"),
                     primitive_name=info.get("primitive_name"),
                     primitive_physical_qargs=tuple(info.get("primitive_physical_qargs", ())),
                     primitive_cost=float(info.get("primitive_cost", 0.0)),
@@ -938,7 +973,7 @@ class RLBenchmarkGUI(ctk.CTk):
             elif info.get("is_completed") or info.get("already_completed_at_reset"):
                 status = "COMPLETADO ✓"
             else:
-                status = "TRUNCADO (max_steps)"
+                status = f"TRUNCADO ({info.get('truncation_reason') or 'max_steps'})"
             self.after(0, self._eval_log_write, f"\nResultado: {status}")
             self.after(0, self._eval_log_write, f"Steps totales: {step}")
             self.after(0, self._eval_log_write, f"SWAPs insertados: {eval_env.total_swaps}")

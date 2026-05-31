@@ -2,12 +2,18 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from .routing_mask import DEFAULT_NEW_MASK_SEMANTICS
+from .routing_mask import (
+    DEFAULT_NEW_MASK_SEMANTICS,
+    FRONTIER_RESTRICTED_EDGES_V3,
+    RoutingMaskConfig,
+    require_resolved_routing_mask_config,
+)
 
 
 _METADATA_FILENAME = "run_metadata.json"
 _SCHEMA_VERSION = "rl_run_metadata.v1"
-_MASKED_ROUTING_SCHEMA_VERSION = "rl_run_metadata.masked_routing.v1"
+_MASKED_ROUTING_SCHEMA_VERSION_V1 = "rl_run_metadata.masked_routing.v1"
+_MASKED_ROUTING_SCHEMA_VERSION_V2 = "rl_run_metadata.masked_routing.v2"
 
 
 def metadata_path_for_model(model_path: Path | str) -> Path:
@@ -24,6 +30,7 @@ def build_run_metadata(
     max_steps: int,
     basis_gates: Optional[list[str]],
     mask_semantics: Optional[str] = None,
+    routing_mask_config: RoutingMaskConfig | dict[str, Any] | None = None,
     training_hyperparams: Optional[dict[str, Any]] = None,
     evaluation_config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -45,11 +52,20 @@ def build_run_metadata(
         metadata["evaluation"] = dict(evaluation_config)
 
     if mode == "routing" and algorithm == "MaskablePPO":
-        metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION
+        resolved_mask_semantics = mask_semantics or DEFAULT_NEW_MASK_SEMANTICS
+        metadata["schema_version"] = (
+            _MASKED_ROUTING_SCHEMA_VERSION_V2
+            if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V3
+            else _MASKED_ROUTING_SCHEMA_VERSION_V1
+        )
         metadata["routing_policy"] = {
             "masked": True,
-            "mask_semantics": mask_semantics or DEFAULT_NEW_MASK_SEMANTICS,
+            "mask_semantics": resolved_mask_semantics,
         }
+        if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V3:
+            metadata["routing_policy"]["mask_config"] = require_resolved_routing_mask_config(
+                routing_mask_config
+            ).to_dict()
 
     return metadata
 

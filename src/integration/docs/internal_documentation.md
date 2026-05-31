@@ -62,7 +62,7 @@ Toma un `OptimizationResult` de `mo_module` y lo reduce a un layout unico. La de
 Resuelve el contrato de un checkpoint RL.
 
 - Lee `run_metadata.json` cuando existe.
-- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos y `v2` aplica el filtro anti-undo con fallback no vacio.
+- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo y `v3` anade anti-ciclo, truncacion por estancamiento y top-k SABRE opcional con fallbacks no vacios.
 - Si no hay metadata, se cae a defaults legacy para no romper checkpoints PPO/DQN antiguos.
 
 ### `routing_evaluator.py`
@@ -148,6 +148,13 @@ Expone la CLI guiada y el modo batch.
 
 La CLI actual expone una superficie controlada: `fake_torino` y `fake_brisbane`. La capa de Campaign tambien soporta topologias sinteticas en modo avanzado.
 En batch JSON, `topology_source: "synthetic"` acepta `synthetic_topology` y puede derivar `backend_names` automaticamente; por ejemplo `{"shape": "t", "num_qubits": 11}` produce `synthetic_t_11q`.
+Para routing `MaskablePPO`, el bloque `rl` tambien acepta `cycle_window`,
+`stagnation_patience` y `sabre_top_k`. La paciencia puede omitirse para usar
+el default adaptativo `max(8, 2 * num_qubits)`; el valor resuelto queda
+persistido junto al checkpoint v3.
+La CLI guiada avanzada pregunta `SABRE top-k (blank to disable)` al seleccionar
+`MaskablePPO`: un entero positivo activa la poda y Enter, `none`, `null` u
+`off` la dejan desactivada.
 
 ### `runner.py`
 

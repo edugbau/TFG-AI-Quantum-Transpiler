@@ -32,6 +32,7 @@ class RLEnvStrategy(ABC):
         self.coupling_map = coupling_map or []
         self.lookahead_window = lookahead_window
         self._adjacency = self._build_adjacency(self.coupling_map)
+        self._distance_table = self._build_distance_table()
 
     def _build_adjacency(self, coupling_map: List[Tuple[int, int]]) -> Dict[int, set[int]]:
         adjacency: Dict[int, set[int]] = {qubit: set() for qubit in range(self.num_physical_qubits)}
@@ -41,22 +42,32 @@ class RLEnvStrategy(ABC):
         return adjacency
 
     def _shortest_path_length(self, start: int, goal: int) -> Optional[int]:
-        if start == goal:
-            return 0
+        distance = int(self._distance_table[start, goal])
+        return None if distance < 0 else distance
 
-        visited = {start}
-        frontier = deque([(start, 0)])
+    def _build_distance_table(self) -> np.ndarray:
+        distances = np.full(
+            (self.num_physical_qubits, self.num_physical_qubits),
+            -1,
+            dtype=np.int32,
+        )
+        for start in range(self.num_physical_qubits):
+            distances[start, start] = 0
+            frontier = deque([start])
+            while frontier:
+                node = frontier.popleft()
+                for neighbor in self._adjacency.get(node, ()):
+                    if distances[start, neighbor] != -1:
+                        continue
+                    distances[start, neighbor] = distances[start, node] + 1
+                    frontier.append(neighbor)
+        return distances
 
-        while frontier:
-            node, distance = frontier.popleft()
-            for neighbor in self._adjacency.get(node, ()):
-                if neighbor == goal:
-                    return distance + 1
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    frontier.append((neighbor, distance + 1))
-
-        return None
+    def routing_distance_cost(self, physical_q1: int, physical_q2: int) -> float:
+        path_length = self._shortest_path_length(physical_q1, physical_q2)
+        if path_length is None:
+            return float(self.num_physical_qubits)
+        return float(max(path_length - 1, 0))
 
     def _iter_visible_entries(
         self,

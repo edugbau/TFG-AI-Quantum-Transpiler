@@ -340,9 +340,9 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
     assert "RL Learning Rate: `0.0001`" in markdown
     assert "RL Clip Range: `0.1`" in markdown
     assert "RL Target KL: `0.03`" in markdown
-    assert "RL Eval Episodes: `5`" in markdown
+    assert "RL Eval Episodes: `1`" in markdown
     assert "rl_learning_rate=0.0001" in markdown
-    assert "rl_n_eval_episodes=5" in markdown
+    assert "rl_n_eval_episodes=1" in markdown
     assert "MO Effort Mode: `custom`" in markdown
     assert "MO Quick: `True`" in markdown
     assert "MO Population Size: `30`" in markdown

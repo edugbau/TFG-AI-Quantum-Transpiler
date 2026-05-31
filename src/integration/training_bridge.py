@@ -8,6 +8,7 @@ from qiskit import QuantumCircuit
 
 from src.integration.campaign_contracts import CampaignCase, CampaignConfig
 from src.rl_module.training import setup_training_pipeline
+from src.rl_module.routing_mask import RoutingMaskConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +22,10 @@ class TrainingConfigSummary:
     learning_rate: float = 1e-4
     clip_range: float = 0.1
     target_kl: float = 0.03
-    n_eval_episodes: int = 5
+    n_eval_episodes: int = 1
+    cycle_window: int = 8
+    stagnation_patience: int | None = None
+    sabre_top_k: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,9 @@ def _build_training_config_summary(campaign_config: CampaignConfig) -> TrainingC
         clip_range=campaign_config.rl_clip_range,
         target_kl=campaign_config.rl_target_kl,
         n_eval_episodes=campaign_config.rl_n_eval_episodes,
+        cycle_window=campaign_config.rl_cycle_window,
+        stagnation_patience=campaign_config.rl_stagnation_patience,
+        sabre_top_k=campaign_config.rl_sabre_top_k,
     )
 
 
@@ -118,6 +125,11 @@ def train_case(
             max_steps=campaign_config.rl_max_steps,
             hyperparams=_build_training_hyperparams(campaign_config),
             initial_layout=list(initial_layout) if initial_layout is not None else None,
+            routing_mask_config=RoutingMaskConfig(
+                cycle_window=campaign_config.rl_cycle_window,
+                stagnation_patience=campaign_config.rl_stagnation_patience,
+                sabre_top_k=campaign_config.rl_sabre_top_k,
+            ),
             n_eval_episodes=campaign_config.rl_n_eval_episodes,
             verbose=verbose,
         )

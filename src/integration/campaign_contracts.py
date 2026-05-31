@@ -112,7 +112,10 @@ class CampaignConfig:
     rl_learning_rate: float = 1e-4
     rl_clip_range: float = 0.1
     rl_target_kl: float = 0.03
-    rl_n_eval_episodes: int = 5
+    rl_n_eval_episodes: int = 1
+    rl_cycle_window: int = 8
+    rl_stagnation_patience: int | None = None
+    rl_sabre_top_k: int | None = None
     mo_effort_mode: str = "auto"
     mo_objective_name: str | None = None
     seeds: tuple[int, ...] | None = None
@@ -154,6 +157,16 @@ class CampaignConfig:
             raise ValueError("CampaignConfig rl_target_kl must be greater than zero")
         if self.rl_n_eval_episodes <= 0:
             raise ValueError("CampaignConfig rl_n_eval_episodes must be greater than zero")
+        if type(self.rl_cycle_window) is not int or self.rl_cycle_window <= 0:
+            raise ValueError("CampaignConfig rl_cycle_window must be a positive integer")
+        if self.rl_stagnation_patience is not None and (
+            type(self.rl_stagnation_patience) is not int or self.rl_stagnation_patience <= 0
+        ):
+            raise ValueError("CampaignConfig rl_stagnation_patience must be a positive integer or None")
+        if self.rl_sabre_top_k is not None and (
+            type(self.rl_sabre_top_k) is not int or self.rl_sabre_top_k <= 0
+        ):
+            raise ValueError("CampaignConfig rl_sabre_top_k must be a positive integer or None")
         if self.seed < 0:
             raise ValueError("CampaignConfig seed cannot be negative")
         normalized_seeds = self._normalize_seeds()

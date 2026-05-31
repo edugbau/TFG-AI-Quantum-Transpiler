@@ -56,6 +56,14 @@ class FrontierProvider(Protocol):
     ) -> List[LookaheadEntry]:
         ...
 
+    def get_sabre_entries(
+        self,
+        current_layout: np.ndarray,
+        lookahead_window: int,
+        is_connected: Callable[[int, int], bool],
+    ) -> Tuple[List[LookaheadEntry], List[LookaheadEntry]]:
+        ...
+
 
 def _build_lookahead_entry(
     gate_name: str,
@@ -136,6 +144,40 @@ class SequentialFrontier:
             if not entry.executable:
                 return [entry]
         return []
+
+    def get_sabre_entries(
+        self,
+        current_layout: np.ndarray,
+        lookahead_window: int,
+        is_connected: Callable[[int, int], bool],
+    ) -> Tuple[List[LookaheadEntry], List[LookaheadEntry]]:
+        pending_gates = list(self.pending_gates)
+        if not pending_gates:
+            return [], []
+        frontier_gates = pending_gates[:1]
+        extended_gates = pending_gates[1 : 1 + lookahead_window]
+        return (
+            [
+                _build_lookahead_entry(
+                    gate_name,
+                    logical_q1,
+                    logical_q2,
+                    current_layout,
+                    is_connected,
+                )
+                for gate_name, logical_q1, logical_q2 in frontier_gates
+            ],
+            [
+                _build_lookahead_entry(
+                    gate_name,
+                    logical_q1,
+                    logical_q2,
+                    current_layout,
+                    is_connected,
+                )
+                for gate_name, logical_q1, logical_q2 in extended_gates
+            ],
+        )
 
     def execute_ready_cascade(
         self,
@@ -245,6 +287,30 @@ class DagFrontier:
                 blocked_entries.append(entry)
         return blocked_entries
 
+    def get_sabre_entries(
+        self,
+        current_layout: np.ndarray,
+        lookahead_window: int,
+        is_connected: Callable[[int, int], bool],
+    ) -> Tuple[List[LookaheadEntry], List[LookaheadEntry]]:
+        frontier_nodes = self._ordered_front_layer()
+        frontier_ids = {id(node) for node in frontier_nodes}
+        extended_nodes = [
+            node
+            for node in self._ordered_op_nodes()
+            if id(node) not in frontier_ids
+        ][:lookahead_window]
+        return (
+            [
+                self._node_to_lookahead_entry(node, current_layout, is_connected)
+                for node in frontier_nodes
+            ],
+            [
+                self._node_to_lookahead_entry(node, current_layout, is_connected)
+                for node in extended_nodes
+            ],
+        )
+
     def execute_ready_cascade(
         self,
         current_layout: np.ndarray,
@@ -292,6 +358,21 @@ class DagFrontier:
 
     def _node_to_gate_tuple(self, node: DAGOpNode) -> GateTuple:
         return _gate_tuple_from_name_and_qargs(node.name, self._logical_qargs(node))
+
+    def _node_to_lookahead_entry(
+        self,
+        node: DAGOpNode,
+        current_layout: np.ndarray,
+        is_connected: Callable[[int, int], bool],
+    ) -> LookaheadEntry:
+        gate_name, logical_q1, logical_q2 = self._node_to_gate_tuple(node)
+        return _build_lookahead_entry(
+            gate_name,
+            logical_q1,
+            logical_q2,
+            current_layout,
+            is_connected,
+        )
 
     def _is_node_executable(
         self,

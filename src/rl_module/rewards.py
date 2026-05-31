@@ -33,6 +33,7 @@ class RewardStrategy(ABC):
                   - ``action_type``: ``"swap"`` | ``"gate"`` | ``"invalid"``
                   - ``is_valid_action``: ``bool``
                   - ``gates_executed``: ``int``
+                  - ``unproductive_swap``: ``bool``
                   - ``is_completed``: ``bool``
                   - ``is_truncated``: ``bool`` — ``True`` si se agotó ``max_steps``
                   
@@ -67,6 +68,9 @@ class RoutingReward(RewardStrategy):
         recientemente, incluyendo auto-bucles inmediatos.
     undo_swap_penalty : float
         Penalización aplicada si el SWAP actual deshace el SWAP anterior.
+    unproductive_swap_penalty : float
+        Penalizacion adicional para SWAPs que no ejecutan puertas ni reducen
+        la distancia agregada de routing.
     routing_progress_reward : float
         Factor lineal de shaping sobre ``routing_progress_delta``. Valores
         positivos recompensan reducir la distancia agregada de routing y
@@ -75,13 +79,14 @@ class RoutingReward(RewardStrategy):
 
     def __init__( #TODO: REVISAR VALORES DE PENALIZACIÓN Y REWARD CON TUTORES
         self,
-        swap_penalty: float = -1.0,
-        gate_execution_reward: float = 10.0,
+        swap_penalty: float = -3.0,
+        gate_execution_reward: float = 1.0,
         invalid_action_penalty: float = -5.0,
-        completion_bonus: float = 50.0,
-        truncation_penalty: float = -20.0,
+        completion_bonus: float = 100.0,
+        truncation_penalty: float = -100.0,
         repeated_layout_penalty: float = -1.0,
         undo_swap_penalty: float = -1.0,
+        unproductive_swap_penalty: float = -1.0,
         routing_progress_reward: float = 0.5,
     ):
         self.swap_penalty = swap_penalty
@@ -91,6 +96,7 @@ class RoutingReward(RewardStrategy):
         self.truncation_penalty = truncation_penalty
         self.repeated_layout_penalty = repeated_layout_penalty
         self.undo_swap_penalty = undo_swap_penalty
+        self.unproductive_swap_penalty = unproductive_swap_penalty
         self.routing_progress_reward = routing_progress_reward
 
     def compute_reward(self, prev_state: Any, action: Any, current_state: Any, info: Dict[str, Any]) -> float:
@@ -114,6 +120,9 @@ class RoutingReward(RewardStrategy):
 
         if info.get('undo_swap', False):
             reward += self.undo_swap_penalty
+
+        if info.get('unproductive_swap', False):
+            reward += self.unproductive_swap_penalty
 
         reward += self.routing_progress_reward * float(info.get('routing_progress_delta', 0.0))
              

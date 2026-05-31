@@ -92,6 +92,14 @@ Esto hace que el régimen de **masked routing** sea compatible con la idea clás
 
 Para checkpoints nuevos de este régimen, `MaskablePPO` es el trainer estándar. Los checkpoints legacy de `PPO` y `DQN` siguen existiendo fuera de este contrato enmascarado y se evalúan con los contratos legacy/default o unmasked correspondientes.
 
+`frontier_restricted_edges.v3` conserva este action space fijo y aplica filtros
+acumulativos con fallback: anti-undo, anti-ciclo sobre
+`(layout, frontier_revision)` y top-k SABRE opcional. La configuracion efectiva
+se persiste en el sidecar del checkpoint para reproducir exactamente la
+evaluacion. La version v3 tambien puede truncar episodios estancados cuando no
+se ejecutan puertas ni se alcanza una nueva mejor distancia durante la
+paciencia configurada.
+
 ## Comportamiento de `reset()`
 
 - Si se inyecta `initial_layout`, el entorno lo respeta exactamente.

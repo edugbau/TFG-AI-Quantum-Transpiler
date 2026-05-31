@@ -23,6 +23,9 @@ class EvaluationStepRecord:
     routing_progress_delta: float = 0.0
     repeated_layout: bool = False
     undo_swap: bool = False
+    steps_without_progress: int = 0
+    stagnation_patience: int | None = None
+    truncation_reason: str | None = None
     primitive_name: str | None = None
     primitive_physical_qargs: tuple[int, ...] = ()
     primitive_cost: float = 0.0
@@ -55,6 +58,8 @@ def _has_routing_metadata(record: "EvaluationStepRecord") -> bool:
         or record.visible_frontier_before
         or record.repeated_layout
         or record.undo_swap
+        or record.steps_without_progress
+        or record.truncation_reason is not None
         or record.candidate_edges
         or record.action_mask
         or record.valid_action_indices
@@ -97,6 +102,9 @@ def _format_routing_record(record: "EvaluationStepRecord") -> list[str]:
         [
             f"repeated_layout: {record.repeated_layout}",
             f"undo_swap: {record.undo_swap}",
+            f"steps_without_progress: {record.steps_without_progress}",
+            f"stagnation_patience: {record.stagnation_patience}",
+            f"truncation_reason: {record.truncation_reason}",
         ]
     )
     return lines
