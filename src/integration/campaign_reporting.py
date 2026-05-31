@@ -316,6 +316,9 @@ def _render_effective_config(training_result: TrainingBridgeResult | None) -> st
         f"rl_cycle_window={config.cycle_window}, "
         f"rl_stagnation_patience={config.stagnation_patience}, "
         f"rl_sabre_top_k={config.sabre_top_k}, "
+        f"rl_sabre_decay_increment={config.sabre_decay_increment}, "
+        f"rl_sabre_decay_reset_interval={config.sabre_decay_reset_interval}, "
+        f"rl_routing_depth_penalty_weight={config.routing_depth_penalty_weight}, "
         f"seed={config.seed}"
     )
 
@@ -342,7 +345,8 @@ def _render_training_summary(training_result: TrainingBridgeResult | None, *, la
         f"### {label} Training Summary",
         f"- Status: `{training_result.status}`",
         f"- Algorithm: `{config.algorithm}`",
-        f"- Timesteps: `{config.total_timesteps}`",
+        f"- Requested Timesteps: `{config.total_timesteps}`",
+        f"- Actual Timesteps: `{training_result.actual_timesteps}`",
         f"- Frontier Mode: `{config.frontier_mode}`",
         f"- Lookahead Window: `{config.lookahead_window}`",
         f"- Max Steps: `{config.max_steps}`",
@@ -353,8 +357,24 @@ def _render_training_summary(training_result: TrainingBridgeResult | None, *, la
         f"- Cycle Window: `{config.cycle_window}`",
         f"- Stagnation Patience: `{config.stagnation_patience}`",
         f"- SABRE Top-k: `{config.sabre_top_k}`",
+        f"- SABRE Decay Increment: `{config.sabre_decay_increment}`",
+        f"- SABRE Decay Reset Interval: `{config.sabre_decay_reset_interval}`",
+        f"- Routing Depth Penalty Weight: `{config.routing_depth_penalty_weight}`",
         f"- Seed: `{config.seed}`",
         f"- Selected Artifact: `{artifact_path}`",
+        *_render_post_routing_selection(training_result.post_routing_selection),
+    ]
+
+
+def _render_post_routing_selection(selection: dict | None) -> list[str]:
+    if selection is None:
+        return ["- Post-Routing Selector: `disabled`"]
+    return [
+        "- Post-Routing Selector: `enabled`",
+        f"- Has Valid Solution: `{selection.get('has_valid_solution')}`",
+        f"- First Valid Solution Timestep: `{selection.get('first_solution_timestep')}`",
+        f"- Best Post-Routing Score: `{selection.get('best_score')}`",
+        f"- Training Stop Reason: `{selection.get('stop_reason')}`",
     ]
 
 

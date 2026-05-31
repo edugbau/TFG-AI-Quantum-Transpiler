@@ -8,14 +8,16 @@ from typing import Any, Mapping
 FRONTIER_RESTRICTED_EDGES_V1 = "frontier_restricted_edges.v1"
 FRONTIER_RESTRICTED_EDGES_V2 = "frontier_restricted_edges.v2"
 FRONTIER_RESTRICTED_EDGES_V3 = "frontier_restricted_edges.v3"
+FRONTIER_RESTRICTED_EDGES_V4 = "frontier_restricted_edges.v4"
 
 LEGACY_MASK_SEMANTICS = FRONTIER_RESTRICTED_EDGES_V1
-DEFAULT_NEW_MASK_SEMANTICS = FRONTIER_RESTRICTED_EDGES_V3
+DEFAULT_NEW_MASK_SEMANTICS = FRONTIER_RESTRICTED_EDGES_V4
 SUPPORTED_MASK_SEMANTICS = frozenset(
     {
         FRONTIER_RESTRICTED_EDGES_V1,
         FRONTIER_RESTRICTED_EDGES_V2,
         FRONTIER_RESTRICTED_EDGES_V3,
+        FRONTIER_RESTRICTED_EDGES_V4,
     }
 )
 
@@ -28,6 +30,8 @@ class RoutingMaskConfig:
     stagnation_patience: int | None = None
     sabre_top_k: int | None = None
     sabre_lookahead_weight: float = 0.5
+    sabre_decay_increment: float = 0.001
+    sabre_decay_reset_interval: int = 5
     distance_improvement_epsilon: float = 1e-6
 
     def __post_init__(self) -> None:
@@ -48,6 +52,14 @@ class RoutingMaskConfig:
         ):
             raise ValueError("sabre_lookahead_weight must be a non-negative number")
         if (
+            isinstance(self.sabre_decay_increment, bool)
+            or not isinstance(self.sabre_decay_increment, (int, float))
+            or self.sabre_decay_increment < 0
+        ):
+            raise ValueError("sabre_decay_increment must be a non-negative number")
+        if type(self.sabre_decay_reset_interval) is not int or self.sabre_decay_reset_interval <= 0:
+            raise ValueError("sabre_decay_reset_interval must be a positive integer")
+        if (
             isinstance(self.distance_improvement_epsilon, bool)
             or not isinstance(self.distance_improvement_epsilon, (int, float))
             or self.distance_improvement_epsilon <= 0
@@ -64,6 +76,8 @@ class RoutingMaskConfig:
             stagnation_patience=max(8, 2 * num_qubits),
             sabre_top_k=self.sabre_top_k,
             sabre_lookahead_weight=float(self.sabre_lookahead_weight),
+            sabre_decay_increment=float(self.sabre_decay_increment),
+            sabre_decay_reset_interval=self.sabre_decay_reset_interval,
             distance_improvement_epsilon=float(self.distance_improvement_epsilon),
         )
 
@@ -83,6 +97,8 @@ class RoutingMaskConfig:
             "stagnation_patience",
             "sabre_top_k",
             "sabre_lookahead_weight",
+            "sabre_decay_increment",
+            "sabre_decay_reset_interval",
             "distance_improvement_epsilon",
         }
         unknown_fields = set(value) - expected_fields
@@ -106,7 +122,7 @@ def require_resolved_routing_mask_config(
     value: RoutingMaskConfig | Mapping[str, Any] | None,
 ) -> RoutingMaskConfig:
     if value is None:
-        raise ValueError("routing_mask_config is required for frontier_restricted_edges.v3")
+        raise ValueError("routing_mask_config is required for versioned masked routing")
     config = RoutingMaskConfig.from_value(value)
     if config.stagnation_patience is None:
         raise ValueError("routing_mask_config.stagnation_patience must be resolved for persistence")

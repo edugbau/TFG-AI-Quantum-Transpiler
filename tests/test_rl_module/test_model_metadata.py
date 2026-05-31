@@ -70,7 +70,7 @@ def test_build_run_metadata_uses_explicit_masked_routing_schema_when_requested()
     }
 
 
-def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v3_semantics():
+def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v4_semantics():
     metadata = build_run_metadata(
         mode="routing",
         algorithm="MaskablePPO",
@@ -82,15 +82,17 @@ def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v3_semant
         routing_mask_config=RoutingMaskConfig(stagnation_patience=14),
     )
 
-    assert metadata["schema_version"] == "rl_run_metadata.masked_routing.v2"
+    assert metadata["schema_version"] == "rl_run_metadata.masked_routing.v3"
     assert metadata["routing_policy"] == {
         "masked": True,
-        "mask_semantics": "frontier_restricted_edges.v3",
+        "mask_semantics": "frontier_restricted_edges.v4",
         "mask_config": {
             "cycle_window": 8,
             "stagnation_patience": 14,
             "sabre_top_k": None,
             "sabre_lookahead_weight": 0.5,
+            "sabre_decay_increment": 0.001,
+            "sabre_decay_reset_interval": 5,
             "distance_improvement_epsilon": 1e-6,
         },
     }
@@ -132,6 +134,10 @@ def test_build_run_metadata_records_training_and_evaluation_config():
             "n_eval_episodes": 5,
             "deterministic": True,
         },
+        reward_config={
+            "swap_penalty": -3.0,
+            "routing_depth_penalty_weight": 0.5,
+        },
     )
 
     assert metadata["training"]["hyperparams"] == {
@@ -143,6 +149,10 @@ def test_build_run_metadata_records_training_and_evaluation_config():
         "eval_freq": 5000,
         "n_eval_episodes": 5,
         "deterministic": True,
+    }
+    assert metadata["reward"] == {
+        "swap_penalty": -3.0,
+        "routing_depth_penalty_weight": 0.5,
     }
 
 

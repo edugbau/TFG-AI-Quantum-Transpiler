@@ -5,6 +5,7 @@ from typing import Any, Optional
 from .routing_mask import (
     DEFAULT_NEW_MASK_SEMANTICS,
     FRONTIER_RESTRICTED_EDGES_V3,
+    FRONTIER_RESTRICTED_EDGES_V4,
     RoutingMaskConfig,
     require_resolved_routing_mask_config,
 )
@@ -14,6 +15,7 @@ _METADATA_FILENAME = "run_metadata.json"
 _SCHEMA_VERSION = "rl_run_metadata.v1"
 _MASKED_ROUTING_SCHEMA_VERSION_V1 = "rl_run_metadata.masked_routing.v1"
 _MASKED_ROUTING_SCHEMA_VERSION_V2 = "rl_run_metadata.masked_routing.v2"
+_MASKED_ROUTING_SCHEMA_VERSION_V3 = "rl_run_metadata.masked_routing.v3"
 
 
 def metadata_path_for_model(model_path: Path | str) -> Path:
@@ -31,6 +33,7 @@ def build_run_metadata(
     basis_gates: Optional[list[str]],
     mask_semantics: Optional[str] = None,
     routing_mask_config: RoutingMaskConfig | dict[str, Any] | None = None,
+    reward_config: Optional[dict[str, Any]] = None,
     training_hyperparams: Optional[dict[str, Any]] = None,
     evaluation_config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -50,19 +53,22 @@ def build_run_metadata(
         metadata["training"] = {"hyperparams": dict(training_hyperparams)}
     if evaluation_config is not None:
         metadata["evaluation"] = dict(evaluation_config)
+    if reward_config is not None:
+        metadata["reward"] = dict(reward_config)
 
     if mode == "routing" and algorithm == "MaskablePPO":
         resolved_mask_semantics = mask_semantics or DEFAULT_NEW_MASK_SEMANTICS
-        metadata["schema_version"] = (
-            _MASKED_ROUTING_SCHEMA_VERSION_V2
-            if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V3
-            else _MASKED_ROUTING_SCHEMA_VERSION_V1
-        )
+        if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V4:
+            metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION_V3
+        elif resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V3:
+            metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION_V2
+        else:
+            metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION_V1
         metadata["routing_policy"] = {
             "masked": True,
             "mask_semantics": resolved_mask_semantics,
         }
-        if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V3:
+        if resolved_mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
             metadata["routing_policy"]["mask_config"] = require_resolved_routing_mask_config(
                 routing_mask_config
             ).to_dict()

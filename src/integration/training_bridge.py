@@ -7,8 +7,9 @@ from typing import Sequence
 from qiskit import QuantumCircuit
 
 from src.integration.campaign_contracts import CampaignCase, CampaignConfig
-from src.rl_module.training import setup_training_pipeline
-from src.rl_module.routing_mask import RoutingMaskConfig
+from src.integration.post_routing_selector import PostRoutingCheckpointSelector
+from src.rl_module.training import DEFAULT_EVAL_FREQ, setup_training_pipeline
+from src.rl_module.routing_mask import DEFAULT_NEW_MASK_SEMANTICS, RoutingMaskConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,9 @@ class TrainingConfigSummary:
     cycle_window: int = 8
     stagnation_patience: int | None = None
     sabre_top_k: int | None = None
+    sabre_decay_increment: float = 0.001
+    sabre_decay_reset_interval: int = 5
+    routing_depth_penalty_weight: float = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,8 @@ class TrainingBridgeResult:
     run_model_dir: Path
     run_log_dir: Path
     effective_training_config: TrainingConfigSummary
+    actual_timesteps: int | None = None
+    post_routing_selection: dict | None = None
 
 
 def _build_training_config_summary(campaign_config: CampaignConfig) -> TrainingConfigSummary:
@@ -101,6 +107,7 @@ def train_case(
     coupling_map: Sequence[tuple[int, int]],
     case_output_dir: Path | str,
     initial_layout: Sequence[int] | None = None,
+    backend_bundle=None,
     verbose: bool = False,
 ) -> TrainingBridgeResult:
     del campaign_case
@@ -109,6 +116,42 @@ def train_case(
     run_log_base_dir = case_output_path / "training" / "logs"
     run_model_base_dir = case_output_path / "training" / "models"
     config_summary = _build_training_config_summary(campaign_config)
+    routing_mask_config = RoutingMaskConfig(
+        cycle_window=campaign_config.rl_cycle_window,
+        stagnation_patience=campaign_config.rl_stagnation_patience,
+        sabre_top_k=campaign_config.rl_sabre_top_k,
+    )
+    selector_enabled = (
+        backend_bundle is not None
+        and initial_layout is not None
+    )
+    masked_routing = campaign_config.rl_algorithm == "MaskablePPO"
+    extra_callback_factories = []
+    if selector_enabled:
+        def _build_post_routing_selector(*, run_model_dir, run_log_dir):
+            del run_log_dir
+            return PostRoutingCheckpointSelector(
+                circuit=target_circuit,
+                coupling_edges=coupling_map,
+                backend=backend_bundle.backend,
+                backend_name=backend_bundle.backend_name,
+                seed=campaign_config.seed,
+                initial_layout=initial_layout,
+                frontier_mode=campaign_config.rl_frontier_mode,
+                max_steps=campaign_config.rl_max_steps,
+                lookahead_window=campaign_config.rl_lookahead_window,
+                masked=masked_routing,
+                mask_semantics=DEFAULT_NEW_MASK_SEMANTICS if masked_routing else None,
+                routing_mask_config=(
+                    routing_mask_config.resolve(num_qubits=target_circuit.num_qubits)
+                    if masked_routing
+                    else None
+                ),
+                run_model_dir=run_model_dir,
+                eval_freq=DEFAULT_EVAL_FREQ,
+            )
+
+        extra_callback_factories.append(_build_post_routing_selector)
 
     try:
         agent = setup_training_pipeline(
@@ -125,12 +168,31 @@ def train_case(
             max_steps=campaign_config.rl_max_steps,
             hyperparams=_build_training_hyperparams(campaign_config),
             initial_layout=list(initial_layout) if initial_layout is not None else None,
-            routing_mask_config=RoutingMaskConfig(
-                cycle_window=campaign_config.rl_cycle_window,
-                stagnation_patience=campaign_config.rl_stagnation_patience,
-                sabre_top_k=campaign_config.rl_sabre_top_k,
-            ),
+            routing_mask_config=routing_mask_config,
             n_eval_episodes=campaign_config.rl_n_eval_episodes,
+            extra_callback_factories=extra_callback_factories,
+            use_reward_early_stopping=not selector_enabled,
+            reward_best_model_subdir="reward_best" if selector_enabled else None,
+            evaluation_metadata=(
+                {
+                    "checkpoint_selector": {
+                        "enabled": True,
+                        "callback": "PostRoutingCheckpointSelector",
+                        "score_fields": [
+                            "trans_cnot_equivalent",
+                            "trans_depth",
+                            "total_swaps",
+                        ],
+                        "early_stopping": {
+                            "min_evals": 50,
+                            "max_no_improvement_evals": 20,
+                            "starts_after_first_valid_solution": True,
+                        },
+                    }
+                }
+                if selector_enabled
+                else None
+            ),
             verbose=verbose,
         )
     except Exception:
@@ -142,6 +204,8 @@ def train_case(
             run_model_dir=run_model_base_dir,
             run_log_dir=run_log_base_dir,
             effective_training_config=config_summary,
+            actual_timesteps=None,
+            post_routing_selection=None,
         )
 
     run_model_dir = _normalize_optional_path(getattr(agent, "run_model_dir", None)) or run_model_base_dir
@@ -171,4 +235,6 @@ def train_case(
         run_model_dir=run_model_dir,
         run_log_dir=run_log_dir,
         effective_training_config=config_summary,
+        actual_timesteps=getattr(agent, "actual_timesteps", None),
+        post_routing_selection=getattr(agent, "post_routing_selection", None),
     )

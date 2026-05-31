@@ -40,6 +40,7 @@ from src.rl_module.model_metadata import build_run_metadata, save_run_metadata
 from src.rl_module.routing_mask import (
     DEFAULT_NEW_MASK_SEMANTICS,
     FRONTIER_RESTRICTED_EDGES_V3,
+    FRONTIER_RESTRICTED_EDGES_V4,
     resolve_routing_mask_config,
 )
 from src.rl_module.training import set_global_seeds
@@ -79,7 +80,7 @@ def _normalize_masked_routing_config(cfg: dict) -> dict:
             "mask_semantics",
             MASKED_ROUTING_SEMANTICS,
         )
-        if normalized_cfg["mask_semantics"] == FRONTIER_RESTRICTED_EDGES_V3:
+        if normalized_cfg["mask_semantics"] in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
             normalized_cfg["routing_mask_config"] = resolve_routing_mask_config(
                 normalized_cfg.get("routing_mask_config"),
                 num_qubits=normalized_cfg["circuit"].num_qubits,
@@ -574,7 +575,7 @@ class RLBenchmarkGUI(ctk.CTk):
         if cfg.get("routing_mask_config") is not None:
             mask_cfg = cfg["routing_mask_config"]
             self._log(
-                "Mascara v3: "
+                f"Mascara {cfg['mask_semantics'].rsplit('.', 1)[-1]}: "
                 f"cycle_window={mask_cfg.cycle_window}  |  "
                 f"stagnation_patience={mask_cfg.stagnation_patience}  |  "
                 f"sabre_top_k={mask_cfg.sabre_top_k}"

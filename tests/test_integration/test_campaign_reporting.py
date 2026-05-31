@@ -92,6 +92,13 @@ def _build_training_result(case: CampaignCase, *, status: str = "completed") -> 
             max_steps=256,
             seed=42,
         ),
+        actual_timesteps=355000,
+        post_routing_selection={
+            "has_valid_solution": True,
+            "first_solution_timestep": 210000,
+            "best_score": [143.0, 138, 25],
+            "stop_reason": "post_routing_no_improvement",
+        },
     )
 
 
@@ -333,6 +340,11 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
     assert "- Selected Layout: [0, 1, 2]" in markdown
     assert "RL Training Summary" in markdown
     assert "best_model.zip" in markdown
+    assert "- Actual Timesteps: `355000`" in markdown
+    assert "- Has Valid Solution: `True`" in markdown
+    assert "- First Valid Solution Timestep: `210000`" in markdown
+    assert "- Best Post-Routing Score: `[143.0, 138, 25]`" in markdown
+    assert "- Training Stop Reason: `post_routing_no_improvement`" in markdown
     assert "Incidents" in markdown
     assert "RL training failed before MO+RL evaluation." in markdown
     assert "Final Campaign Status: `completed`" in markdown

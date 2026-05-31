@@ -17,6 +17,7 @@ from .rewards import RoutingReward, SynthesisReward
 from .routing_mask import (
     FRONTIER_RESTRICTED_EDGES_V2,
     FRONTIER_RESTRICTED_EDGES_V3,
+    FRONTIER_RESTRICTED_EDGES_V4,
     RoutingMaskConfig,
     normalize_mask_semantics,
     resolve_routing_mask_config,
@@ -76,7 +77,7 @@ class QuantumTranspilationEnv(gym.Env):
         self.mask_semantics = normalize_mask_semantics(mask_semantics)
         self.routing_mask_config = (
             resolve_routing_mask_config(routing_mask_config, num_qubits=self.num_qubits)
-            if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V3
+            if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}
             else None
         )
         self._synthesis_state: Optional[CliffordSynthesisState] = None
@@ -138,6 +139,9 @@ class QuantumTranspilationEnv(gym.Env):
         self._frontier_revision = 0
         self._steps_without_progress = 0
         self._best_routing_signal_for_frontier = 0.0
+        self._physical_depth_clock = np.zeros(self.num_physical_qubits, dtype=np.float32)
+        self._sabre_qubit_decay = np.ones(self.num_physical_qubits, dtype=np.float32)
+        self._sabre_swaps_since_decay_reset = 0
 
     @property
     def remaining_gates(self) -> deque:
@@ -253,6 +257,9 @@ class QuantumTranspilationEnv(gym.Env):
         self._frontier_revision = 0
         self._steps_without_progress = 0
         self._best_routing_signal_for_frontier = 0.0
+        self._physical_depth_clock.fill(0.0)
+        self._sabre_qubit_decay.fill(1.0)
+        self._sabre_swaps_since_decay_reset = 0
         extracted_gates = self._extract_gates_from_circuit()
         self._frontier = self._build_frontier(extracted_gates)
         
@@ -295,6 +302,7 @@ class QuantumTranspilationEnv(gym.Env):
             self._synthesis_state = None
             reset_executed_gates = []
             self._try_execute_front_layer(executed_gates=reset_executed_gates)
+            self._record_executed_gate_depth(reset_executed_gates)
             self.was_completed_at_reset = self._frontier.remaining_gate_count == 0
 
         obs = self._build_observation(step_progress=0.0)
@@ -307,6 +315,7 @@ class QuantumTranspilationEnv(gym.Env):
             "total_gates": len(extracted_gates),
             "already_completed_at_reset": self.was_completed_at_reset,
             "executed_gates": list(reset_executed_gates),
+            "estimated_routing_depth": self._estimated_routing_depth(),
         }
         
         return obs, info
@@ -361,9 +370,9 @@ class QuantumTranspilationEnv(gym.Env):
             raise AttributeError("action_masks requires a RoutingStrategy.")
 
         mask = self._build_frontier_incident_mask(strategy=strategy)
-        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V2, FRONTIER_RESTRICTED_EDGES_V3}:
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V2, FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
             mask = self._apply_anti_undo_or_fallback(mask, strategy=strategy)
-        if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V3:
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
             mask = self._apply_short_cycle_filter_or_fallback(mask, strategy=strategy)
             mask = self._apply_sabre_top_k_or_fallback(mask, strategy=strategy)
         return mask
@@ -485,6 +494,7 @@ class QuantumTranspilationEnv(gym.Env):
         self,
         candidate_layout: np.ndarray,
         *,
+        swap_edge: Tuple[int, int],
         strategy: RoutingStrategy,
     ) -> float:
         frontier_entries, extended_entries = self._frontier.get_sabre_entries(
@@ -492,13 +502,17 @@ class QuantumTranspilationEnv(gym.Env):
             lookahead_window=self.lookahead_window,
             is_connected=self._is_connected,
         )
-        return self._routing_entries_cost(
+        score = self._routing_entries_cost(
             frontier_entries,
             strategy=strategy,
         ) + self.routing_mask_config.sabre_lookahead_weight * self._routing_entries_cost(
             extended_entries,
             strategy=strategy,
         )
+        if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V4:
+            pq1, pq2 = swap_edge
+            score *= max(float(self._sabre_qubit_decay[pq1]), float(self._sabre_qubit_decay[pq2]))
+        return score
 
     def _apply_sabre_top_k_or_fallback(
         self,
@@ -520,7 +534,11 @@ class QuantumTranspilationEnv(gym.Env):
                 continue
             scored_indices.append(
                 (
-                    self._score_sabre_candidate(candidate_layout, strategy=strategy),
+                    self._score_sabre_candidate(
+                        candidate_layout,
+                        swap_edge=strategy.edges[index],
+                        strategy=strategy,
+                    ),
                     index,
                 )
             )
@@ -546,7 +564,7 @@ class QuantumTranspilationEnv(gym.Env):
         return self._layout_signature(), self._frontier_revision
 
     def _record_routing_state(self) -> None:
-        if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V3:
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
             self._recent_routing_states.append(self._routing_state_signature())
 
     def _routing_signal(self, obs: Dict[str, np.ndarray]) -> float:
@@ -565,7 +583,7 @@ class QuantumTranspilationEnv(gym.Env):
         current_routing_signal: float,
         gates_executed: int,
     ) -> None:
-        if self.mask_semantics != FRONTIER_RESTRICTED_EDGES_V3:
+        if self.mask_semantics not in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
             return
         if gates_executed > 0:
             self._steps_without_progress = 0
@@ -582,6 +600,36 @@ class QuantumTranspilationEnv(gym.Env):
         if self.routing_mask_config is None:
             return None
         return self.routing_mask_config.stagnation_patience
+
+    def _estimated_routing_depth(self) -> float:
+        return float(np.max(self._physical_depth_clock)) if self._physical_depth_clock.size else 0.0
+
+    def _record_operation_depth(self, physical_q1: int, physical_q2: int, *, cost: float) -> None:
+        end_depth = max(
+            float(self._physical_depth_clock[physical_q1]),
+            float(self._physical_depth_clock[physical_q2]),
+        ) + cost
+        self._physical_depth_clock[physical_q1] = end_depth
+        self._physical_depth_clock[physical_q2] = end_depth
+
+    def _record_executed_gate_depth(self, executed_gates: List[GateTuple]) -> None:
+        for _, logical_q1, logical_q2 in executed_gates:
+            self._record_operation_depth(
+                self._get_physical_qubit(logical_q1),
+                self._get_physical_qubit(logical_q2),
+                cost=1.0,
+            )
+
+    def _record_sabre_swap(self, physical_q1: int, physical_q2: int) -> None:
+        if self.mask_semantics != FRONTIER_RESTRICTED_EDGES_V4:
+            return
+        increment = self.routing_mask_config.sabre_decay_increment
+        self._sabre_qubit_decay[physical_q1] += increment
+        self._sabre_qubit_decay[physical_q2] += increment
+        self._sabre_swaps_since_decay_reset += 1
+        if self._sabre_swaps_since_decay_reset >= self.routing_mask_config.sabre_decay_reset_interval:
+            self._sabre_qubit_decay.fill(1.0)
+            self._sabre_swaps_since_decay_reset = 0
 
     def step(self, action: Any) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         self.current_step += 1
@@ -602,6 +650,8 @@ class QuantumTranspilationEnv(gym.Env):
                 "undo_swap": False,
                 "unproductive_swap": False,
                 "routing_progress_delta": 0.0,
+                "routing_depth_delta": 0.0,
+                "estimated_routing_depth": self._estimated_routing_depth(),
                 "primitive_name": None,
                 "primitive_physical_qargs": (),
                 "primitive_cost": 0.0,
@@ -622,6 +672,7 @@ class QuantumTranspilationEnv(gym.Env):
             step_progress=(self.current_step - 1) / self.max_steps,
         )
         prev_routing_signal = self._routing_signal(prev_obs) if self.mode == "routing" else 0.0
+        prev_routing_depth = self._estimated_routing_depth() if self.mode == "routing" else 0.0
         prev_layout_signature = self._layout_signature()
          
         info = {
@@ -635,6 +686,8 @@ class QuantumTranspilationEnv(gym.Env):
             "undo_swap": False,
             "unproductive_swap": False,
             "routing_progress_delta": 0.0,
+            "routing_depth_delta": 0.0,
+            "estimated_routing_depth": prev_routing_depth,
             "steps_without_progress": self._steps_without_progress,
             "stagnation_patience": self._routing_stagnation_patience(),
             "truncation_reason": None,
@@ -660,6 +713,8 @@ class QuantumTranspilationEnv(gym.Env):
                 # Mover dos nodos vacíos no aporta nada lógico y congela la observación
                 info["is_valid_action"] = False
             else:
+                self._record_operation_depth(pq1, pq2, cost=3.0)
+                self._record_sabre_swap(pq1, pq2)
                 # Actualizar layout directo current_layout[logical] = physical
                 if lq1 != -1:
                     self.current_layout[lq1] = pq2
@@ -689,6 +744,7 @@ class QuantumTranspilationEnv(gym.Env):
             info["gates_executed"] = self._try_execute_front_layer(
                 executed_gates=info["executed_gates"],
             )
+            self._record_executed_gate_depth(info["executed_gates"])
             self._frontier_revision += info["gates_executed"]
             if info["gates_executed"] > 0:
                 info["undo_swap"] = False
@@ -729,6 +785,9 @@ class QuantumTranspilationEnv(gym.Env):
             if info["gates_executed"] > 0:
                 routing_progress_delta = max(routing_progress_delta, 0.0)
             info["routing_progress_delta"] = routing_progress_delta
+            current_routing_depth = self._estimated_routing_depth()
+            info["routing_depth_delta"] = current_routing_depth - prev_routing_depth
+            info["estimated_routing_depth"] = current_routing_depth
             info["unproductive_swap"] = (
                 info["action_type"] == "swap"
                 and info["is_valid_action"]

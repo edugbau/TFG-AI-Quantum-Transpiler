@@ -1,4 +1,6 @@
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from qiskit import QuantumCircuit
 
@@ -186,6 +188,94 @@ def test_train_case_falls_back_to_final_model_when_best_model_is_missing(monkeyp
     assert result.final_model_path == final_model_path
     assert result.run_model_dir == actual_run_model_dir
     assert result.run_log_dir == actual_run_log_dir
+
+
+def test_train_case_enables_post_routing_selector_and_keeps_final_fallback(monkeypatch, tmp_path) -> None:
+    config = _build_campaign_config()
+    case = _build_campaign_case()
+    case_output_dir = tmp_path / "cases" / case.case_id
+    run_model_dir = case_output_dir / "training" / "models" / "run-001"
+    run_log_dir = case_output_dir / "training" / "logs" / "run-001"
+    final_model_path = run_model_dir / "final_routing_MaskablePPO.zip"
+    captured_kwargs = {}
+
+    class DummyAgent:
+        def __init__(self):
+            self.run_model_dir = run_model_dir
+            self.run_log_dir = run_log_dir
+            self.best_model_path = None
+            self.last_model_path = final_model_path
+            self.actual_timesteps = 500_000
+            self.post_routing_selection = {
+                "has_valid_solution": False,
+                "stop_reason": "training_budget_exhausted",
+            }
+
+    def fake_setup_training_pipeline(**kwargs):
+        captured_kwargs.update(kwargs)
+        run_model_dir.mkdir(parents=True)
+        run_log_dir.mkdir(parents=True)
+        final_model_path.write_bytes(b"final")
+        return DummyAgent()
+
+    monkeypatch.setattr("src.integration.training_bridge.setup_training_pipeline", fake_setup_training_pipeline)
+
+    result = train_case(
+        campaign_case=case,
+        campaign_config=config,
+        target_circuit=QuantumCircuit(3),
+        coupling_map=[(0, 1), (1, 2)],
+        case_output_dir=case_output_dir,
+        initial_layout=[0, 1, 2],
+        backend_bundle=SimpleNamespace(backend=object(), backend_name="fake_backend"),
+    )
+
+    assert captured_kwargs["use_reward_early_stopping"] is False
+    assert captured_kwargs["reward_best_model_subdir"] == "reward_best"
+    assert len(captured_kwargs["extra_callback_factories"]) == 1
+    assert result.selected_artifact_path == final_model_path
+    assert result.actual_timesteps == 500_000
+    assert result.post_routing_selection["has_valid_solution"] is False
+
+
+def test_train_case_enables_unmasked_post_routing_selector_for_ppo_campaign(monkeypatch, tmp_path) -> None:
+    config = replace(_build_campaign_config(), rl_algorithm="PPO")
+    case = _build_campaign_case()
+    case_output_dir = tmp_path / "cases" / case.case_id
+    captured_kwargs = {}
+
+    class DummyAgent:
+        run_model_dir = case_output_dir / "training" / "models" / "run-001"
+        run_log_dir = case_output_dir / "training" / "logs" / "run-001"
+        best_model_path = None
+        last_model_path = run_model_dir / "final_routing_PPO.zip"
+
+    def fake_setup_training_pipeline(**kwargs):
+        captured_kwargs.update(kwargs)
+        DummyAgent.run_model_dir.mkdir(parents=True)
+        DummyAgent.run_log_dir.mkdir(parents=True)
+        DummyAgent.last_model_path.write_bytes(b"final")
+        return DummyAgent()
+
+    monkeypatch.setattr("src.integration.training_bridge.setup_training_pipeline", fake_setup_training_pipeline)
+
+    train_case(
+        campaign_case=case,
+        campaign_config=config,
+        target_circuit=QuantumCircuit(3),
+        coupling_map=[(0, 1), (1, 2)],
+        case_output_dir=case_output_dir,
+        initial_layout=[0, 1, 2],
+        backend_bundle=SimpleNamespace(backend=object(), backend_name="fake_backend"),
+    )
+    selector = captured_kwargs["extra_callback_factories"][0](
+        run_model_dir=DummyAgent.run_model_dir,
+        run_log_dir=DummyAgent.run_log_dir,
+    )
+
+    assert selector.masked is False
+    assert selector.mask_semantics is None
+    assert selector.routing_mask_config is None
 
 
 def test_train_case_forwards_none_initial_layout_when_omitted(monkeypatch, tmp_path) -> None:

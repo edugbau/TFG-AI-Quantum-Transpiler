@@ -217,6 +217,8 @@ def _invoke_train_case(train_case_fn: Callable[..., object], **kwargs):
     call_kwargs = dict(kwargs)
     if not _runner_accepts_kwarg(train_case_fn, "verbose"):
         call_kwargs.pop("verbose", None)
+    if not _runner_accepts_kwarg(train_case_fn, "backend_bundle"):
+        call_kwargs.pop("backend_bundle", None)
     return train_case_fn(**call_kwargs)
 
 
@@ -451,6 +453,7 @@ def run_campaign(
                 coupling_map=qiskit_coupling_edges_for_training,
                 case_output_dir=case_output_dir / "rl_only",
                 initial_layout=list(qiskit_initial_layout),
+                backend_bundle=backend_bundle,
                 verbose=verbose,
             )
 
@@ -531,6 +534,7 @@ def run_campaign(
                 coupling_map=coupling_edges_for_training,
                 case_output_dir=case_output_dir,
                 initial_layout=selected_layout_for_training,
+                backend_bundle=backend_bundle,
                 verbose=verbose,
             )
 
@@ -686,6 +690,7 @@ def run_campaign_seed_group(
                 coupling_map=qiskit_coupling_edges,
                 case_output_dir=shared_case_output_dir / "rl_only",
                 initial_layout=list(qiskit_initial_layout),
+                backend_bundle=backend_bundle,
                 verbose=verbose,
             )
             if (
@@ -825,6 +830,7 @@ def run_campaign_seed_group(
                             selected_layout_tuple,
                         ),
                         initial_layout=list(selected_layout),
+                        backend_bundle=backend_bundle,
                         verbose=verbose,
                     )
                     if training_result.status != "completed" or training_result.selected_artifact_path is None:

@@ -71,11 +71,11 @@ El regimen nuevo de `masked routing` no redefine el entorno:
 - `MaskablePPO` es el trainer estandar para checkpoints nuevos;
 - `PPO` y `DQN` siguen soportados como legacy;
 - la mascara es determinista, frontier-aware y compatible con la codificacion fija de acciones.
-- `frontier_restricted_edges.v3` aplica una tuberia acumulativa: candidatos incidentes, anti-undo, anti-ciclo y top-k SABRE opcional.
-- Cada filtro v3 conserva la salida anterior si vaciaria la mascara.
+- `frontier_restricted_edges.v4` aplica la tuberia v3 y suma decay SABRE para reducir reutilizacion serial de qubits fisicos.
+- Cada filtro conserva la salida anterior si vaciaria la mascara.
 - Los ciclos se identifican mediante `(layout, frontier_revision)`, de modo que volver a un layout tras ejecutar puertas sigue permitido.
-- Los episodios v3 se truncan si no ejecutan puertas ni mejoran una nueva mejor distancia durante `stagnation_patience`.
-- `frontier_restricted_edges.v1` y `frontier_restricted_edges.v2` siguen disponibles para reproducir checkpoints historicos.
+- Los episodios se truncan si no ejecutan puertas ni mejoran una nueva mejor distancia durante `stagnation_patience`.
+- `frontier_restricted_edges.v1`, `frontier_restricted_edges.v2` y `frontier_restricted_edges.v3` siguen disponibles para reproducir checkpoints historicos.
 
 ## 3. Synthesis v1
 
@@ -115,7 +115,7 @@ Es el contrato que conecta entrenamiento y evaluacion.
 - `save_run_metadata()` guarda el sidecar.
 - `load_run_metadata_for_model()` lo recupera cuando `integration` evalua un checkpoint.
 
-Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Los productores nuevos usan `rl_run_metadata.masked_routing.v2` con `frontier_restricted_edges.v3` y una `mask_config` resuelta. `integration` conserva los sidecars historicos `v1`/`v2` y cae a defaults legacy si falta el sidecar.
+Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Los productores nuevos usan `rl_run_metadata.masked_routing.v3` con `frontier_restricted_edges.v4` y una `mask_config` resuelta. `integration` conserva los sidecars historicos y cae a defaults legacy si falta el sidecar.
 
 ## 5. GUI e inspeccion
 

@@ -34,9 +34,9 @@ El routing usa un action space discreto fijo sobre las aristas del coupling map.
 Puntos clave:
 
 - `MaskablePPO` es el entrenador estandar para checkpoints nuevos de routing enmascarado.
-- `frontier_restricted_edges.v3` anade bloqueo de ciclos cortos sobre `(layout, frontier_revision)`, truncacion por estancamiento y poda SABRE top-k opcional.
-- Cada filtro v3 conserva la mascara anterior como fallback si la heuristica eliminaria todos los candidatos.
-- Los checkpoints `frontier_restricted_edges.v1` y `frontier_restricted_edges.v2` mantienen su semantica historica al evaluarse.
+- `frontier_restricted_edges.v4` conserva los filtros v3 y anade decay SABRE para penalizar reutilizacion serial de qubits fisicos.
+- Cada filtro conserva la mascara anterior como fallback si la heuristica eliminaria todos los candidatos.
+- Los checkpoints `frontier_restricted_edges.v1`, `frontier_restricted_edges.v2` y `frontier_restricted_edges.v3` mantienen su semantica historica al evaluarse.
 - Los checkpoints legacy `PPO` y `DQN` siguen soportados mediante contratos legacy/default o evaluaciones unmasked.
 - `DagFrontier` usa `front_layer()` para exponer paralelismo real; `SequentialFrontier` mantiene el comportamiento secuencial.
 - `initial_layout` se respeta exactamente cuando llega desde fuera del modulo.

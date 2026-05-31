@@ -75,6 +75,8 @@ class RoutingReward(RewardStrategy):
         Factor lineal de shaping sobre ``routing_progress_delta``. Valores
         positivos recompensan reducir la distancia agregada de routing y
         penalizan empeorarla.
+    routing_depth_penalty_weight : float
+        Peso aplicado al incremento de profundidad critica estimada.
     """
 
     def __init__( #TODO: REVISAR VALORES DE PENALIZACIÓN Y REWARD CON TUTORES
@@ -88,6 +90,7 @@ class RoutingReward(RewardStrategy):
         undo_swap_penalty: float = -1.0,
         unproductive_swap_penalty: float = -1.0,
         routing_progress_reward: float = 0.5,
+        routing_depth_penalty_weight: float = 0.5,
     ):
         self.swap_penalty = swap_penalty
         self.gate_execution_reward = gate_execution_reward
@@ -98,6 +101,21 @@ class RoutingReward(RewardStrategy):
         self.undo_swap_penalty = undo_swap_penalty
         self.unproductive_swap_penalty = unproductive_swap_penalty
         self.routing_progress_reward = routing_progress_reward
+        self.routing_depth_penalty_weight = routing_depth_penalty_weight
+
+    def to_dict(self) -> Dict[str, float]:
+        return {
+            "swap_penalty": self.swap_penalty,
+            "gate_execution_reward": self.gate_execution_reward,
+            "invalid_action_penalty": self.invalid_action_penalty,
+            "completion_bonus": self.completion_bonus,
+            "truncation_penalty": self.truncation_penalty,
+            "repeated_layout_penalty": self.repeated_layout_penalty,
+            "undo_swap_penalty": self.undo_swap_penalty,
+            "unproductive_swap_penalty": self.unproductive_swap_penalty,
+            "routing_progress_reward": self.routing_progress_reward,
+            "routing_depth_penalty_weight": self.routing_depth_penalty_weight,
+        }
 
     def compute_reward(self, prev_state: Any, action: Any, current_state: Any, info: Dict[str, Any]) -> float:
         reward = 0.0
@@ -125,6 +143,7 @@ class RoutingReward(RewardStrategy):
             reward += self.unproductive_swap_penalty
 
         reward += self.routing_progress_reward * float(info.get('routing_progress_delta', 0.0))
+        reward -= self.routing_depth_penalty_weight * float(info.get('routing_depth_delta', 0.0))
              
         # 4. Bonificación final si el circuito se completa
         if info.get('is_completed', False):

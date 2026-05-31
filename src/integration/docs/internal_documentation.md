@@ -105,7 +105,8 @@ Es el seam entre Campaign e `src.rl_module.training`.
 - recibi el `CampaignCase` y la configuracion del Campaign;
 - convierte la configuracion a hyperparams de entrenamiento;
 - pasa el layout seleccionado por MO como `initial_layout`;
-- elige el artefacto final, prefiriendo `best_model.zip` y cayendo a `final_model.zip`.
+- selecciona `best_model.zip` con la tupla post-routing `(cnot_equivalent, depth, swaps)` y cae a `final_model.zip` si aun no existe una solucion valida.
+- tolera episodios incompletos durante la busqueda inicial sin consumir paciencia de early stopping.
 
 ### `campaign_runner.py`
 
@@ -151,7 +152,7 @@ En batch JSON, `topology_source: "synthetic"` acepta `synthetic_topology` y pued
 Para routing `MaskablePPO`, el bloque `rl` tambien acepta `cycle_window`,
 `stagnation_patience` y `sabre_top_k`. La paciencia puede omitirse para usar
 el default adaptativo `max(8, 2 * num_qubits)`; el valor resuelto queda
-persistido junto al checkpoint v3.
+persistido junto al checkpoint v4.
 La CLI guiada avanzada pregunta `SABRE top-k (blank to disable)` al seleccionar
 `MaskablePPO`: un entero positivo activa la poda y Enter, `none`, `null` u
 `off` la dejan desactivada.

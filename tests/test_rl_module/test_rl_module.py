@@ -3033,14 +3033,14 @@ class TestTrainingUtilities:
         assert early_stopping.min_evals == 50
         assert early_stopping.max_no_improvement_evals == 20
         assert [kwargs["mask_semantics"] for kwargs in env_kwargs] == [
-            "frontier_restricted_edges.v3",
-            "frontier_restricted_edges.v3",
+            "frontier_restricted_edges.v4",
+            "frontier_restricted_edges.v4",
         ]
         assert [kwargs["routing_mask_config"].stagnation_patience for kwargs in env_kwargs] == [8, 8]
         metadata = json.loads(
             Path(agent.run_model_dir, "run_metadata.json").read_text(encoding="utf-8")
         )
-        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v3"
+        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v4"
         assert metadata["routing_policy"]["mask_config"]["stagnation_patience"] == 8
         assert metadata["evaluation"]["early_stopping"] == {
             "enabled": True,
