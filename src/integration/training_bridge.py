@@ -7,7 +7,12 @@ from typing import Sequence
 from qiskit import QuantumCircuit
 
 from src.integration.campaign_contracts import CampaignCase, CampaignConfig
-from src.integration.post_routing_selector import PostRoutingCheckpointSelector
+from src.integration.post_routing_selector import (
+    DEFAULT_POST_ROUTING_MIN_EVALS,
+    DEFAULT_POST_ROUTING_PATIENCE_FRACTION,
+    PostRoutingCheckpointSelector,
+    resolve_post_routing_max_no_improvement_evals,
+)
 from src.rl_module.training import DEFAULT_EVAL_FREQ, setup_training_pipeline
 from src.rl_module.routing_mask import DEFAULT_NEW_MASK_SEMANTICS, RoutingMaskConfig
 
@@ -126,6 +131,10 @@ def train_case(
         and initial_layout is not None
     )
     masked_routing = campaign_config.rl_algorithm == "MaskablePPO"
+    post_routing_max_no_improvement_evals = resolve_post_routing_max_no_improvement_evals(
+        total_timesteps=campaign_config.rl_total_timesteps,
+        eval_freq=DEFAULT_EVAL_FREQ,
+    )
     extra_callback_factories = []
     if selector_enabled:
         def _build_post_routing_selector(*, run_model_dir, run_log_dir):
@@ -149,6 +158,8 @@ def train_case(
                 ),
                 run_model_dir=run_model_dir,
                 eval_freq=DEFAULT_EVAL_FREQ,
+                min_evals=DEFAULT_POST_ROUTING_MIN_EVALS,
+                max_no_improvement_evals=post_routing_max_no_improvement_evals,
             )
 
         extra_callback_factories.append(_build_post_routing_selector)
@@ -184,8 +195,9 @@ def train_case(
                             "total_swaps",
                         ],
                         "early_stopping": {
-                            "min_evals": 50,
-                            "max_no_improvement_evals": 20,
+                            "min_evals": DEFAULT_POST_ROUTING_MIN_EVALS,
+                            "max_no_improvement_evals": post_routing_max_no_improvement_evals,
+                            "patience_fraction": DEFAULT_POST_ROUTING_PATIENCE_FRACTION,
                             "starts_after_first_valid_solution": True,
                         },
                     }

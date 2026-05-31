@@ -557,6 +557,34 @@ class QuantumTranspilationEnv(gym.Env):
             filtered_mask[index] = True
         return filtered_mask if np.any(filtered_mask) else mask
 
+    def select_sabre_heuristic_action(self) -> int:
+        """Select one deterministic masked-routing action without an RL policy."""
+        if self.mode != "routing" or not isinstance(self.strategy, RoutingStrategy):
+            raise AttributeError("select_sabre_heuristic_action is only available in routing mode.")
+        if self.mask_semantics != FRONTIER_RESTRICTED_EDGES_V4:
+            raise ValueError("select_sabre_heuristic_action requires frontier_restricted_edges.v4 semantics.")
+
+        strategy = self.strategy
+        scored_actions: list[tuple[int, float, int]] = []
+        for index in np.flatnonzero(self.action_masks()):
+            action_index = int(index)
+            candidate_layout = self._simulate_swap_layout(strategy.edges[action_index])
+            scored_actions.append(
+                (
+                    0 if self._candidate_unlocks_frontier(candidate_layout) else 1,
+                    self._score_sabre_candidate(
+                        candidate_layout,
+                        swap_edge=strategy.edges[action_index],
+                        strategy=strategy,
+                    ),
+                    action_index,
+                )
+            )
+
+        if not scored_actions:
+            raise ValueError("Masked routing state/config has no heuristic action candidates.")
+        return min(scored_actions)[2]
+
     def _layout_signature(self) -> Tuple[int, ...]:
         return tuple(int(value) for value in self.current_layout.tolist())
 

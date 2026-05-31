@@ -102,6 +102,36 @@ def _build_training_result(case: CampaignCase, *, status: str = "completed") -> 
     )
 
 
+def test_summary_renders_hybrid_layout_probe_diagnostics() -> None:
+    case = _build_case("ghz_3__fake_torino", "ghz", 3, "fake_torino")
+    report = build_campaign_report(
+        campaign_id="campaign-hybrid",
+        campaign_status="completed",
+        campaign_config=_build_campaign_config(),
+        case_reports=[
+            CampaignCaseReport(
+                case=case,
+                status="incomplete",
+                hybrid_layout_probe={
+                    "selector": "hybrid_probe",
+                    "valid_candidate_count": 2,
+                    "selected_layout": [2, 0, 1],
+                    "selected_score": [4.0, 8, 1],
+                    "qiskit_control": {"score": [5.0, 9, 2]},
+                    "fallback_reason": None,
+                },
+            )
+        ],
+    )
+
+    markdown = render_campaign_summary_markdown(report)
+
+    assert "### Hybrid Layout Probe" in markdown
+    assert "- Valid MO Candidates: `2`" in markdown
+    assert "- Selected Score: `[4.0, 8, 1]`" in markdown
+    assert "- Qiskit Control Score: `[5.0, 9, 2]`" in markdown
+
+
 def test_aggregate_summary_uses_only_comparable_completed_cases() -> None:
     config = _build_campaign_config()
     comparable_case_a = _build_case("ghz_3__fake_torino", "ghz", 3, "fake_torino")

@@ -43,6 +43,7 @@ class CampaignCaseReport:
     mo_rl_result: ScenarioResult | None = None
     rl_only_training_result: TrainingBridgeResult | None = None
     training_result: TrainingBridgeResult | None = None
+    hybrid_layout_probe: dict[str, Any] | None = None
     incidents: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -336,6 +337,21 @@ def _render_scenario_notes(label: str, result: ScenarioResult | None) -> list[st
     return [f"- {label} Notes: " + " | ".join(result.notes)]
 
 
+def _render_hybrid_layout_probe(probe: dict[str, Any] | None) -> list[str]:
+    if probe is None:
+        return []
+    control = probe.get("qiskit_control") or {}
+    return [
+        "### Hybrid Layout Probe",
+        f"- Selector: `{probe.get('selector')}`",
+        f"- Valid MO Candidates: `{probe.get('valid_candidate_count')}`",
+        f"- Selected Layout: `{probe.get('selected_layout')}`",
+        f"- Selected Score: `{probe.get('selected_score')}`",
+        f"- Qiskit Control Score: `{control.get('score')}`",
+        f"- Fallback Reason: `{probe.get('fallback_reason')}`",
+    ]
+
+
 def _render_training_summary(training_result: TrainingBridgeResult | None, *, label: str = "RL") -> list[str]:
     if training_result is None:
         return [f"### {label} Training Summary", "- Training: unavailable"]
@@ -399,6 +415,7 @@ def _render_case_detail(report: CampaignReport) -> list[str]:
         )
         lines.extend(_render_scenario_notes("RL_Only", case_report.rl_only_result))
         lines.extend(_render_scenario_notes("MO+RL", case_report.mo_rl_result))
+        lines.extend(_render_hybrid_layout_probe(case_report.hybrid_layout_probe))
         lines.extend(_render_training_summary(case_report.rl_only_training_result, label="RL_Only"))
         lines.extend(_render_training_summary(case_report.training_result, label="MO+RL"))
         if case_report.incidents:

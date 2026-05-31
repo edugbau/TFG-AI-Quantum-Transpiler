@@ -17,6 +17,10 @@ from src.integration.campaign_reporting import (
     write_campaign_outputs,
 )
 from src.integration.contracts import LayoutSelectionPolicy, ScenarioRequest
+from src.integration.hybrid_layout_probe import (
+    HYBRID_LAYOUT_PROBE_FILENAME,
+    select_hybrid_probe_layout as _select_hybrid_probe_layout,
+)
 from src.integration.mo_effort import resolve_effective_mo_settings
 from src.integration.routing_subgraph import build_path_expanded_subgraph
 from src.integration.scenarios import (
@@ -27,6 +31,7 @@ from src.integration.scenarios import (
     run_rl_only_scenario as _run_rl_only_scenario,
     select_mo_layout as _select_mo_layout,
 )
+from src.rl_module.routing_mask import RoutingMaskConfig
 
 
 def _default_train_case(**kwargs):
@@ -222,6 +227,50 @@ def _invoke_train_case(train_case_fn: Callable[..., object], **kwargs):
     return train_case_fn(**call_kwargs)
 
 
+def _is_hybrid_probe_campaign(campaign: Campaign) -> bool:
+    return campaign.config.mo_selection_modes == ("hybrid_probe",)
+
+
+def _build_hybrid_probe_mask_config(campaign: Campaign) -> RoutingMaskConfig:
+    return RoutingMaskConfig(
+        cycle_window=campaign.config.rl_cycle_window,
+        stagnation_patience=campaign.config.rl_stagnation_patience,
+        sabre_top_k=campaign.config.rl_sabre_top_k,
+    )
+
+
+def _hybrid_probe_payload(probe_result) -> dict:
+    if hasattr(probe_result, "to_dict"):
+        return probe_result.to_dict()
+    if isinstance(probe_result, dict):
+        return dict(probe_result)
+    raise ValueError("hybrid_probe selector must return a mapping or expose to_dict()")
+
+
+def _run_hybrid_probe(
+    select_hybrid_probe: Callable[..., object],
+    *,
+    campaign: Campaign,
+    circuit,
+    mo_result,
+    backend_bundle,
+    qiskit_initial_layout: list[int],
+    artifact_path: Path,
+):
+    return select_hybrid_probe(
+        circuit=circuit,
+        mo_result=mo_result,
+        backend_bundle=backend_bundle,
+        qiskit_initial_layout=list(qiskit_initial_layout),
+        seed=campaign.config.seed,
+        frontier_mode=campaign.config.rl_frontier_mode,
+        max_steps=campaign.config.rl_max_steps,
+        lookahead_window=campaign.config.rl_lookahead_window,
+        routing_mask_config=_build_hybrid_probe_mask_config(campaign),
+        artifact_path=artifact_path,
+    )
+
+
 def _resolve_case_backend_bundle(resolve_backend_bundle: Callable[..., object], campaign: Campaign, backend_name: str):
     if campaign.config.synthetic_topology is not None and _runner_accepts_kwarg(resolve_backend_bundle, "synthetic_topology"):
         return resolve_backend_bundle(backend_name, synthetic_topology=campaign.config.synthetic_topology)
@@ -308,6 +357,7 @@ def _copy_common_case_report(
     mo_only_result=None,
     training_result=None,
     mo_rl_result=None,
+    hybrid_layout_probe=None,
 ) -> CampaignCaseReport:
     return CampaignCaseReport(
         case=campaign_case,
@@ -318,6 +368,7 @@ def _copy_common_case_report(
         mo_rl_result=mo_rl_result,
         rl_only_training_result=rl_only_training_result,
         training_result=training_result,
+        hybrid_layout_probe=hybrid_layout_probe,
         incidents=list(incidents),
     )
 
@@ -362,6 +413,8 @@ def run_campaign(
     load_case_circuit: Callable[..., object] | None = None,
     run_baseline: Callable[..., object] = _run_baseline_scenario,
     run_mo_only: Callable[..., object] = _run_mo_only_scenario,
+    optimize_mo: Callable[..., object] = _optimize_mo_layouts,
+    select_hybrid_probe: Callable[..., object] = _select_hybrid_probe_layout,
     train_case_fn: Callable[..., object] | None = None,
     run_rl_only: Callable[..., object] = _run_rl_only_scenario,
     run_mo_rl: Callable[..., object] = _run_mo_rl_scenario,
@@ -483,7 +536,30 @@ def run_campaign(
                     case_report.status = "incomplete"
                     case_report.incidents.extend(case_report.rl_only_result.errors)
 
-            case_report.mo_only_result = _invoke_scenario_runner(run_mo_only, mo_only_request, circuit=circuit)
+            if _is_hybrid_probe_campaign(campaign):
+                mo_result = optimize_mo(
+                    mo_only_request,
+                    circuit=circuit,
+                    backend_bundle=backend_bundle,
+                )
+                probe_result = _run_hybrid_probe(
+                    select_hybrid_probe,
+                    campaign=campaign,
+                    circuit=circuit,
+                    mo_result=mo_result,
+                    backend_bundle=backend_bundle,
+                    qiskit_initial_layout=qiskit_initial_layout,
+                    artifact_path=case_output_dir / HYBRID_LAYOUT_PROBE_FILENAME,
+                )
+                case_report.hybrid_layout_probe = _hybrid_probe_payload(probe_result)
+                case_report.mo_only_result = _invoke_scenario_runner(
+                    run_mo_only,
+                    mo_only_request,
+                    circuit=circuit,
+                    injected_layout=list(probe_result.selected_layout),
+                )
+            else:
+                case_report.mo_only_result = _invoke_scenario_runner(run_mo_only, mo_only_request, circuit=circuit)
             if not case_report.mo_only_result.success:
                 case_report.status = "failed"
                 case_report.incidents.extend(case_report.mo_only_result.errors)
@@ -613,6 +689,7 @@ def run_campaign_seed_group(
     run_baseline: Callable[..., object] = _run_baseline_scenario,
     optimize_mo: Callable[..., object] = _optimize_mo_layouts,
     select_mo_layout: Callable[..., list[int]] = _select_mo_layout,
+    select_hybrid_probe: Callable[..., object] = _select_hybrid_probe_layout,
     run_mo_only: Callable[..., object] = _run_mo_only_scenario,
     train_case_fn: Callable[..., object] | None = None,
     run_rl_only: Callable[..., object] = _run_rl_only_scenario,
@@ -758,6 +835,7 @@ def run_campaign_seed_group(
             continue
 
         selected_layouts: dict[str, tuple[ScenarioRequest, tuple[int, ...]]] = {}
+        hybrid_probe_results: dict[str, dict] = {}
         for campaign in normalized_campaigns:
             mo_only_request = _build_scenario_request(
                 campaign=campaign,
@@ -766,12 +844,25 @@ def run_campaign_seed_group(
                 effective_mo_settings=effective_mo_settings,
             )
             try:
-                selected_layout = select_mo_layout(
-                    mo_only_request,
-                    mo_result,
-                    circuit=circuit,
-                    backend_bundle=backend_bundle,
-                )
+                if _is_hybrid_probe_campaign(campaign):
+                    probe_result = _run_hybrid_probe(
+                        select_hybrid_probe,
+                        campaign=campaign,
+                        circuit=circuit,
+                        mo_result=mo_result,
+                        backend_bundle=backend_bundle,
+                        qiskit_initial_layout=qiskit_initial_layout,
+                        artifact_path=shared_case_output_dir / HYBRID_LAYOUT_PROBE_FILENAME,
+                    )
+                    hybrid_probe_results[campaign.campaign_id] = _hybrid_probe_payload(probe_result)
+                    selected_layout = probe_result.selected_layout
+                else:
+                    selected_layout = select_mo_layout(
+                        mo_only_request,
+                        mo_result,
+                        circuit=circuit,
+                        backend_bundle=backend_bundle,
+                    )
             except Exception as exc:
                 child_case_reports[campaign.campaign_id].append(
                     _copy_common_case_report(
@@ -872,6 +963,7 @@ def run_campaign_seed_group(
                         mo_only_result=mo_only_result,
                         training_result=training_result,
                         mo_rl_result=mo_rl_result,
+                        hybrid_layout_probe=hybrid_probe_results.get(campaign.campaign_id),
                         incidents=branch_incidents,
                     )
                 )

@@ -1954,3 +1954,199 @@ def test_run_campaign_seed_group_reuses_common_work_and_deduplicates_layout_bran
     ).read_text(encoding="utf-8")
     assert str(tmp_path) not in child_json
     assert "campaigns/campaign-matrix__seed_42__shared/cases/ghz_3__fake_torino/layouts/layout_2_1_0" in child_json
+
+
+def test_run_campaign_hybrid_probe_reuses_selected_layout_for_mo_only_training_and_mo_rl(tmp_path) -> None:
+    from src.integration.campaign_runner import run_campaign
+
+    base_campaign = _build_campaign()
+    campaign = Campaign.from_config(
+        campaign_id="campaign-hybrid-probe",
+        config=replace(
+            base_campaign.config,
+            mo_selection_modes=("hybrid_probe",),
+        ),
+    )
+    case = campaign.build_cases()[0]
+    circuit = _make_case_circuit()
+    selected_layout = [2, 0, 1]
+    mo_only_layouts = []
+    train_layouts = []
+    mo_rl_layouts = []
+    probe_calls = []
+
+    def fake_train_case(*, initial_layout=None, case_output_dir, **kwargs):
+        del kwargs
+        train_layouts.append(list(initial_layout))
+        output_path = Path(case_output_dir)
+        artifact_path = output_path / "training" / "models" / "run-001" / "best_model.zip"
+        return TrainingBridgeResult(
+            status="completed",
+            selected_artifact_path=artifact_path,
+            best_model_path=artifact_path,
+            final_model_path=artifact_path.parent / "final_model.zip",
+            run_model_dir=artifact_path.parent,
+            run_log_dir=output_path / "training" / "logs" / "run-001",
+            effective_training_config=TrainingConfigSummary(
+                algorithm="MaskablePPO",
+                total_timesteps=5000,
+                frontier_mode="dag",
+                lookahead_window=12,
+                max_steps=256,
+                seed=42,
+            ),
+        )
+
+    def fake_probe(**kwargs):
+        probe_calls.append(kwargs)
+        payload = {
+            "selector": "hybrid_probe",
+            "valid_candidate_count": 1,
+            "selected_layout": selected_layout,
+            "selected_score": [4.0, 8, 1],
+            "qiskit_control": {"score": [5.0, 9, 2]},
+            "fallback_reason": None,
+        }
+        return SimpleNamespace(selected_layout=selected_layout, to_dict=lambda: payload)
+
+    report = run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: circuit,
+        run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
+        optimize_mo=lambda request, *, circuit, backend_bundle: SimpleNamespace(),
+        select_hybrid_probe=fake_probe,
+        run_mo_only=lambda request, *, circuit, injected_layout: mo_only_layouts.append(list(injected_layout))
+        or ScenarioResult(
+            scenario_name="MO_Only",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(injected_layout),
+            transpilation_metrics=_build_metrics(90),
+        ),
+        train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, injected_layout, **kwargs: _build_result(
+            "RL_Only",
+            case,
+            metrics=_build_metrics(85),
+        ),
+        run_mo_rl=lambda request, *, injected_layout, **kwargs: mo_rl_layouts.append(list(injected_layout))
+        or ScenarioResult(
+            scenario_name="MO+RL",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(injected_layout),
+            transpilation_metrics=_build_metrics(80),
+        ),
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend=SimpleNamespace(num_qubits=3),
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+        write_outputs=lambda **kwargs: None,
+    )
+
+    assert mo_only_layouts == [selected_layout]
+    assert train_layouts == [[0, 1, 2], selected_layout]
+    assert mo_rl_layouts == [selected_layout]
+    assert probe_calls[0]["artifact_path"].name == "hybrid_layout_probe.json"
+    assert report.case_reports[0].hybrid_layout_probe["selected_score"] == [4.0, 8, 1]
+
+
+def test_run_campaign_seed_group_uses_hybrid_probe_layout_and_reports_diagnostics(tmp_path) -> None:
+    from src.integration.campaign_matrix import expand_campaign_matrix
+    from src.integration.campaign_runner import run_campaign_seed_group
+
+    base_campaign = _build_campaign()
+    matrix_campaign = Campaign.from_config(
+        campaign_id="campaign-matrix",
+        config=replace(
+            base_campaign.config,
+            seeds=(42,),
+            mo_selection_modes=("hybrid_probe",),
+        ),
+    )
+    children = expand_campaign_matrix(matrix_campaign)
+    case = children[0].build_cases()[0]
+    selected_layout = [2, 0, 1]
+    probe_calls = []
+    mo_only_layouts = []
+    train_layouts = []
+    mo_rl_layouts = []
+
+    class FakeMoResult:
+        pareto_layouts = [[2, 0, 1]]
+        pareto_fitness = np.array([[8.0, 5.0]])
+        objective_names = ["depth", "cnot_count"]
+
+        def to_dict(self):
+            return {"algorithm_name": "fake_nsga2", "n_pareto_solutions": 1}
+
+    def fake_probe(**kwargs):
+        probe_calls.append(kwargs)
+        payload = {
+            "selector": "hybrid_probe",
+            "valid_candidate_count": 1,
+            "selected_layout": selected_layout,
+            "selected_score": [4.0, 8, 1],
+            "qiskit_control": {"score": [5.0, 9, 2]},
+            "fallback_reason": None,
+        }
+        return SimpleNamespace(selected_layout=selected_layout, to_dict=lambda: payload)
+
+    def fake_train_case(*, initial_layout=None, **kwargs):
+        del kwargs
+        train_layouts.append(list(initial_layout))
+        return _build_training_result(case)
+
+    reports = run_campaign_seed_group(
+        children,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
+        run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
+        optimize_mo=lambda request, *, circuit, backend_bundle: FakeMoResult(),
+        select_hybrid_probe=fake_probe,
+        run_mo_only=lambda request, *, injected_layout, **kwargs: mo_only_layouts.append(list(injected_layout))
+        or ScenarioResult(
+            scenario_name="MO_Only",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(injected_layout),
+            transpilation_metrics=_build_metrics(90),
+        ),
+        train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, injected_layout, **kwargs: _build_result(
+            "RL_Only",
+            case,
+            metrics=_build_metrics(85),
+        ),
+        run_mo_rl=lambda request, *, injected_layout, **kwargs: mo_rl_layouts.append(list(injected_layout))
+        or ScenarioResult(
+            scenario_name="MO+RL",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(injected_layout),
+            transpilation_metrics=_build_metrics(80),
+        ),
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend=SimpleNamespace(num_qubits=3),
+            coupling_edges=[(0, 1), (1, 2)],
+        ),
+        write_outputs=lambda **kwargs: None,
+    )
+
+    report = reports["campaign-matrix__seed_42__hybrid_probe"]
+    assert mo_only_layouts == [selected_layout]
+    assert train_layouts == [[0, 1, 2], selected_layout]
+    assert mo_rl_layouts == [selected_layout]
+    assert probe_calls[0]["artifact_path"].name == "hybrid_layout_probe.json"
+    assert report.case_reports[0].hybrid_layout_probe["selected_score"] == [4.0, 8, 1]

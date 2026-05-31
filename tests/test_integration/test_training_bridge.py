@@ -238,6 +238,50 @@ def test_train_case_enables_post_routing_selector_and_keeps_final_fallback(monke
     assert result.post_routing_selection["has_valid_solution"] is False
 
 
+def test_train_case_scales_post_routing_patience_for_long_campaign(monkeypatch, tmp_path) -> None:
+    config = replace(_build_campaign_config(), rl_total_timesteps=2_000_000)
+    case = _build_campaign_case()
+    case_output_dir = tmp_path / "cases" / case.case_id
+    captured_kwargs = {}
+
+    class DummyAgent:
+        run_model_dir = case_output_dir / "training" / "models" / "run-001"
+        run_log_dir = case_output_dir / "training" / "logs" / "run-001"
+        best_model_path = None
+        last_model_path = run_model_dir / "final_routing_MaskablePPO.zip"
+
+    def fake_setup_training_pipeline(**kwargs):
+        captured_kwargs.update(kwargs)
+        DummyAgent.run_model_dir.mkdir(parents=True)
+        DummyAgent.run_log_dir.mkdir(parents=True)
+        DummyAgent.last_model_path.write_bytes(b"final")
+        return DummyAgent()
+
+    monkeypatch.setattr("src.integration.training_bridge.setup_training_pipeline", fake_setup_training_pipeline)
+
+    train_case(
+        campaign_case=case,
+        campaign_config=config,
+        target_circuit=QuantumCircuit(3),
+        coupling_map=[(0, 1), (1, 2)],
+        case_output_dir=case_output_dir,
+        initial_layout=[0, 1, 2],
+        backend_bundle=SimpleNamespace(backend=object(), backend_name="fake_backend"),
+    )
+    selector = captured_kwargs["extra_callback_factories"][0](
+        run_model_dir=DummyAgent.run_model_dir,
+        run_log_dir=DummyAgent.run_log_dir,
+    )
+
+    assert selector.max_no_improvement_evals == 80
+    assert captured_kwargs["evaluation_metadata"]["checkpoint_selector"]["early_stopping"] == {
+        "min_evals": 50,
+        "max_no_improvement_evals": 80,
+        "patience_fraction": 0.2,
+        "starts_after_first_valid_solution": True,
+    }
+
+
 def test_train_case_enables_unmasked_post_routing_selector_for_ppo_campaign(monkeypatch, tmp_path) -> None:
     config = replace(_build_campaign_config(), rl_algorithm="PPO")
     case = _build_campaign_case()

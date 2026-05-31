@@ -11,6 +11,7 @@ from uuid import uuid4
 from src.integration.campaign_contracts import Campaign, CampaignCircuitSpec, CampaignConfig
 from src.integration.campaign_matrix import (
     ALL_MO_SELECTION_MODES,
+    SUPPORTED_MO_SELECTION_MODES,
     is_matrix_campaign_config,
     run_campaign_matrix,
 )
@@ -34,7 +35,7 @@ _BACKENDS = ("fake_torino", "fake_brisbane")
 _RL_ALGORITHMS = ("MaskablePPO", "PPO", "DQN")
 _FRONTIER_MODES = ("dag", "sequential")
 _LAYOUT_POLICIES = tuple(policy.value for policy in LayoutSelectionPolicy)
-_MO_SELECTION_MODE_CHOICES = ("all", "compromise", "best_depth", "best_cnot_count", "best_on_objective")
+_MO_SELECTION_MODE_CHOICES = ("all", *SUPPORTED_MO_SELECTION_MODES, "best_on_objective")
 
 _DEFAULT_RL_ALGORITHM = "MaskablePPO"
 _DEFAULT_RL_TIMESTEPS = 5000
@@ -653,11 +654,11 @@ def _normalize_mo_selection_modes(value: object, *, field_name: str = "mo.select
     if "all" in raw_modes:
         raise ValueError(f"{field_name} cannot combine all with explicit modes")
     normalized: list[str] = []
-    valid_modes = set(ALL_MO_SELECTION_MODES)
+    valid_modes = set(SUPPORTED_MO_SELECTION_MODES)
     for mode in raw_modes:
         if mode not in valid_modes:
             raise ValueError(
-                f"{field_name} has invalid value {mode!r}; choose all, compromise, best_depth, or best_cnot_count"
+                f"{field_name} has invalid value {mode!r}; choose all, compromise, best_depth, best_cnot_count, or hybrid_probe"
             )
         if mode not in normalized:
             normalized.append(mode)
@@ -679,6 +680,8 @@ def _policy_for_selection_mode(mode: str) -> tuple[LayoutSelectionPolicy, str | 
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "depth"
     if mode == "best_cnot_count":
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "cnot_count"
+    if mode == "hybrid_probe":
+        return LayoutSelectionPolicy.COMPROMISE, None
     raise ValueError(f"Unsupported MO selection mode: {mode}")
 
 

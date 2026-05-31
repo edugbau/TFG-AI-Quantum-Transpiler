@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,24 @@ logger = logging.getLogger(__name__)
 
 POST_ROUTING_SELECTION_FILENAME = "post_routing_selection.json"
 POST_ROUTING_SCORE_FIELDS = ("trans_cnot_equivalent", "trans_depth", "total_swaps")
+DEFAULT_POST_ROUTING_MIN_EVALS = 50
+DEFAULT_POST_ROUTING_MAX_NO_IMPROVEMENT_EVALS = 20
+DEFAULT_POST_ROUTING_PATIENCE_FRACTION = 0.2
+
+
+def resolve_post_routing_max_no_improvement_evals(
+    *,
+    total_timesteps: int,
+    eval_freq: int,
+) -> int:
+    if total_timesteps <= 0:
+        raise ValueError("total_timesteps must be greater than zero")
+    if eval_freq <= 0:
+        raise ValueError("eval_freq must be greater than zero")
+    proportional_patience = math.ceil(
+        total_timesteps * DEFAULT_POST_ROUTING_PATIENCE_FRACTION / eval_freq
+    )
+    return max(DEFAULT_POST_ROUTING_MAX_NO_IMPROVEMENT_EVALS, proportional_patience)
 
 
 class PostRoutingCheckpointSelector(BaseCallback):
@@ -37,8 +56,8 @@ class PostRoutingCheckpointSelector(BaseCallback):
         routing_mask_config,
         run_model_dir: str | Path,
         eval_freq: int = 5_000,
-        min_evals: int = 50,
-        max_no_improvement_evals: int = 20,
+        min_evals: int = DEFAULT_POST_ROUTING_MIN_EVALS,
+        max_no_improvement_evals: int = DEFAULT_POST_ROUTING_MAX_NO_IMPROVEMENT_EVALS,
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose=verbose)

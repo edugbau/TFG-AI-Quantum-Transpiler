@@ -20,6 +20,7 @@ from src.integration.contracts import LayoutSelectionPolicy
 
 
 ALL_MO_SELECTION_MODES = ("compromise", "best_depth", "best_cnot_count")
+SUPPORTED_MO_SELECTION_MODES = (*ALL_MO_SELECTION_MODES, "hybrid_probe")
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +343,8 @@ def _policy_for_selection_mode(mode: str) -> tuple[LayoutSelectionPolicy, str | 
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "depth"
     if mode == "best_cnot_count":
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "cnot_count"
+    if mode == "hybrid_probe":
+        return LayoutSelectionPolicy.COMPROMISE, None
     raise ValueError(f"Unsupported MO selection mode: {mode}")
 
 

@@ -105,6 +105,22 @@ def test_expand_campaign_matrix_builds_seed_by_mo_mode_children() -> None:
     assert children[2].config.mo_objective_name == "cnot_count"
 
 
+def test_expand_campaign_matrix_supports_opt_in_hybrid_probe_without_changing_all_alias() -> None:
+    campaign = Campaign.from_config(
+        campaign_id="campaign-matrix",
+        config=_build_config(seeds=(1,), mo_selection_modes=("hybrid_probe",)),
+    )
+
+    children = expand_campaign_matrix(campaign)
+
+    assert ALL_MO_SELECTION_MODES == ("compromise", "best_depth", "best_cnot_count")
+    assert [child.campaign_id for child in children] == [
+        "campaign-matrix__seed_1__hybrid_probe",
+    ]
+    assert children[0].config.mo_selection_modes == ("hybrid_probe",)
+    assert children[0].config.layout_policy is LayoutSelectionPolicy.COMPROMISE
+
+
 def test_group_children_by_seed_keeps_mo_modes_together() -> None:
     campaign = Campaign.from_config(campaign_id="campaign-matrix", config=_build_config())
 

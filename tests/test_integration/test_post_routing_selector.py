@@ -3,7 +3,10 @@ from types import SimpleNamespace
 from qiskit import QuantumCircuit
 
 from src.integration.contracts import RoutingEpisodeSummary
-from src.integration.post_routing_selector import PostRoutingCheckpointSelector
+from src.integration.post_routing_selector import (
+    PostRoutingCheckpointSelector,
+    resolve_post_routing_max_no_improvement_evals,
+)
 
 
 class DummyModel:
@@ -12,6 +15,13 @@ class DummyModel:
 
     def save(self, path: str) -> None:
         self.saved_paths.append(path)
+
+
+def test_post_routing_patience_keeps_minimum_for_short_campaigns() -> None:
+    assert resolve_post_routing_max_no_improvement_evals(
+        total_timesteps=500_000,
+        eval_freq=5_000,
+    ) == 20
 
 
 def _selector(tmp_path, *, min_evals=50, max_no_improvement_evals=20):

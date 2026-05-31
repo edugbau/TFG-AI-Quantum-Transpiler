@@ -10,7 +10,9 @@ from src.integration.synthetic_topology import SyntheticTopologySpec, validate_s
 _ALLOWED_CASE_RESULT_STATUSES = frozenset({"completed", "failed", "incomplete", "cancelled"})
 _ALLOWED_CAMPAIGN_MODES = frozenset({"default", "advanced"})
 _ALLOWED_MO_EFFORT_MODES = frozenset({"auto", "custom"})
-_ALLOWED_MO_SELECTION_MODES = frozenset({"compromise", "best_depth", "best_cnot_count", "best_on_objective"})
+_ALLOWED_MO_SELECTION_MODES = frozenset(
+    {"compromise", "best_depth", "best_cnot_count", "best_on_objective", "hybrid_probe"}
+)
 _ALLOWED_TOPOLOGY_SOURCES = frozenset({"backend", "synthetic"})
 _ALLOWED_CAMPAIGN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled", "interrupted"})
 _TERMINAL_CAMPAIGN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
@@ -171,6 +173,8 @@ class CampaignConfig:
             raise ValueError("CampaignConfig seed cannot be negative")
         normalized_seeds = self._normalize_seeds()
         normalized_mo_selection_modes = self._normalize_mo_selection_modes()
+        if "hybrid_probe" in normalized_mo_selection_modes and normalized_rl_algorithm != "MaskablePPO":
+            raise ValueError("CampaignConfig hybrid_probe requires rl_algorithm='MaskablePPO'")
         if self.parallel_workers <= 0:
             raise ValueError("CampaignConfig parallel_workers must be greater than zero")
         if not isinstance(self.mo_use_quick, bool):
@@ -256,7 +260,7 @@ class CampaignConfig:
             if normalized_mode not in _ALLOWED_MO_SELECTION_MODES:
                 raise ValueError(
                     "CampaignConfig mo_selection_modes must contain only "
-                    "compromise, best_depth, best_cnot_count, or best_on_objective"
+                    "compromise, best_depth, best_cnot_count, best_on_objective, or hybrid_probe"
                 )
             if normalized_mode not in normalized:
                 normalized.append(normalized_mode)

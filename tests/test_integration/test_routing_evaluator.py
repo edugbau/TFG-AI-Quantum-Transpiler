@@ -608,6 +608,45 @@ def test_evaluate_routing_episode_records_exact_executed_gate_trace(monkeypatch)
     assert summary.executed_gate_trace == [("h", 0, 0), ("cx", 0, 1)]
 
 
+def test_evaluate_routing_episode_uses_injected_action_selector_without_agent(monkeypatch) -> None:
+    from src.integration import routing_evaluator
+
+    selected_actions = []
+
+    class FakeEnv:
+        def __init__(self, **kwargs) -> None:
+            self.current_layout = [0, 1]
+            self.total_swaps = 0
+
+        def reset(self, *, seed=None, options=None):
+            return {"obs": "reset"}, {"already_completed_at_reset": False}
+
+        def step(self, action):
+            selected_actions.append(action)
+            return {"obs": "done"}, 0.0, True, False, {"gates_executed": 1}
+
+    monkeypatch.setattr(
+        routing_evaluator,
+        "_create_routing_env",
+        lambda **kwargs: FakeEnv(**kwargs),
+    )
+
+    summary = routing_evaluator.evaluate_routing_episode(
+        circuit=QuantumCircuit(2),
+        coupling_edges=[(0, 1)],
+        agent=None,
+        seed=5,
+        initial_layout=[0, 1],
+        frontier_mode="dag",
+        max_steps=3,
+        lookahead_window=2,
+        action_selector=lambda env, obs: 7,
+    )
+
+    assert selected_actions == [7]
+    assert summary.completed is True
+
+
 def test_build_routed_circuit_replays_swap_trace_into_physical_circuit() -> None:
     from src.integration.routing_evaluator import build_routed_circuit
 

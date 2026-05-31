@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from typing import Callable
 
 from qiskit import QuantumCircuit
 import numpy as np
@@ -275,6 +276,7 @@ def evaluate_routing_episode(
     masked=False,
     mask_semantics=None,
     routing_mask_config=None,
+    action_selector: Callable[[object, object], object] | None = None,
 ) -> RoutingEpisodeSummary:
     env = _create_routing_env(
         circuit=circuit,
@@ -303,7 +305,9 @@ def evaluate_routing_episode(
         truncation_reason = None
 
         while not (terminated or truncated):
-            if masked:
+            if action_selector is not None:
+                action = action_selector(env, obs)
+            elif masked:
                 action, _ = agent.predict(
                     obs,
                     action_masks=env.action_masks(),

@@ -10,6 +10,49 @@ from src.integration.mo_effort import MIN_CUSTOM_MO_POPULATION_SIZE
 from src.integration.synthetic_topology import SyntheticTopologySpec
 
 
+def test_campaign_accepts_hybrid_probe_for_maskable_ppo() -> None:
+    config = CampaignConfig(
+        circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        backend_names=["fake_torino"],
+        rl_algorithm="MaskablePPO",
+        rl_total_timesteps=5000,
+        rl_frontier_mode="dag",
+        rl_lookahead_window=10,
+        rl_max_steps=200,
+        seed=42,
+        mo_use_quick=True,
+        mo_population_size=30,
+        mo_n_generations=50,
+        layout_policy=LayoutSelectionPolicy.COMPROMISE,
+        mo_selection_modes=("hybrid_probe",),
+    )
+
+    assert config.mo_selection_modes == ("hybrid_probe",)
+
+
+def test_campaign_rejects_hybrid_probe_for_unmasked_algorithm() -> None:
+    try:
+        CampaignConfig(
+            circuit_specs=[CampaignCircuitSpec(family="ghz", num_qubits=3)],
+            backend_names=["fake_torino"],
+            rl_algorithm="PPO",
+            rl_total_timesteps=5000,
+            rl_frontier_mode="dag",
+            rl_lookahead_window=10,
+            rl_max_steps=200,
+            seed=42,
+            mo_use_quick=True,
+            mo_population_size=30,
+            mo_n_generations=50,
+            layout_policy=LayoutSelectionPolicy.COMPROMISE,
+            mo_selection_modes=("hybrid_probe",),
+        )
+    except ValueError as exc:
+        assert "hybrid_probe requires" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for unmasked hybrid_probe campaign")
+
+
 def test_campaign_builds_stable_cases_from_selected_circuits_and_backends() -> None:
     config = CampaignConfig(
         circuit_specs=[

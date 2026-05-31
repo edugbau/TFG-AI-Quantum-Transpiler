@@ -5,7 +5,7 @@
 ## Mapa de lectura
 
 1. `contracts.py` y `campaign_contracts.py` definen la superficie publica.
-2. `scenarios.py`, `routing_evaluator.py` y `rl_model_contract.py` cubren la capa de Scenario.
+2. `scenarios.py`, `routing_evaluator.py`, `hybrid_layout_probe.py` y `rl_model_contract.py` cubren la capa de Scenario y el handoff MO -> RL.
 3. `training_bridge.py`, `campaign_runner.py` y `campaign_reporting.py` cubren la capa de Campaign.
 4. `campaign_cli.py` y `runner.py` exponen la entrada de usuario.
 
@@ -62,7 +62,7 @@ Toma un `OptimizationResult` de `mo_module` y lo reduce a un layout unico. La de
 Resuelve el contrato de un checkpoint RL.
 
 - Lee `run_metadata.json` cuando existe.
-- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo y `v3` anade anti-ciclo, truncacion por estancamiento y top-k SABRE opcional con fallbacks no vacios.
+- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo, `v3` anade anti-ciclo, truncacion por estancamiento y top-k SABRE opcional con fallbacks no vacios, y `v4` incorpora decay SABRE.
 - Si no hay metadata, se cae a defaults legacy para no romper checkpoints PPO/DQN antiguos.
 
 ### `routing_evaluator.py`
@@ -70,8 +70,22 @@ Resuelve el contrato de un checkpoint RL.
 Ejecuta un episodio RL de routing y, si el episodio completa, reconstruye el circuito ruteado.
 
 - `evaluate_routing_episode()` devuelve `RoutingEpisodeSummary`.
+- Su selector de accion opcional permite reutilizar el mismo loop con una politica determinista.
 - `build_routed_circuit()` replays de forma prioritaria `executed_gate_trace` y usa `swap_trace` para materializar swaps.
 - El resultado final se vuelve comparable con Qiskit cuando el routing termina.
+
+### `hybrid_layout_probe.py`
+
+Implementa el modo Campaign opt-in `hybrid_probe`.
+
+- deduplica layouts del frente de Pareto conservando el primer indice;
+- deriva el routing subgraph actual para cada candidato;
+- ejecuta una sonda SABRE-like determinista que prioriza desbloqueos, minimiza el scoring v4 y desempata por indice de accion;
+- reconstruye cada solucion completa y calcula metricas post-routing con el backend real;
+- selecciona layouts MO por `(CNOT-equivalent, depth, swaps)`;
+- evalua el layout inicial de Qiskit como control diagnostico, excluido de la seleccion;
+- cae explicitamente a `compromise` si ninguna sonda MO completa el routing;
+- persiste `hybrid_layout_probe.json`.
 
 ### `scenarios.py`
 
@@ -107,6 +121,7 @@ Es el seam entre Campaign e `src.rl_module.training`.
 - pasa el layout seleccionado por MO como `initial_layout`;
 - selecciona `best_model.zip` con la tupla post-routing `(cnot_equivalent, depth, swaps)` y cae a `final_model.zip` si aun no existe una solucion valida.
 - tolera episodios incompletos durante la busqueda inicial sin consumir paciencia de early stopping.
+- tras la primera solucion, escala la paciencia post-routing al maximo entre 20 evaluaciones y el 20% del presupuesto solicitado para no cortar demasiado pronto campañas largas.
 
 ### `campaign_runner.py`
 
@@ -125,6 +140,8 @@ Tambien expone el runner interno agrupado por seed usado por Campaign matrix. Pa
 - deduplica layouts fisicos equivalentes;
 - pasa cada layout seleccionado como `initial_layout` al training hibrido y como `injected_layout` a `MO+RL`.
 
+Cuando una hija usa `hybrid_probe`, el layout elegido por la sonda tambien se inyecta en `MO_Only`, training hibrido y `MO+RL`. El modo requiere `MaskablePPO`. El alias batch `all` conserva exclusivamente los tres modos historicos: `compromise`, `best_depth` y `best_cnot_count`.
+
 Los Scenarios aislados mantienen su fallback. Dentro del runner agrupado, `MO+RL` siempre recibe un layout inyectado y no vuelve a ejecutar MO.
 
 ### `campaign_reporting.py`
@@ -134,6 +151,10 @@ Construye la salida publica de la Campaign.
 - `summary.md` como Summary Document;
 - `campaign.json` como salida estructurada;
 - `cases/<case>/result.json` para cada case.
+- `cases/<case>/hybrid_layout_probe.json` para cases ejecutados con `hybrid_probe`.
+
+En Campaign matrix, la sonda se persiste en el directorio compartido de la seed:
+`runs/<campaign_id>__seed_<seed>__shared/cases/<case>/hybrid_layout_probe.json`.
 
 Tambien agrega metricas comparables, incidencias y notas del training. Un Campaign o un case puede terminar como `completed` y aun asi no ser completamente comparable; eso se refleja en los agregados y en los incidents.
 

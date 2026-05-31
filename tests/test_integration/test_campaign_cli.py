@@ -217,6 +217,31 @@ def test_load_campaign_batch_accepts_multi_seed_all_mo_selection_modes(tmp_path)
     assert config.parallel_workers == 2
 
 
+def test_load_campaign_batch_accepts_explicit_hybrid_probe_without_changing_all_alias(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-3-hybrid-probe",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                    "backend_names": ["fake_torino"],
+                    "mode": "advanced",
+                    "rl": {"algorithm": "MaskablePPO"},
+                    "mo": {"selection_modes": ["hybrid_probe"]},
+                }
+            ]
+        },
+    )
+
+    config = load_campaign_batch(batch_path)[0].config
+
+    assert config.mo_selection_modes == ("hybrid_probe",)
+    assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
+
+
 def test_load_campaign_batch_preserves_independent_campaign_configs(tmp_path) -> None:
     from src.integration.campaign_cli import load_campaign_batch
 
