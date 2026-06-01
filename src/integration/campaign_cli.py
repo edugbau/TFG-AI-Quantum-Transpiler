@@ -331,6 +331,9 @@ def _prompt_mo_selection_modes(input_fn, output_fn) -> tuple[str, ...]:
                 allow_multiple=False,
             )[0]
             return (_selection_mode_from_objective(objective_name),)
+        if "rl_guided" in values and len(values) != 1:
+            output_fn("Invalid selection. rl_guided must be selected by itself.")
+            continue
         return tuple(values)
 
 
@@ -396,6 +399,14 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         )
         mo_n_generations = _prompt_int(input_fn, output_fn, prompt="MO generations: ", minimum=1)
     mo_selection_modes = _prompt_mo_selection_modes(input_fn, output_fn)
+    rl_finetune_timesteps = None
+    if mo_selection_modes == ("rl_guided",):
+        rl_finetune_timesteps = _prompt_int(
+            input_fn,
+            output_fn,
+            prompt="RL fine-tune timesteps: ",
+            minimum=1,
+        )
     layout_policy, mo_objective_name = _policy_for_selection_mode(mo_selection_modes[0])
     parallel_workers = 1
     if len(seeds) * len(mo_selection_modes) > 1:
@@ -413,6 +424,7 @@ def _collect_advanced_config(input_fn, output_fn, *, circuit_specs: tuple[Campai
         rl_clip_range=_DEFAULT_RL_CLIP_RANGE,
         rl_target_kl=_DEFAULT_RL_TARGET_KL,
         rl_n_eval_episodes=_DEFAULT_RL_N_EVAL_EPISODES,
+        rl_finetune_timesteps=rl_finetune_timesteps,
         rl_sabre_top_k=rl_sabre_top_k,
         seed=seeds[0],
         seeds=seeds,
@@ -467,7 +479,8 @@ def _print_confirmation_summary(output_fn, *, campaign: Campaign) -> None:
         f"frontier_mode={config.rl_frontier_mode}, lookahead={config.rl_lookahead_window}, "
         f"max_steps={config.rl_max_steps}, learning_rate={config.rl_learning_rate}, "
         f"clip_range={config.rl_clip_range}, target_kl={config.rl_target_kl}, "
-        f"n_eval_episodes={config.rl_n_eval_episodes}, cycle_window={config.rl_cycle_window}, "
+        f"n_eval_episodes={config.rl_n_eval_episodes}, finetune_timesteps={config.rl_finetune_timesteps}, "
+        f"cycle_window={config.rl_cycle_window}, "
         f"stagnation_patience={config.rl_stagnation_patience}, sabre_top_k={config.rl_sabre_top_k}, "
         f"seed={config.seed}"
     )
@@ -658,7 +671,7 @@ def _normalize_mo_selection_modes(value: object, *, field_name: str = "mo.select
     for mode in raw_modes:
         if mode not in valid_modes:
             raise ValueError(
-                f"{field_name} has invalid value {mode!r}; choose all, compromise, best_depth, best_cnot_count, or hybrid_probe"
+                f"{field_name} has invalid value {mode!r}; choose all, compromise, best_depth, best_cnot_count, hybrid_probe, or rl_guided"
             )
         if mode not in normalized:
             normalized.append(mode)
@@ -680,7 +693,7 @@ def _policy_for_selection_mode(mode: str) -> tuple[LayoutSelectionPolicy, str | 
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "depth"
     if mode == "best_cnot_count":
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "cnot_count"
-    if mode == "hybrid_probe":
+    if mode in {"hybrid_probe", "rl_guided"}:
         return LayoutSelectionPolicy.COMPROMISE, None
     raise ValueError(f"Unsupported MO selection mode: {mode}")
 
@@ -776,6 +789,12 @@ def _build_batch_campaign_config(entry: dict[str, Any]) -> CampaignConfig:
             rl,
             "n_eval_episodes",
             base_config.rl_n_eval_episodes,
+            minimum=1,
+        ),
+        rl_finetune_timesteps=_optional_nullable_int(
+            rl,
+            "finetune_timesteps",
+            base_config.rl_finetune_timesteps,
             minimum=1,
         ),
         rl_cycle_window=_optional_int(

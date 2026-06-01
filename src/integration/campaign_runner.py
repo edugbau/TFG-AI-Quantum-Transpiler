@@ -22,6 +22,10 @@ from src.integration.hybrid_layout_probe import (
     select_hybrid_probe_layout as _select_hybrid_probe_layout,
 )
 from src.integration.mo_effort import resolve_effective_mo_settings
+from src.integration.rl_guided_mo import (
+    RL_GUIDED_MO_FILENAME,
+    optimize_rl_guided_layouts as _optimize_rl_guided_layouts,
+)
 from src.integration.routing_subgraph import build_path_expanded_subgraph
 from src.integration.scenarios import (
     _resolve_qiskit_initial_layout_for_rl_only,
@@ -244,15 +248,23 @@ def _invoke_scenario_runner(run_scenario: Callable[..., object], request: Scenar
 
 def _invoke_train_case(train_case_fn: Callable[..., object], **kwargs):
     call_kwargs = dict(kwargs)
-    if not _runner_accepts_kwarg(train_case_fn, "verbose"):
-        call_kwargs.pop("verbose", None)
-    if not _runner_accepts_kwarg(train_case_fn, "backend_bundle"):
-        call_kwargs.pop("backend_bundle", None)
+    for optional_kwarg in (
+        "verbose",
+        "backend_bundle",
+        "initial_model_path",
+        "total_timesteps_override",
+    ):
+        if not _runner_accepts_kwarg(train_case_fn, optional_kwarg):
+            call_kwargs.pop(optional_kwarg, None)
     return train_case_fn(**call_kwargs)
 
 
 def _is_hybrid_probe_campaign(campaign: Campaign) -> bool:
     return campaign.config.mo_selection_modes == ("hybrid_probe",)
+
+
+def _is_rl_guided_campaign(campaign: Campaign) -> bool:
+    return campaign.config.mo_selection_modes == ("rl_guided",)
 
 
 def _build_hybrid_probe_mask_config(campaign: Campaign) -> RoutingMaskConfig:
@@ -293,6 +305,37 @@ def _run_hybrid_probe(
         routing_mask_config=_build_hybrid_probe_mask_config(campaign),
         artifact_path=artifact_path,
     )
+
+
+def _run_rl_guided_mo(
+    optimize_rl_guided: Callable[..., object],
+    *,
+    campaign: Campaign,
+    circuit,
+    backend_bundle,
+    coupling_edges,
+    rl_only_model_path: Path | str,
+    qiskit_initial_layout: list[int],
+    mo_only_layout: list[int],
+    effective_mo_settings,
+    artifact_path: Path,
+    verbose: bool = False,
+):
+    kwargs = dict(
+        circuit=circuit,
+        backend_bundle=backend_bundle,
+        coupling_edges=list(coupling_edges),
+        model_path=rl_only_model_path,
+        qiskit_initial_layout=list(qiskit_initial_layout),
+        mo_only_layout=list(mo_only_layout),
+        population_size=effective_mo_settings.mo_population_size,
+        n_generations=effective_mo_settings.mo_n_generations,
+        seed=campaign.config.seed,
+        artifact_path=artifact_path,
+    )
+    if _runner_accepts_kwarg(optimize_rl_guided, "verbose"):
+        kwargs["verbose"] = verbose
+    return optimize_rl_guided(**kwargs)
 
 
 def _resolve_case_backend_bundle(resolve_backend_bundle: Callable[..., object], campaign: Campaign, backend_name: str):
@@ -382,6 +425,7 @@ def _copy_common_case_report(
     training_result=None,
     mo_rl_result=None,
     hybrid_layout_probe=None,
+    rl_guided_mo=None,
 ) -> CampaignCaseReport:
     return CampaignCaseReport(
         case=campaign_case,
@@ -393,6 +437,7 @@ def _copy_common_case_report(
         rl_only_training_result=rl_only_training_result,
         training_result=training_result,
         hybrid_layout_probe=hybrid_layout_probe,
+        rl_guided_mo=rl_guided_mo,
         incidents=list(incidents),
     )
 
@@ -439,6 +484,7 @@ def run_campaign(
     run_mo_only: Callable[..., object] = _run_mo_only_scenario,
     optimize_mo: Callable[..., object] = _optimize_mo_layouts,
     select_hybrid_probe: Callable[..., object] = _select_hybrid_probe_layout,
+    optimize_rl_guided: Callable[..., object] = _optimize_rl_guided_layouts,
     train_case_fn: Callable[..., object] | None = None,
     run_rl_only: Callable[..., object] = _run_rl_only_scenario,
     run_mo_rl: Callable[..., object] = _run_mo_rl_scenario,
@@ -517,13 +563,18 @@ def run_campaign(
                 num_qubits=campaign_case.num_qubits,
             )
             backend_bundle = _resolve_case_backend_bundle(resolve_backend_bundle, campaign, campaign_case.backend_name)
-            qiskit_routing_subgraph = build_path_expanded_subgraph(
-                circuit=circuit,
-                selected_layout=qiskit_initial_layout,
-                coupling_edges=backend_bundle.coupling_edges,
-            )
-            qiskit_coupling_edges_for_training = list(qiskit_routing_subgraph.coupling_edges)
-            qiskit_coupling_edges_for_rl_only = list(qiskit_routing_subgraph.coupling_edges)
+            qiskit_routing_subgraph = None
+            if _is_rl_guided_campaign(campaign):
+                qiskit_coupling_edges_for_training = list(backend_bundle.coupling_edges)
+                qiskit_coupling_edges_for_rl_only = list(backend_bundle.coupling_edges)
+            else:
+                qiskit_routing_subgraph = build_path_expanded_subgraph(
+                    circuit=circuit,
+                    selected_layout=qiskit_initial_layout,
+                    coupling_edges=backend_bundle.coupling_edges,
+                )
+                qiskit_coupling_edges_for_training = list(qiskit_routing_subgraph.coupling_edges)
+                qiskit_coupling_edges_for_rl_only = list(qiskit_routing_subgraph.coupling_edges)
             case_report.rl_only_training_result = _invoke_train_case(
                 train_case_fn,
                 campaign_case=campaign_case,
@@ -619,15 +670,72 @@ def run_campaign(
                 )
                 continue
 
+            rl_guided_result = None
+            if _is_rl_guided_campaign(campaign):
+                if (
+                    case_report.rl_only_training_result.status != "completed"
+                    or case_report.rl_only_training_result.selected_artifact_path is None
+                ):
+                    case_report.status = "failed"
+                    case_report.incidents.append(
+                        "RL_Only training artifact is required before rl_guided MO."
+                    )
+                    case_reports.append(case_report)
+                    case_report_recorded = True
+                    _persist_campaign_state(
+                        output_root=output_root,
+                        campaign=campaign,
+                        case_reports=case_reports,
+                        campaign_status="running",
+                        write_outputs=write_outputs,
+                        persist_terminal_state=False,
+                    )
+                    continue
+                try:
+                    rl_guided_result = _run_rl_guided_mo(
+                        optimize_rl_guided,
+                        campaign=campaign,
+                        circuit=circuit,
+                        backend_bundle=backend_bundle,
+                        coupling_edges=backend_bundle.coupling_edges,
+                        rl_only_model_path=case_report.rl_only_training_result.selected_artifact_path,
+                        qiskit_initial_layout=qiskit_initial_layout,
+                        mo_only_layout=selected_layout,
+                        effective_mo_settings=effective_mo_settings,
+                        artifact_path=case_output_dir / RL_GUIDED_MO_FILENAME,
+                        verbose=verbose,
+                    )
+                except Exception as exc:
+                    case_report.status = "failed"
+                    case_report.incidents.append(f"RL-guided MO failed: {exc}")
+                    case_reports.append(case_report)
+                    case_report_recorded = True
+                    _persist_campaign_state(
+                        output_root=output_root,
+                        campaign=campaign,
+                        case_reports=case_reports,
+                        campaign_status="running",
+                        write_outputs=write_outputs,
+                        persist_terminal_state=False,
+                    )
+                    continue
+                case_report.rl_guided_mo = rl_guided_result.to_dict()
+                selected_layout = list(rl_guided_result.selected_layout)
+
             selected_layout_for_training = list(selected_layout)
             selected_layout_for_mo_rl = list(selected_layout)
-            routing_subgraph = build_path_expanded_subgraph(
-                circuit=circuit,
-                selected_layout=selected_layout,
-                coupling_edges=backend_bundle.coupling_edges,
-            )
-            coupling_edges_for_training = list(routing_subgraph.coupling_edges)
-            coupling_edges_for_mo_rl = list(routing_subgraph.coupling_edges)
+            routing_subgraph = None
+            if _is_rl_guided_campaign(campaign):
+                coupling_edges_for_training = list(backend_bundle.coupling_edges)
+                coupling_edges_for_mo_rl = list(backend_bundle.coupling_edges)
+            else:
+                routing_subgraph = build_path_expanded_subgraph(
+                    circuit=circuit,
+                    selected_layout=selected_layout,
+                    coupling_edges=backend_bundle.coupling_edges,
+                )
+                coupling_edges_for_training = list(routing_subgraph.coupling_edges)
+                coupling_edges_for_mo_rl = list(routing_subgraph.coupling_edges)
             case_report.training_result = _invoke_train_case(
                 train_case_fn,
                 campaign_case=campaign_case,
@@ -636,6 +744,16 @@ def run_campaign(
                 coupling_map=coupling_edges_for_training,
                 case_output_dir=case_output_dir,
                 initial_layout=selected_layout_for_training,
+                initial_model_path=(
+                    case_report.rl_only_training_result.selected_artifact_path
+                    if _is_rl_guided_campaign(campaign)
+                    else None
+                ),
+                total_timesteps_override=(
+                    campaign.config.rl_finetune_timesteps
+                    if _is_rl_guided_campaign(campaign)
+                    else None
+                ),
                 backend_bundle=backend_bundle,
                 verbose=verbose,
             )
@@ -714,6 +832,7 @@ def run_campaign_seed_group(
     load_case_circuit: Callable[..., object] | None = None,
     run_baseline: Callable[..., object] = _run_baseline_scenario,
     optimize_mo: Callable[..., object] = _optimize_mo_layouts,
+    optimize_rl_guided: Callable[..., object] = _optimize_rl_guided_layouts,
     select_mo_layout: Callable[..., list[int]] = _select_mo_layout,
     select_hybrid_probe: Callable[..., object] = _select_hybrid_probe_layout,
     run_mo_only: Callable[..., object] = _run_mo_only_scenario,
@@ -726,6 +845,26 @@ def run_campaign_seed_group(
 ) -> dict[str, CampaignReport]:
     normalized_campaigns = tuple(campaigns)
     _validate_seed_group(normalized_campaigns)
+    if len(normalized_campaigns) == 1 and _is_rl_guided_campaign(normalized_campaigns[0]):
+        campaign = normalized_campaigns[0]
+        return {
+            campaign.campaign_id: run_campaign(
+                campaign,
+                output_root=output_root,
+                load_case_circuit=load_case_circuit,
+                run_baseline=run_baseline,
+                run_mo_only=run_mo_only,
+                optimize_mo=optimize_mo,
+                select_hybrid_probe=select_hybrid_probe,
+                optimize_rl_guided=optimize_rl_guided,
+                train_case_fn=train_case_fn,
+                run_rl_only=run_rl_only,
+                run_mo_rl=run_mo_rl,
+                resolve_backend_bundle=resolve_backend_bundle,
+                write_outputs=write_outputs,
+                verbose=verbose,
+            )
+        }
     anchor_campaign = normalized_campaigns[0]
     if load_case_circuit is None:
         load_case_circuit = lambda campaign_case: _default_load_case_circuit(anchor_campaign, campaign_case)

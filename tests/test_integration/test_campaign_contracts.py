@@ -53,6 +53,68 @@ def test_campaign_rejects_hybrid_probe_for_unmasked_algorithm() -> None:
         raise AssertionError("Expected ValueError for unmasked hybrid_probe campaign")
 
 
+def _build_rl_guided_config(**overrides) -> CampaignConfig:
+    values = {
+        "circuit_specs": [CampaignCircuitSpec(family="ghz", num_qubits=3)],
+        "backend_names": ["synthetic_ring_3q"],
+        "rl_algorithm": "MaskablePPO",
+        "rl_total_timesteps": 5000,
+        "rl_finetune_timesteps": 1000,
+        "rl_frontier_mode": "dag",
+        "rl_lookahead_window": 10,
+        "rl_max_steps": 200,
+        "seed": 42,
+        "mo_use_quick": True,
+        "mo_population_size": 30,
+        "mo_n_generations": 50,
+        "layout_policy": LayoutSelectionPolicy.COMPROMISE,
+        "mo_selection_modes": ("rl_guided",),
+        "mode": "advanced",
+        "topology_source": "synthetic",
+        "synthetic_topology": SyntheticTopologySpec(shape="ring", num_qubits=3),
+    }
+    values.update(overrides)
+    return CampaignConfig(**values)
+
+
+def test_campaign_accepts_rl_guided_for_advanced_synthetic_maskable_ppo() -> None:
+    config = _build_rl_guided_config()
+
+    assert config.mo_selection_modes == ("rl_guided",)
+    assert config.rl_finetune_timesteps == 1000
+
+
+def test_campaign_rejects_rl_guided_mixed_with_other_mo_modes() -> None:
+    try:
+        _build_rl_guided_config(mo_selection_modes=("rl_guided", "compromise"))
+    except ValueError as exc:
+        assert "selected by itself" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for mixed rl_guided modes")
+
+
+def test_campaign_rejects_rl_guided_without_additional_finetune_budget() -> None:
+    try:
+        _build_rl_guided_config(rl_finetune_timesteps=None)
+    except ValueError as exc:
+        assert "positive rl_finetune_timesteps" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for missing rl_guided fine-tuning budget")
+
+
+def test_campaign_rejects_rl_guided_on_backend_topology() -> None:
+    try:
+        _build_rl_guided_config(
+            backend_names=["fake_torino"],
+            topology_source="backend",
+            synthetic_topology=None,
+        )
+    except ValueError as exc:
+        assert "topology_source='synthetic'" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for rl_guided backend topology")
+
+
 def test_campaign_builds_stable_cases_from_selected_circuits_and_backends() -> None:
     config = CampaignConfig(
         circuit_specs=[

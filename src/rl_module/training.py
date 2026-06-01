@@ -111,11 +111,23 @@ def _callable_accepts_kwarg(callable_obj, kwarg_name: str) -> bool:
     )
 
 
-def _train_agent(agent: QuantumRLAgent, *, total_timesteps: int, callbacks: list, progress_bar: bool) -> None:
+def _train_agent(
+    agent: QuantumRLAgent,
+    *,
+    total_timesteps: int,
+    callbacks: list,
+    progress_bar: bool,
+    reset_num_timesteps: bool,
+) -> None:
+    kwargs = {
+        "total_timesteps": total_timesteps,
+        "callbacks": callbacks,
+    }
     if _callable_accepts_kwarg(agent.train, "progress_bar"):
-        agent.train(total_timesteps=total_timesteps, callbacks=callbacks, progress_bar=progress_bar)
-        return
-    agent.train(total_timesteps=total_timesteps, callbacks=callbacks)
+        kwargs["progress_bar"] = progress_bar
+    if _callable_accepts_kwarg(agent.train, "reset_num_timesteps"):
+        kwargs["reset_num_timesteps"] = reset_num_timesteps
+    agent.train(**kwargs)
 
 
 def setup_training_pipeline(
@@ -133,6 +145,7 @@ def setup_training_pipeline(
     hyperparams: Optional[dict] = None,
     basis_gates: Optional[List[str]] = None,
     initial_layout: Optional[List[int]] = None,
+    initial_model_path: Optional[str] = None,
     routing_mask_config: RoutingMaskConfig | dict | None = None,
     n_eval_episodes: int = DEFAULT_N_EVAL_EPISODES,
     eval_freq: int = DEFAULT_EVAL_FREQ,
@@ -161,6 +174,7 @@ def setup_training_pipeline(
         hyperparams: Diccionario con hiperparámetros para PPO/DQN.
         basis_gates: Base nativa explícita requerida por ``mode="synthesis"``.
         initial_layout: Layout inicial opcional inyectado en train/eval reset.
+        initial_model_path: Checkpoint opcional cuyo estado completo se reanuda.
         
     Returns:
         El agente entrenado listo para evaluación.
@@ -282,6 +296,11 @@ def setup_training_pipeline(
                 ),
             },
     )
+    if initial_model_path is not None:
+        run_metadata["training_resume"] = {
+            "initial_model_path": str(initial_model_path),
+            "reset_num_timesteps": False,
+        }
     save_run_metadata(run_model_dir, run_metadata)
     
     checkpoint_callback = CheckpointCallback(
@@ -327,14 +346,22 @@ def setup_training_pipeline(
     )
     
     # 4. Inicializar y entrenar Agente
-    agent = QuantumRLAgent(
-        env=env,
-        algorithm=algorithm,
-        tensorboard_log=run_log_dir,
-        seed=seed,
-        verbose=1 if verbose else 0,
-        **effective_hyperparams
-    )
+    if initial_model_path is None:
+        agent = QuantumRLAgent(
+            env=env,
+            algorithm=algorithm,
+            tensorboard_log=run_log_dir,
+            seed=seed,
+            verbose=1 if verbose else 0,
+            **effective_hyperparams
+        )
+    else:
+        agent = QuantumRLAgent.load(
+            initial_model_path,
+            env=env,
+            algorithm=algorithm,
+        )
+        agent.model.tensorboard_log = run_log_dir
 
     if routing_completed_at_reset:
         logger.info(
@@ -357,8 +384,16 @@ def setup_training_pipeline(
         save_run_metadata(run_model_dir, run_metadata)
         return agent
     
-    _train_agent(agent, total_timesteps=total_timesteps, callbacks=callbacks, progress_bar=verbose)
-    actual_timesteps = int(getattr(getattr(agent, "model", None), "num_timesteps", total_timesteps))
+    starting_timesteps = int(getattr(getattr(agent, "model", None), "num_timesteps", 0))
+    _train_agent(
+        agent,
+        total_timesteps=total_timesteps,
+        callbacks=callbacks,
+        progress_bar=verbose,
+        reset_num_timesteps=initial_model_path is None,
+    )
+    ending_timesteps = int(getattr(getattr(agent, "model", None), "num_timesteps", total_timesteps))
+    actual_timesteps = ending_timesteps - starting_timesteps if initial_model_path is not None else ending_timesteps
     for callback in callbacks:
         finalize = getattr(callback, "finalize", None)
         if callable(finalize):

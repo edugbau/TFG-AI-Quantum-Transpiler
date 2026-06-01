@@ -11,6 +11,7 @@
 | `backend_adapter.py` | Adaptacion de backends de Qiskit a una estructura pequena y estable | `resolve_backend_bundle`, `BackendBundle` |
 | `layout_policy.py` | Seleccion de un layout unico a partir de MO | `select_layout_from_mo_result` |
 | `hybrid_layout_probe.py` | Seleccion opt-in de layouts MO mediante una sonda SABRE-like determinista | `select_hybrid_probe_layout` |
+| `rl_guided_mo.py` | Busqueda MO experimental evaluada por un checkpoint RL congelado | `optimize_rl_guided_layouts`, `RLGuidedFitnessEvaluator` |
 | `routing_evaluator.py` | Evaluacion y reconstruccion de episodios RL de routing | `evaluate_routing_episode`, `build_routed_circuit` |
 | `routing_subgraph.py` | Derivacion del grafo de routing para Campaign | `build_path_expanded_subgraph` |
 | `rl_model_contract.py` | Contrato de metadata de checkpoints y fallback legacy | `resolve_routing_model_contract`, `RoutingModelContract` |
@@ -49,12 +50,15 @@ Dentro de esa secuencia:
 
 Una Campaign puede expandirse como matrix cuando configura varias `seeds` o varios `mo_selection_modes`. La matrix conserva Campaigns hijas `seed x modo MO`, pero ejecuta juntas las hijas de una misma seed. Para cada `circuit x backend x seed`, reutiliza `Baseline`, `RL_Only` y un unico frente de Pareto; cada modo selecciona su layout sobre ese frente. Si varios modos seleccionan el mismo layout fisico, tambien comparten `MO_Only`, training hibrido y evaluacion `MO+RL`. El modo opt-in `hybrid_probe` deduplica el frente, prueba cada layout MO con una politica SABRE-like determinista y elige por `(CNOT-equivalent, depth, swaps)`. Tambien evalua el layout inicial de Qiskit como control diagnostico, pero nunca lo incluye en la seleccion. El alias batch `mo.selection_modes: "all"` sigue equivaliendo solo a `compromise`, `best_depth` y `best_cnot_count`.
 
+El modo experimental opt-in `rl_guided` se selecciona por separado y solo admite Campaign avanzada, topologia sintetica y `MaskablePPO`. Primero entrena `RL_Only` desde el layout Qiskit con el coupling map sintetico completo. Luego ejecuta una segunda busqueda NSGA-II: cada layout se evalua con un episodio RL determinista del checkpoint congelado y con metricas Qiskit post-routing `(trans_depth, trans_cnot_equivalent)`. Los candidatos incompletos reciben penalizacion y quedan fuera de la seleccion valida. El layout elegido continua el entrenamiento desde el checkpoint completo con el presupuesto adicional `rl.finetune_timesteps`. Para mantener estable el significado de cada accion SWAP, pretraining, busqueda, fine-tuning y evaluaciones usan exactamente el mismo coupling map sintetico completo.
+
 ## Contracts and metadata
 
 - `ScenarioRequest`, `RoutingEpisodeSummary` y `ScenarioResult` validan el contrato publico de evaluacion.
 - `CampaignConfig` distingue `default` y `advanced`, y tambien el modo `mo_effort_mode` (`auto` o `custom`).
 - `CampaignConfig` acepta `seeds`, `mo_selection_modes` y `parallel_workers` para Campaign matrices, manteniendo `seed` y `layout_policy` como contrato legacy de una sola ejecucion.
 - `hybrid_probe` requiere `MaskablePPO`; si ninguna sonda MO completa el routing, registra el fallback y usa `compromise`.
+- `rl_guided` requiere `MaskablePPO`, modo `advanced`, topologia `synthetic` y `rl_finetune_timesteps`; falla de forma controlada si ningun candidato completa routing.
 - `SyntheticTopologySpec` permite usar topologias sinteticas en modo avanzado, incluida `t` como T balanceada (`synthetic_t_Nq`) para `N >= 5`.
 - `resolve_routing_model_contract()` lee `run_metadata.json` cuando existe y mantiene fallback legacy para checkpoints antiguos.
 - La metadata versionada de masked routing se consume cuando esta disponible: `v4` anade decay SABRE, `v3` anade anti-ciclo, terminacion por estancamiento y top-k SABRE opcional; `v2` evita undo-SWAPs inmediatos y `v1` conserva la evaluacion historica. Si falta, se mantiene la compatibilidad con modelos PPO/DQN legacy.
@@ -90,6 +94,7 @@ Cada Campaign persiste:
 - `campaign.json` como salida estructurada;
 - `cases/<case>/result.json` para cada caso.
 - `cases/<case>/hybrid_layout_probe.json` cuando se activa `hybrid_probe`.
+- `cases/<case>/rl_guided_mo.json` cuando se activa `rl_guided`, con checkpoint fuente, cache, candidatos y controles Qiskit/MO/RL-guided.
 
 Cada Campaign matrix persiste:
 

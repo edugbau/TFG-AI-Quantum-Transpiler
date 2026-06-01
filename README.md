@@ -51,6 +51,8 @@ Ese contrato permite que:
 
 En el camino hibrido, `MO_Only` selecciona el layout, `integration` lo reusa como `initial_layout` al entrenar RL y `MO+RL` evalua el mismo layout con el Training Artifact del case. Si el routing deriva un subgrafo path-expanded, se usa ese grafo; si no, la Campaign cae al coupling map completo y deja trazabilidad del fallback.
 
+Las Campaigns avanzadas sobre topologias sinteticas ofrecen tambien el modo experimental `rl_guided`: una segunda busqueda MO evalua layouts con el checkpoint `RL_Only` congelado y despues continua el entrenamiento desde ese artefacto. Ese flujo usa el coupling map sintetico completo y fijo en todas sus fases.
+
 ## Estado actual
 
 - `Baseline` y `MO_Only` aceptan entrada `qasm_file`; los escenarios basados en RL siguen orientados a trazas y no exponen esa entrada publica.

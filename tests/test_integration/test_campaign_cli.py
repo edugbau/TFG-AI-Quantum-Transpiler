@@ -242,6 +242,38 @@ def test_load_campaign_batch_accepts_explicit_hybrid_probe_without_changing_all_
     assert config.layout_policy is LayoutSelectionPolicy.COMPROMISE
 
 
+def test_load_campaign_batch_accepts_explicit_rl_guided_synthetic_campaign(tmp_path) -> None:
+    from src.integration.campaign_cli import load_campaign_batch
+
+    batch_path = _write_batch_file(
+        tmp_path,
+        {
+            "campaigns": [
+                {
+                    "campaign_id": "ghz-3-rl-guided",
+                    "circuit": {"family": "ghz", "num_qubits": 3},
+                    "mode": "advanced",
+                    "topology_source": "synthetic",
+                    "synthetic_topology": {"shape": "ring", "num_qubits": 3},
+                    "rl": {
+                        "algorithm": "MaskablePPO",
+                        "total_timesteps": 5000,
+                        "finetune_timesteps": 1250,
+                    },
+                    "mo": {"selection_modes": ["rl_guided"]},
+                }
+            ]
+        },
+    )
+
+    config = load_campaign_batch(batch_path)[0].config
+
+    assert config.backend_names == ("synthetic_ring_3q",)
+    assert config.mo_selection_modes == ("rl_guided",)
+    assert config.rl_total_timesteps == 5000
+    assert config.rl_finetune_timesteps == 1250
+
+
 def test_load_campaign_batch_preserves_independent_campaign_configs(tmp_path) -> None:
     from src.integration.campaign_cli import load_campaign_batch
 
@@ -722,6 +754,57 @@ def test_run_interactive_campaign_cli_collects_synthetic_topology_in_advanced_mo
     assert "Topology Source: synthetic" in rendered
     assert "Synthetic Topology: synthetic_grid_2x2" in rendered
     assert "Synthetic Basis Gates: id, rz, sx, x, cx" in rendered
+
+
+def test_run_interactive_campaign_cli_collects_rl_guided_finetune_budget() -> None:
+    from src.integration import campaign_cli
+
+    input_fn, outputs = _make_io(
+        [
+            "ghz",
+            "3",
+            "advanced",
+            "synthetic",
+            "ring",
+            "3",
+            "MaskablePPO",
+            "5000",
+            "dag",
+            "10",
+            "200",
+            "",
+            "42",
+            "auto",
+            "rl_guided",
+            "750",
+            "y",
+        ]
+    )
+    captured = {}
+
+    def run_campaign_fn(campaign, *, output_root):
+        captured["campaign"] = campaign
+        return SimpleNamespace(campaign_status="completed")
+
+    exit_code = campaign_cli.run_interactive_campaign_cli(
+        input_fn=input_fn,
+        output_fn=lambda message="": outputs.append(str(message)),
+        run_campaign_fn=run_campaign_fn,
+        campaign_id_factory=lambda: "campaign-rl-guided-001",
+        output_root=Path("campaigns"),
+        verbose=True,
+    )
+
+    rendered = "\n".join(outputs)
+    config = captured["campaign"].config
+
+    assert exit_code == 0
+    assert config.mo_selection_modes == ("rl_guided",)
+    assert config.rl_total_timesteps == 5000
+    assert config.rl_finetune_timesteps == 750
+    assert config.synthetic_topology.backend_name == "synthetic_ring_3q"
+    assert "RL fine-tune timesteps: " in rendered
+    assert "finetune_timesteps=750" in rendered
 
 
 def test_run_interactive_campaign_cli_collects_t_synthetic_topology_in_advanced_mode() -> None:
