@@ -869,6 +869,7 @@ def run_named_baseline(
                 circuit=circuit,
                 backend=backend,
                 optimization_level=optimization_level,
+                initial_layout=layout,
                 seed=seed,
             )
         result.baseline_name = baseline_name

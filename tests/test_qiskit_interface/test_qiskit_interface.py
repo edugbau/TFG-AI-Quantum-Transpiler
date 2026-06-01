@@ -939,6 +939,19 @@ class TestTranspilationBatch:
         assert rows[0]["optimization_level"] == 1
         assert rows[0]["initial_layout"] == layout
 
+    def test_run_named_standard_baseline_forwards_layout(self, simple_circuit):
+        layout = [0, 1, 2]
+
+        rows = run_named_baseline(
+            "qiskit_level_1",
+            simple_circuit,
+            backend_names=["fake_torino"],
+            layout=layout,
+            seed=42,
+        )
+
+        assert rows[0]["initial_layout"] == layout
+
     def test_list_available_baselines_exposes_named_catalog(self):
         """El catálogo público de baselines nombrados es pequeño y estable."""
         baselines = list_available_baselines()

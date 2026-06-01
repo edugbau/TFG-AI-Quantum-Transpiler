@@ -24,6 +24,7 @@ from src.integration.hybrid_layout_probe import (
 from src.integration.mo_effort import resolve_effective_mo_settings
 from src.integration.routing_subgraph import build_path_expanded_subgraph
 from src.integration.scenarios import (
+    _resolve_qiskit_initial_layout_for_rl_only,
     optimize_mo_layouts as _optimize_mo_layouts,
     run_baseline_scenario as _run_baseline_scenario,
     run_mo_only_scenario as _run_mo_only_scenario,
@@ -131,6 +132,17 @@ def _build_case_output_dir(
     return Path(output_root) / campaign.campaign_id / "cases" / case_dir_name
 
 
+def _validate_qiskit_initial_layout(layout, *, num_qubits: int) -> list[int]:
+    normalized_layout = [int(entry) for entry in layout]
+    if len(normalized_layout) != num_qubits:
+        raise ValueError("Baseline qiskit_initial_layout length must match num_qubits")
+    if any(entry < 0 for entry in normalized_layout):
+        raise ValueError("Baseline qiskit_initial_layout cannot contain negative entries")
+    if len(set(normalized_layout)) != len(normalized_layout):
+        raise ValueError("Baseline qiskit_initial_layout contains duplicated physical qubits")
+    return normalized_layout
+
+
 def _extract_qiskit_initial_layout_from_baseline(baseline_result, *, num_qubits: int) -> list[int]:
     candidates = []
     artifact = baseline_result.transpilation_artifact or {}
@@ -150,16 +162,28 @@ def _extract_qiskit_initial_layout_from_baseline(baseline_result, *, num_qubits:
     for candidate in candidates:
         if candidate is None:
             continue
-        layout = [int(entry) for entry in candidate]
-        if len(layout) != num_qubits:
-            raise ValueError("Baseline qiskit_initial_layout length must match num_qubits")
-        if any(entry < 0 for entry in layout):
-            raise ValueError("Baseline qiskit_initial_layout cannot contain negative entries")
-        if len(set(layout)) != len(layout):
-            raise ValueError("Baseline qiskit_initial_layout contains duplicated physical qubits")
-        return layout
+        return _validate_qiskit_initial_layout(candidate, num_qubits=num_qubits)
 
     return list(range(num_qubits))
+
+
+def _resolve_rl_only_qiskit_initial_layout(
+    request: ScenarioRequest,
+    circuit,
+    baseline_result,
+    *,
+    num_qubits: int,
+) -> list[int]:
+    artifact = baseline_result.transpilation_artifact or {}
+    if isinstance(artifact, dict):
+        transpilation = artifact.get("transpilation")
+        if isinstance(transpilation, dict) and transpilation.get("initial_layout") is not None:
+            layout = _resolve_qiskit_initial_layout_for_rl_only(request, circuit)
+            return _validate_qiskit_initial_layout(layout, num_qubits=num_qubits)
+    return _extract_qiskit_initial_layout_from_baseline(
+        baseline_result,
+        num_qubits=num_qubits,
+    )
 
 
 def _default_load_case_circuit(campaign: Campaign, campaign_case: CampaignCase):
@@ -486,7 +510,9 @@ def run_campaign(
                 )
                 continue
 
-            qiskit_initial_layout = _extract_qiskit_initial_layout_from_baseline(
+            qiskit_initial_layout = _resolve_rl_only_qiskit_initial_layout(
+                baseline_request,
+                circuit,
                 case_report.baseline_result,
                 num_qubits=campaign_case.num_qubits,
             )
@@ -744,7 +770,9 @@ def run_campaign_seed_group(
                 common_incidents.extend(baseline_result.errors)
                 raise ValueError("Shared Baseline scenario failed.")
 
-            qiskit_initial_layout = _extract_qiskit_initial_layout_from_baseline(
+            qiskit_initial_layout = _resolve_rl_only_qiskit_initial_layout(
+                baseline_request,
+                circuit,
                 baseline_result,
                 num_qubits=campaign_case.num_qubits,
             )

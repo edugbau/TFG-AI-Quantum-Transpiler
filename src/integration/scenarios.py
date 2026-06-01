@@ -125,6 +125,7 @@ def _run_named_baseline_with_artifact(
                 backend=backend_bundle.backend,
                 backend_name=backend_bundle.backend_name,
                 optimization_level=optimization_level,
+                initial_layout=layout,
                 seed=request.seed,
             )
         result.baseline_name = baseline_name
@@ -435,6 +436,7 @@ def run_baseline_scenario(request: ScenarioRequest, *, circuit=None) -> Scenario
         request,
         circuit,
         "qiskit_level_1",
+        layout=list(range(circuit.num_qubits)),
     )
     return ScenarioResult(
         scenario_name=request.scenario_name,

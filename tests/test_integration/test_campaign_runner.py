@@ -1206,8 +1206,11 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
     circuit.cx(0, 1)
     selected_layout = [2, 1, 0]
     call_log: list[tuple[str, object]] = []
+    training_layouts: list[list[int]] = []
+    evaluation_layouts: list[list[int]] = []
 
     def _baseline_payload(baseline_name: str, layout: list[int] | None):
+        qiskit_initial_layout = [1, 0, 2] if layout is None else layout
         row = {
             "backend_name": case.backend_name,
             "baseline_name": baseline_name,
@@ -1225,6 +1228,7 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
             "trans_total_gates": 9,
             "trans_two_qubit_gates": 4,
             "initial_layout": layout,
+            "qiskit_initial_layout": qiskit_initial_layout,
         }
         artifact = {
             "artifact_version": "transpilation_result.v1",
@@ -1232,6 +1236,7 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
             "transpilation": {
                 "baseline_name": baseline_name,
                 "initial_layout": layout,
+                "qiskit_initial_layout": qiskit_initial_layout,
             },
         }
         return row, artifact
@@ -1298,7 +1303,8 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
     monkeypatch.setattr(
         scenarios,
         "evaluate_routing_episode",
-        lambda **kwargs: call_log.append(("eval", kwargs["circuit"]))
+        lambda **kwargs: evaluation_layouts.append(list(kwargs["initial_layout"]))
+        or call_log.append(("eval", kwargs["circuit"]))
         or SimpleNamespace(
             completed=True,
             truncated=False,
@@ -1323,7 +1329,8 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
         campaign,
         output_root=tmp_path / "campaigns",
         load_case_circuit=lambda campaign_case: circuit,
-        train_case_fn=lambda **kwargs: _build_training_result(kwargs["campaign_case"]),
+        train_case_fn=lambda **kwargs: training_layouts.append(list(kwargs["initial_layout"]))
+        or _build_training_result(kwargs["campaign_case"]),
         resolve_backend_bundle=lambda backend_name: SimpleNamespace(
             backend_name=backend_name,
             coupling_edges=[(0, 1), (1, 2)],
@@ -1332,6 +1339,7 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
     )
 
     assert [entry[0] for entry in call_log] == [
+        "qiskit_level_1",
         "qiskit_level_1",
         "eval",
         "rebuild",
@@ -1342,6 +1350,8 @@ def test_run_campaign_default_scenario_runners_use_real_wiring_and_frozen_case_c
         "rebuild",
         "post",
     ]
+    assert training_layouts == [[1, 0, 2], selected_layout]
+    assert evaluation_layouts == [[1, 0, 2], selected_layout]
     assert all(entry[1] is circuit for entry in call_log)
     assert report.case_reports[0].status == "completed"
 

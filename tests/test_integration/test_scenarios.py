@@ -120,6 +120,7 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
         "trans_num_qubits": 3,
         "trans_total_gates": 9,
         "trans_two_qubit_gates": 4,
+        "initial_layout": [0, 1, 2],
     }
     artifact = {
         "artifact_version": "transpilation_result.v1",
@@ -142,7 +143,7 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
             "seed": 17,
             "elapsed_time_s": 0.25,
             "baseline_name": "qiskit_level_1",
-            "initial_layout": None,
+            "initial_layout": [0, 1, 2],
             "final_layout": [0, 1, 2],
         },
         "metrics": {
@@ -209,6 +210,7 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
         "trans_num_qubits": 3,
         "trans_total_gates": 9,
         "trans_two_qubit_gates": 4,
+        "initial_layout": [0, 1, 2],
     }
     assert result.transpilation_artifact == artifact
     assert baseline_calls == [
@@ -217,7 +219,7 @@ def test_run_baseline_scenario_returns_transpilation_metrics_only(monkeypatch) -
             "circuit": circuit,
             "backend_names": ["fake_backend"],
             "seed": 17,
-            "layout": None,
+            "layout": [0, 1, 2],
             "include_artifact": True,
         }
     ]
@@ -242,6 +244,7 @@ def test_run_baseline_scenario_uses_synthetic_backend_bundle(monkeypatch) -> Non
                 "optimization_level": 1,
                 "seed": 17,
                 "trans_depth": 12,
+                "initial_layout": [0, 1, 2],
             }
 
         def to_artifact_dict(self):
@@ -249,7 +252,7 @@ def test_run_baseline_scenario_uses_synthetic_backend_bundle(monkeypatch) -> Non
                 "artifact_version": "transpilation_result.v1",
                 "baseline_name": self.baseline_name,
                 "backend": {"backend_name": synthetic_topology.backend_name, "backend_kind": "synthetic"},
-                "transpilation": {"baseline_name": self.baseline_name, "initial_layout": None},
+                "transpilation": {"baseline_name": self.baseline_name, "initial_layout": [0, 1, 2]},
             }
 
     def fake_resolve_backend_bundle(backend_name, *, synthetic_topology=None):
@@ -290,6 +293,7 @@ def test_run_baseline_scenario_uses_synthetic_backend_bundle(monkeypatch) -> Non
             "backend": "synthetic-backend",
             "backend_name": "synthetic_line_3q",
             "optimization_level": 1,
+            "initial_layout": [0, 1, 2],
             "seed": 17,
         }
     ]
