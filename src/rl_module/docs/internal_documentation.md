@@ -61,6 +61,7 @@ La recompensa separa progreso util de ruido:
 
 - bonifica puertas ejecutadas;
 - penaliza SWAPs inutiles, layouts repetidos y deshacer el ultimo SWAP;
+- penaliza suavemente la distancia pendiente de la nueva frontera cuando un SWAP desbloquea puertas;
 - castiga truncaciones, terminaciones por estancamiento y acciones invalidas;
 - en `synthesis`, la recompensa se centra en reducir el residual.
 

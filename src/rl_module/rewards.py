@@ -86,6 +86,10 @@ class RoutingReward(RewardStrategy):
         Factor lineal de shaping sobre ``routing_progress_delta``. Valores
         positivos recompensan reducir la distancia agregada de routing y
         penalizan empeorarla.
+    next_frontier_penalty_weight : float
+        Peso aplicado a la distancia agregada pendiente cuando un SWAP
+        desbloquea puertas. Distingue acciones que progresan localmente pero
+        dejan la nueva frontera peor preparada.
     routing_depth_penalty_weight : float
         Peso aplicado al incremento de profundidad critica estimada.
     """
@@ -103,6 +107,7 @@ class RoutingReward(RewardStrategy):
         undo_swap_penalty: float = -1.0,
         unproductive_swap_penalty: float = -0.25,
         routing_progress_reward: float = 0.5,
+        next_frontier_penalty_weight: float = 0.25,
         routing_depth_penalty_weight: float = 0.1,
     ):
         self.swap_penalty = swap_penalty
@@ -116,6 +121,7 @@ class RoutingReward(RewardStrategy):
         self.undo_swap_penalty = undo_swap_penalty
         self.unproductive_swap_penalty = unproductive_swap_penalty
         self.routing_progress_reward = routing_progress_reward
+        self.next_frontier_penalty_weight = next_frontier_penalty_weight
         self.routing_depth_penalty_weight = routing_depth_penalty_weight
 
     def to_dict(self) -> Dict[str, float]:
@@ -131,6 +137,7 @@ class RoutingReward(RewardStrategy):
             "undo_swap_penalty": self.undo_swap_penalty,
             "unproductive_swap_penalty": self.unproductive_swap_penalty,
             "routing_progress_reward": self.routing_progress_reward,
+            "next_frontier_penalty_weight": self.next_frontier_penalty_weight,
             "routing_depth_penalty_weight": self.routing_depth_penalty_weight,
         }
 
@@ -160,6 +167,7 @@ class RoutingReward(RewardStrategy):
             reward += self.unproductive_swap_penalty
 
         reward += self.routing_progress_reward * float(info.get('routing_progress_delta', 0.0))
+        reward -= self.next_frontier_penalty_weight * float(info.get('next_frontier_routing_signal', 0.0))
         reward -= self.routing_depth_penalty_weight * float(info.get('routing_depth_delta', 0.0))
              
         # 4. Bonificación final si el circuito se completa

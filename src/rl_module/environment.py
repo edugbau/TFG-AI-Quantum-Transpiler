@@ -706,6 +706,7 @@ class QuantumTranspilationEnv(gym.Env):
                 "undo_swap": False,
                 "unproductive_swap": False,
                 "routing_progress_delta": 0.0,
+                "next_frontier_routing_signal": 0.0,
                 "routing_depth_delta": 0.0,
                 "estimated_routing_depth": self._estimated_routing_depth(),
                 "primitive_name": None,
@@ -744,6 +745,7 @@ class QuantumTranspilationEnv(gym.Env):
             "undo_swap": False,
             "unproductive_swap": False,
             "routing_progress_delta": 0.0,
+            "next_frontier_routing_signal": 0.0,
             "routing_depth_delta": 0.0,
             "estimated_routing_depth": prev_routing_depth,
             "steps_without_progress": self._steps_without_progress,
@@ -840,6 +842,11 @@ class QuantumTranspilationEnv(gym.Env):
             if info["gates_executed"] > 0:
                 routing_progress_delta = max(routing_progress_delta, 0.0)
             info["routing_progress_delta"] = routing_progress_delta
+            info["next_frontier_routing_signal"] = (
+                current_routing_signal
+                if info["gates_executed"] > 0 and not info["is_completed"]
+                else 0.0
+            )
             current_routing_depth = self._estimated_routing_depth()
             info["routing_depth_delta"] = current_routing_depth - prev_routing_depth
             info["estimated_routing_depth"] = current_routing_depth

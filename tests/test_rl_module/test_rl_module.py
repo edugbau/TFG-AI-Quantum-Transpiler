@@ -634,6 +634,7 @@ class TestRoutingReward:
             "undo_swap_penalty": -1.0,
             "unproductive_swap_penalty": -0.25,
             "routing_progress_reward": 0.5,
+            "next_frontier_penalty_weight": 0.25,
             "routing_depth_penalty_weight": 0.1,
         }
 
@@ -794,6 +795,26 @@ class TestRoutingReward:
         reward = reward_fn.compute_reward(None, None, None, info)
 
         assert reward == pytest.approx(-2.5)
+
+    def test_next_frontier_penalty_is_configurable(self):
+        """Desbloquear puertas conserva un coste por dejar lejos la nueva frontera."""
+        reward_fn = RoutingReward(
+            swap_penalty=0.0,
+            gate_execution_reward=0.0,
+            next_frontier_penalty_weight=0.25,
+        )
+        info = {
+            "action_type": "swap",
+            "gates_executed": 1,
+            "is_valid_action": True,
+            "is_completed": False,
+            "is_truncated": False,
+            "next_frontier_routing_signal": 2.0,
+        }
+
+        reward = reward_fn.compute_reward(None, None, None, info)
+
+        assert reward == pytest.approx(-0.5)
 
 
 # ===========================================================================

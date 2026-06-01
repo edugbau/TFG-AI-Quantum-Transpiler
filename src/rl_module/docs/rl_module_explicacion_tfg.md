@@ -313,6 +313,7 @@ La recompensa por defecto combina varios términos:
 - penalización por deshacer el `SWAP` anterior: `-1.0`;
 - penalización adicional por `SWAP` improductivo: `-0.25`;
 - shaping proporcional a `routing_progress_delta`: peso `0.5`;
+- penalización proporcional a la distancia pendiente de la nueva frontera tras ejecutar puertas: peso `0.25`;
 - penalización proporcional al incremento de profundidad crítica estimada: peso `0.1`;
 - bonus de completitud: `+50.0`;
 - penalización por truncación: `-30.0`;

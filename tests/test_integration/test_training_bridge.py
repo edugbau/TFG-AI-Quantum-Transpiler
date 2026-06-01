@@ -112,6 +112,7 @@ def test_train_case_returns_best_model_when_available(monkeypatch, tmp_path) -> 
     assert result.effective_training_config.cycle_window == 6
     assert result.effective_training_config.stagnation_patience == 11
     assert result.effective_training_config.sabre_top_k == 3
+    assert result.effective_training_config.next_frontier_penalty_weight == 0.25
 
 
 def test_train_case_forwards_initial_layout_to_setup_training_pipeline(monkeypatch, tmp_path) -> None:

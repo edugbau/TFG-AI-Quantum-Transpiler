@@ -319,6 +319,7 @@ def _render_effective_config(training_result: TrainingBridgeResult | None) -> st
         f"rl_sabre_top_k={config.sabre_top_k}, "
         f"rl_sabre_decay_increment={config.sabre_decay_increment}, "
         f"rl_sabre_decay_reset_interval={config.sabre_decay_reset_interval}, "
+        f"rl_next_frontier_penalty_weight={config.next_frontier_penalty_weight}, "
         f"rl_routing_depth_penalty_weight={config.routing_depth_penalty_weight}, "
         f"seed={config.seed}"
     )
@@ -375,6 +376,7 @@ def _render_training_summary(training_result: TrainingBridgeResult | None, *, la
         f"- SABRE Top-k: `{config.sabre_top_k}`",
         f"- SABRE Decay Increment: `{config.sabre_decay_increment}`",
         f"- SABRE Decay Reset Interval: `{config.sabre_decay_reset_interval}`",
+        f"- Next Frontier Penalty Weight: `{config.next_frontier_penalty_weight}`",
         f"- Routing Depth Penalty Weight: `{config.routing_depth_penalty_weight}`",
         f"- Seed: `{config.seed}`",
         f"- Selected Artifact: `{artifact_path}`",
