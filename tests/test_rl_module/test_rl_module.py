@@ -597,8 +597,8 @@ class TestSynthesisStrategy:
 class TestRoutingReward:
     """Tests de la función de recompensa de enrutamiento."""
 
-    def test_default_reward_prioritizes_low_cost_completion(self):
-        """Los valores por defecto penalizan coste y concentran el premio al completar."""
+    def test_default_reward_preserves_productive_routing_signal(self):
+        """Los valores por defecto premian progreso y conservan el bonus final."""
         reward_fn = RoutingReward()
 
         unproductive_swap = {
@@ -617,8 +617,25 @@ class TestRoutingReward:
             "is_truncated": False,
         }
 
-        assert reward_fn.compute_reward(None, None, None, unproductive_swap) == -4.0
-        assert reward_fn.compute_reward(None, None, None, completing_swap) == 98.0
+        assert reward_fn.compute_reward(None, None, None, unproductive_swap) == -1.25
+        assert reward_fn.compute_reward(None, None, None, completing_swap) == 59.0
+
+    def test_default_reward_profile_adds_mild_quality_shaping(self):
+        """El perfil por defecto diferencia profundidad, loops y rutas incompletas."""
+        assert RoutingReward().to_dict() == {
+            "swap_penalty": -1.0,
+            "gate_execution_reward": 10.0,
+            "invalid_action_penalty": -5.0,
+            "completion_bonus": 50.0,
+            "truncation_penalty": -30.0,
+            "stagnation_penalty": -20.0,
+            "incomplete_gate_penalty": -1.0,
+            "repeated_layout_penalty": -1.0,
+            "undo_swap_penalty": -1.0,
+            "unproductive_swap_penalty": -0.25,
+            "routing_progress_reward": 0.5,
+            "routing_depth_penalty_weight": 0.1,
+        }
 
     def test_swap_penalty(self):
         """Aplicar un SWAP genera la penalización configurada."""
@@ -3105,14 +3122,14 @@ class TestTrainingUtilities:
         assert early_stopping.min_evals == 50
         assert early_stopping.max_no_improvement_evals == 20
         assert [kwargs["mask_semantics"] for kwargs in env_kwargs] == [
-            "frontier_restricted_edges.v4",
-            "frontier_restricted_edges.v4",
+            "frontier_restricted_edges.v5",
+            "frontier_restricted_edges.v5",
         ]
         assert [kwargs["routing_mask_config"].stagnation_patience for kwargs in env_kwargs] == [8, 8]
         metadata = json.loads(
             Path(agent.run_model_dir, "run_metadata.json").read_text(encoding="utf-8")
         )
-        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v4"
+        assert metadata["routing_policy"]["mask_semantics"] == "frontier_restricted_edges.v5"
         assert metadata["routing_policy"]["mask_config"]["stagnation_patience"] == 8
         assert metadata["evaluation"]["early_stopping"] == {
             "enabled": True,

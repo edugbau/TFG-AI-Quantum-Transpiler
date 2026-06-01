@@ -56,7 +56,7 @@ En el camino hibrido, `MO_Only` selecciona el layout, `integration` lo reusa com
 - `Baseline` y `MO_Only` aceptan entrada `qasm_file`; los escenarios basados en RL siguen orientados a trazas y no exponen esa entrada publica.
 - `rl_module` soporta routing con action space fijo y `masked routing`, ademas de un primer modo de `synthesis` restringido a Clifford.
 - Los checkpoints RL pueden incluir `run_metadata.json` con metadata versionada de masked routing para que `integration` mantenga compatibilidad hacia atras.
-- Los checkpoints nuevos de routing enmascarado usan `MaskablePPO` con `frontier_restricted_edges.v3`: bloquean undo-SWAPs, ciclos cortos y episodios estancados, con poda SABRE top-k opcional. Los checkpoints `v1`, `v2`, `PPO` y `DQN` siguen siendo evaluables con su contrato historico.
+- Los checkpoints nuevos de routing enmascarado usan `MaskablePPO` con `frontier_restricted_edges.v5`: mantienen los filtros de estabilidad, el decay SABRE y una banda conservadora de aristas preparatorias a un salto. Los checkpoints `v1`, `v2`, `v3`, `v4`, `PPO` y `DQN` siguen siendo evaluables con su contrato historico.
 - `integration` puede reconstruir el circuito ruteado cuando el episodio RL completa y usa `trans_active_qubits` para comparar layouts dispersos cuando la anchura materializada no cuenta toda la historia.
 
 ## Documentacion de apoyo

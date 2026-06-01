@@ -18,6 +18,7 @@ from .routing_mask import (
     FRONTIER_RESTRICTED_EDGES_V2,
     FRONTIER_RESTRICTED_EDGES_V3,
     FRONTIER_RESTRICTED_EDGES_V4,
+    FRONTIER_RESTRICTED_EDGES_V5,
     RoutingMaskConfig,
     normalize_mask_semantics,
     resolve_routing_mask_config,
@@ -77,7 +78,7 @@ class QuantumTranspilationEnv(gym.Env):
         self.mask_semantics = normalize_mask_semantics(mask_semantics)
         self.routing_mask_config = (
             resolve_routing_mask_config(routing_mask_config, num_qubits=self.num_qubits)
-            if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}
+            if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}
             else None
         )
         self._synthesis_state: Optional[CliffordSynthesisState] = None
@@ -370,9 +371,11 @@ class QuantumTranspilationEnv(gym.Env):
             raise AttributeError("action_masks requires a RoutingStrategy.")
 
         mask = self._build_frontier_incident_mask(strategy=strategy)
-        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V2, FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
+        if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V5:
+            mask = self._expand_mask_with_preparatory_edges(mask, strategy=strategy)
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V2, FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             mask = self._apply_anti_undo_or_fallback(mask, strategy=strategy)
-        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             mask = self._apply_short_cycle_filter_or_fallback(mask, strategy=strategy)
             mask = self._apply_sabre_top_k_or_fallback(mask, strategy=strategy)
         return mask
@@ -414,6 +417,27 @@ class QuantumTranspilationEnv(gym.Env):
             mask |= entry_mask
 
         return mask
+
+    def _expand_mask_with_preparatory_edges(
+        self,
+        mask: np.ndarray,
+        *,
+        strategy: RoutingStrategy,
+    ) -> np.ndarray:
+        """Include one extra graph hop around the frontier-incident routing edges."""
+        expanded_mask = mask.copy()
+        frontier_neighbor_qubits = {
+            physical_qubit
+            for index in np.flatnonzero(mask)
+            for physical_qubit in strategy.edges[int(index)]
+        }
+        for index, (pq1, pq2) in enumerate(strategy.edges):
+            if pq1 not in frontier_neighbor_qubits and pq2 not in frontier_neighbor_qubits:
+                continue
+            if self._inverse_layout[pq1] == -1 and self._inverse_layout[pq2] == -1:
+                continue
+            expanded_mask[index] = True
+        return expanded_mask
 
     def _apply_anti_undo_or_fallback(
         self,
@@ -509,7 +533,7 @@ class QuantumTranspilationEnv(gym.Env):
             extended_entries,
             strategy=strategy,
         )
-        if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V4:
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             pq1, pq2 = swap_edge
             score *= max(float(self._sabre_qubit_decay[pq1]), float(self._sabre_qubit_decay[pq2]))
         return score
@@ -544,7 +568,11 @@ class QuantumTranspilationEnv(gym.Env):
             )
 
         keep_indices = set(productive_indices)
-        remaining_budget = max(top_k - len(keep_indices), 0)
+        remaining_budget = (
+            top_k
+            if self.mask_semantics == FRONTIER_RESTRICTED_EDGES_V5
+            else max(top_k - len(keep_indices), 0)
+        )
         keep_indices.update(
             index
             for _, index in sorted(scored_indices)[:remaining_budget]
@@ -561,8 +589,8 @@ class QuantumTranspilationEnv(gym.Env):
         """Select one deterministic masked-routing action without an RL policy."""
         if self.mode != "routing" or not isinstance(self.strategy, RoutingStrategy):
             raise AttributeError("select_sabre_heuristic_action is only available in routing mode.")
-        if self.mask_semantics != FRONTIER_RESTRICTED_EDGES_V4:
-            raise ValueError("select_sabre_heuristic_action requires frontier_restricted_edges.v4 semantics.")
+        if self.mask_semantics not in {FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
+            raise ValueError("select_sabre_heuristic_action requires frontier_restricted_edges.v4 or v5 semantics.")
 
         strategy = self.strategy
         scored_actions: list[tuple[int, float, int]] = []
@@ -592,7 +620,7 @@ class QuantumTranspilationEnv(gym.Env):
         return self._layout_signature(), self._frontier_revision
 
     def _record_routing_state(self) -> None:
-        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
+        if self.mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             self._recent_routing_states.append(self._routing_state_signature())
 
     def _routing_signal(self, obs: Dict[str, np.ndarray]) -> float:
@@ -611,7 +639,7 @@ class QuantumTranspilationEnv(gym.Env):
         current_routing_signal: float,
         gates_executed: int,
     ) -> None:
-        if self.mask_semantics not in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
+        if self.mask_semantics not in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             return
         if gates_executed > 0:
             self._steps_without_progress = 0
@@ -649,7 +677,7 @@ class QuantumTranspilationEnv(gym.Env):
             )
 
     def _record_sabre_swap(self, physical_q1: int, physical_q2: int) -> None:
-        if self.mask_semantics != FRONTIER_RESTRICTED_EDGES_V4:
+        if self.mask_semantics not in {FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             return
         increment = self.routing_mask_config.sabre_decay_increment
         self._sabre_qubit_decay[physical_q1] += increment

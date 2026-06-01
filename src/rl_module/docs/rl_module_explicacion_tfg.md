@@ -311,9 +311,13 @@ La recompensa por defecto combina varios términos:
 - penalización por acción inválida: `-5.0`;
 - penalización por repetir layout reciente: `-1.0`;
 - penalización por deshacer el `SWAP` anterior: `-1.0`;
+- penalización adicional por `SWAP` improductivo: `-0.25`;
 - shaping proporcional a `routing_progress_delta`: peso `0.5`;
+- penalización proporcional al incremento de profundidad crítica estimada: peso `0.1`;
 - bonus de completitud: `+50.0`;
-- penalización por truncación: `-20.0`.
+- penalización por truncación: `-30.0`;
+- penalización por estancamiento: `-20.0`;
+- penalización adicional por puerta pendiente al fallar: `-1.0`.
 
 La filosofía es clara: castigar movimientos inútiles o cíclicos y premiar acciones que realmente acerquen la ejecución del circuito.
 

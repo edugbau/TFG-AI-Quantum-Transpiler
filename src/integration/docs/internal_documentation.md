@@ -62,7 +62,7 @@ Toma un `OptimizationResult` de `mo_module` y lo reduce a un layout unico. La de
 Resuelve el contrato de un checkpoint RL.
 
 - Lee `run_metadata.json` cuando existe.
-- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo, `v3` anade anti-ciclo, terminacion por estancamiento y top-k SABRE opcional con fallbacks no vacios, y `v4` incorpora decay SABRE.
+- Si el metadata trae versioned masked routing, se usa esa variante: `v1` preserva checkpoints historicos, `v2` aplica anti-undo, `v3` anade anti-ciclo, terminacion por estancamiento y top-k SABRE opcional con fallbacks no vacios, `v4` incorpora decay SABRE y `v5` conserva aristas preparatorias a un salto.
 - Si no hay metadata, se cae a defaults legacy para no romper checkpoints PPO/DQN antiguos.
 
 ### `routing_evaluator.py`
@@ -80,7 +80,7 @@ Implementa el modo Campaign opt-in `hybrid_probe`.
 
 - deduplica layouts del frente de Pareto conservando el primer indice;
 - deriva el routing subgraph actual para cada candidato;
-- ejecuta una sonda SABRE-like determinista que prioriza desbloqueos, minimiza el scoring v4 y desempata por indice de accion;
+- ejecuta una sonda SABRE-like determinista que prioriza desbloqueos, minimiza el scoring de la semantica masked-routing actual y desempata por indice de accion;
 - reconstruye cada solucion completa y calcula metricas post-routing con el backend real;
 - selecciona layouts MO por `(CNOT-equivalent, depth, swaps)`;
 - evalua el layout inicial de Qiskit como control diagnostico, excluido de la seleccion;
@@ -174,7 +174,7 @@ En batch JSON, `topology_source: "synthetic"` acepta `synthetic_topology` y pued
 Para routing `MaskablePPO`, el bloque `rl` tambien acepta `cycle_window`,
 `stagnation_patience` y `sabre_top_k`. La paciencia puede omitirse para usar
 el default adaptativo `max(8, 2 * num_qubits)`; el valor resuelto queda
-persistido junto al checkpoint v4.
+persistido junto al checkpoint versionado.
 La CLI guiada avanzada pregunta `SABRE top-k (blank to disable)` al seleccionar
 `MaskablePPO`: un entero positivo activa la poda y Enter, `none`, `null` u
 `off` la dejan desactivada.

@@ -167,6 +167,35 @@ def test_resolve_routing_model_contract_accepts_v4_with_decay_config(tmp_path):
     assert contract.routing_mask_config.sabre_decay_reset_interval == 7
 
 
+def test_resolve_routing_model_contract_accepts_v5_with_preparatory_edges(tmp_path):
+    from src.integration.rl_model_contract import resolve_routing_model_contract
+
+    model_path = tmp_path / "best_masked_model.zip"
+    model_path.write_text("stub", encoding="utf-8")
+    save_run_metadata(
+        tmp_path,
+        build_run_metadata(
+            mode="routing",
+            algorithm="MaskablePPO",
+            seed=31,
+            frontier_mode="dag",
+            lookahead_window=8,
+            max_steps=144,
+            basis_gates=None,
+            mask_semantics="frontier_restricted_edges.v5",
+            routing_mask_config=RoutingMaskConfig(
+                stagnation_patience=16,
+                sabre_top_k=3,
+            ),
+        ),
+    )
+
+    contract = resolve_routing_model_contract(model_path)
+
+    assert contract.mask_semantics == "frontier_restricted_edges.v5"
+    assert contract.routing_mask_config.sabre_top_k == 3
+
+
 def test_resolve_routing_model_contract_rejects_v3_without_mask_config(tmp_path):
     from src.integration.rl_model_contract import resolve_routing_model_contract
 

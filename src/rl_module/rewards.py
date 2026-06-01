@@ -92,18 +92,18 @@ class RoutingReward(RewardStrategy):
 
     def __init__( #TODO: REVISAR VALORES DE PENALIZACIÓN Y REWARD CON TUTORES
         self,
-        swap_penalty: float = -3.0,
-        gate_execution_reward: float = 1.0,
+        swap_penalty: float = -1.0,
+        gate_execution_reward: float = 10.0,
         invalid_action_penalty: float = -5.0,
-        completion_bonus: float = 100.0,
-        truncation_penalty: float = -100.0,
-        stagnation_penalty: float = -100.0,
-        incomplete_gate_penalty: float = -3.0,
+        completion_bonus: float = 50.0,
+        truncation_penalty: float = -30.0,
+        stagnation_penalty: float = -20.0,
+        incomplete_gate_penalty: float = -1.0,
         repeated_layout_penalty: float = -1.0,
         undo_swap_penalty: float = -1.0,
-        unproductive_swap_penalty: float = -1.0,
+        unproductive_swap_penalty: float = -0.25,
         routing_progress_reward: float = 0.5,
-        routing_depth_penalty_weight: float = 0.5,
+        routing_depth_penalty_weight: float = 0.1,
     ):
         self.swap_penalty = swap_penalty
         self.gate_execution_reward = gate_execution_reward

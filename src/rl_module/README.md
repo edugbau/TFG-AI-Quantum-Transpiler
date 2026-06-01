@@ -35,6 +35,7 @@ Puntos clave:
 
 - `MaskablePPO` es el entrenador estandar para checkpoints nuevos de routing enmascarado.
 - `frontier_restricted_edges.v4` conserva los filtros v3 y anade decay SABRE para penalizar reutilizacion serial de qubits fisicos.
+- `frontier_restricted_edges.v5` conserva los filtros v4 y admite aristas preparatorias a un salto alrededor de la frontera bloqueada; su top-k mantiene ademas hasta `k` candidatos no productivos para no cerrar rutas utiles.
 - Cada filtro conserva la mascara anterior como fallback si la heuristica eliminaria todos los candidatos.
 - Los checkpoints `frontier_restricted_edges.v1`, `frontier_restricted_edges.v2` y `frontier_restricted_edges.v3` mantienen su semantica historica al evaluarse.
 - Los checkpoints legacy `PPO` y `DQN` siguen soportados mediante contratos legacy/default o evaluaciones unmasked.

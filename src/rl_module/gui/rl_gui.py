@@ -41,6 +41,7 @@ from src.rl_module.routing_mask import (
     DEFAULT_NEW_MASK_SEMANTICS,
     FRONTIER_RESTRICTED_EDGES_V3,
     FRONTIER_RESTRICTED_EDGES_V4,
+    FRONTIER_RESTRICTED_EDGES_V5,
     resolve_routing_mask_config,
 )
 from src.rl_module.training import set_global_seeds
@@ -80,7 +81,7 @@ def _normalize_masked_routing_config(cfg: dict) -> dict:
             "mask_semantics",
             MASKED_ROUTING_SEMANTICS,
         )
-        if normalized_cfg["mask_semantics"] in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
+        if normalized_cfg["mask_semantics"] in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             normalized_cfg["routing_mask_config"] = resolve_routing_mask_config(
                 normalized_cfg.get("routing_mask_config"),
                 num_qubits=normalized_cfg["circuit"].num_qubits,

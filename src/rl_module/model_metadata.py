@@ -6,6 +6,7 @@ from .routing_mask import (
     DEFAULT_NEW_MASK_SEMANTICS,
     FRONTIER_RESTRICTED_EDGES_V3,
     FRONTIER_RESTRICTED_EDGES_V4,
+    FRONTIER_RESTRICTED_EDGES_V5,
     RoutingMaskConfig,
     require_resolved_routing_mask_config,
 )
@@ -16,6 +17,7 @@ _SCHEMA_VERSION = "rl_run_metadata.v1"
 _MASKED_ROUTING_SCHEMA_VERSION_V1 = "rl_run_metadata.masked_routing.v1"
 _MASKED_ROUTING_SCHEMA_VERSION_V2 = "rl_run_metadata.masked_routing.v2"
 _MASKED_ROUTING_SCHEMA_VERSION_V3 = "rl_run_metadata.masked_routing.v3"
+_MASKED_ROUTING_SCHEMA_VERSION_V4 = "rl_run_metadata.masked_routing.v4"
 
 
 def metadata_path_for_model(model_path: Path | str) -> Path:
@@ -58,7 +60,9 @@ def build_run_metadata(
 
     if mode == "routing" and algorithm == "MaskablePPO":
         resolved_mask_semantics = mask_semantics or DEFAULT_NEW_MASK_SEMANTICS
-        if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V4:
+        if resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V5:
+            metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION_V4
+        elif resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V4:
             metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION_V3
         elif resolved_mask_semantics == FRONTIER_RESTRICTED_EDGES_V3:
             metadata["schema_version"] = _MASKED_ROUTING_SCHEMA_VERSION_V2
@@ -68,7 +72,7 @@ def build_run_metadata(
             "masked": True,
             "mask_semantics": resolved_mask_semantics,
         }
-        if resolved_mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}:
+        if resolved_mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}:
             metadata["routing_policy"]["mask_config"] = require_resolved_routing_mask_config(
                 routing_mask_config
             ).to_dict()

@@ -72,6 +72,7 @@ El regimen nuevo de `masked routing` no redefine el entorno:
 - `PPO` y `DQN` siguen soportados como legacy;
 - la mascara es determinista, frontier-aware y compatible con la codificacion fija de acciones.
 - `frontier_restricted_edges.v4` aplica la tuberia v3 y suma decay SABRE para reducir reutilizacion serial de qubits fisicos.
+- `frontier_restricted_edges.v5` aplica la tuberia v4, expande la mascara con aristas preparatorias a un salto y conserva hasta `k` candidatos no productivos ademas de los desbloqueos inmediatos.
 - Cada filtro conserva la salida anterior si vaciaria la mascara.
 - Los ciclos se identifican mediante `(layout, frontier_revision)`, de modo que volver a un layout tras ejecutar puertas sigue permitido.
 - Los episodios terminan como fallo si no ejecutan puertas ni mejoran una nueva mejor distancia durante `stagnation_patience`; solo `max_steps` conserva semantica de truncacion temporal.
@@ -115,7 +116,7 @@ Es el contrato que conecta entrenamiento y evaluacion.
 - `save_run_metadata()` guarda el sidecar.
 - `load_run_metadata_for_model()` lo recupera cuando `integration` evalua un checkpoint.
 
-Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Los productores nuevos usan `rl_run_metadata.masked_routing.v3` con `frontier_restricted_edges.v4` y una `mask_config` resuelta. `integration` conserva los sidecars historicos y cae a defaults legacy si falta el sidecar.
+Este metadata puede incluir versiones de masked routing para checkpoints nuevos. Los productores nuevos usan `rl_run_metadata.masked_routing.v4` con `frontier_restricted_edges.v5` y una `mask_config` resuelta. `integration` conserva los sidecars historicos y cae a defaults legacy si falta el sidecar.
 
 ## 5. GUI e inspeccion
 

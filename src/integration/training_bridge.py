@@ -34,7 +34,7 @@ class TrainingConfigSummary:
     sabre_top_k: int | None = None
     sabre_decay_increment: float = 0.001
     sabre_decay_reset_interval: int = 5
-    routing_depth_penalty_weight: float = 0.5
+    routing_depth_penalty_weight: float = 0.1
 
 
 @dataclass(frozen=True, slots=True)

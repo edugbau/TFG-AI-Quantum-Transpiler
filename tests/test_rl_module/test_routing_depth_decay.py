@@ -37,7 +37,7 @@ def test_swap_and_unlocked_gate_add_critical_depth_delta() -> None:
     assert info["gates_executed"] == 1
     assert info["routing_depth_delta"] == 4.0
     assert info["estimated_routing_depth"] == 4.0
-    assert reward == pytest.approx(96.5)
+    assert reward == pytest.approx(59.1)
 
 
 def test_v4_decay_penalizes_recently_reused_qubits_in_sabre_score() -> None:

@@ -70,7 +70,7 @@ def test_build_run_metadata_uses_explicit_masked_routing_schema_when_requested()
     }
 
 
-def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v4_semantics():
+def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v5_semantics():
     metadata = build_run_metadata(
         mode="routing",
         algorithm="MaskablePPO",
@@ -82,10 +82,10 @@ def test_build_run_metadata_defaults_new_masked_routing_checkpoints_to_v4_semant
         routing_mask_config=RoutingMaskConfig(stagnation_patience=14),
     )
 
-    assert metadata["schema_version"] == "rl_run_metadata.masked_routing.v3"
+    assert metadata["schema_version"] == "rl_run_metadata.masked_routing.v4"
     assert metadata["routing_policy"] == {
         "masked": True,
-        "mask_semantics": "frontier_restricted_edges.v4",
+        "mask_semantics": "frontier_restricted_edges.v5",
         "mask_config": {
             "cycle_window": 8,
             "stagnation_patience": 14,

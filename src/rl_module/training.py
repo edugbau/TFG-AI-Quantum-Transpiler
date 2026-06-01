@@ -28,6 +28,7 @@ from .routing_mask import (
     DEFAULT_NEW_MASK_SEMANTICS,
     FRONTIER_RESTRICTED_EDGES_V3,
     FRONTIER_RESTRICTED_EDGES_V4,
+    FRONTIER_RESTRICTED_EDGES_V5,
     RoutingMaskConfig,
     resolve_routing_mask_config,
 )
@@ -183,7 +184,7 @@ def setup_training_pipeline(
             routing_mask_config,
             num_qubits=target_circuit.num_qubits,
         )
-        if mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4}
+        if mask_semantics in {FRONTIER_RESTRICTED_EDGES_V3, FRONTIER_RESTRICTED_EDGES_V4, FRONTIER_RESTRICTED_EDGES_V5}
         else None
     )
     

@@ -10,6 +10,7 @@ from src.rl_module.routing_mask import (
     FRONTIER_RESTRICTED_EDGES_V2,
     FRONTIER_RESTRICTED_EDGES_V3,
     FRONTIER_RESTRICTED_EDGES_V4,
+    FRONTIER_RESTRICTED_EDGES_V5,
     RoutingMaskConfig,
     require_resolved_routing_mask_config,
 )
@@ -23,6 +24,7 @@ _SUPPORTED_SCHEMA_VERSION = "rl_run_metadata.v1"
 _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V1 = "rl_run_metadata.masked_routing.v1"
 _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2 = "rl_run_metadata.masked_routing.v2"
 _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V3 = "rl_run_metadata.masked_routing.v3"
+_SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V4 = "rl_run_metadata.masked_routing.v4"
 _SUPPORTED_LEGACY_ALGORITHMS = frozenset({"PPO", "DQN"})
 _SUPPORTED_MASKED_ALGORITHM = "MaskablePPO"
 _SUPPORTED_FRONTIER_MODES = frozenset({"sequential", "dag"})
@@ -128,6 +130,7 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
         _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V1,
         _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2,
         _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V3,
+        _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V4,
     }
     if schema_version not in supported_schema_versions:
         raise _contract_error(
@@ -144,7 +147,9 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
         raise _contract_error(
             f"schema '{_SUPPORTED_SCHEMA_VERSION}' cannot declare algorithm '{_SUPPORTED_MASKED_ALGORITHM}'; "
             f"use '{_SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V1}' or "
-            f"'{_SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2}'"
+            f"'{_SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2}', "
+            f"'{_SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V3}' or "
+            f"'{_SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V4}'"
         )
     if schema_version == _SUPPORTED_SCHEMA_VERSION and algorithm not in _SUPPORTED_LEGACY_ALGORITHMS:
         raise _contract_error(
@@ -158,6 +163,7 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
         _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V1,
         _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2,
         _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V3,
+        _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V4,
     }:
         routing_policy = _require_mapping(metadata.get("routing_policy"), field_name="routing_policy")
         masked = _require_bool(
@@ -180,7 +186,11 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
             else (
                 {FRONTIER_RESTRICTED_EDGES_V3}
                 if schema_version == _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2
-                else {FRONTIER_RESTRICTED_EDGES_V4}
+                else (
+                    {FRONTIER_RESTRICTED_EDGES_V4}
+                    if schema_version == _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V3
+                    else {FRONTIER_RESTRICTED_EDGES_V5}
+                )
             )
         )
         if mask_semantics not in allowed_mask_semantics:
@@ -191,6 +201,7 @@ def resolve_routing_model_contract(model_path: Path | str) -> RoutingModelContra
         if schema_version in {
             _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V2,
             _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V3,
+            _SUPPORTED_MASKED_ROUTING_SCHEMA_VERSION_V4,
         }:
             try:
                 routing_mask_config = require_resolved_routing_mask_config(

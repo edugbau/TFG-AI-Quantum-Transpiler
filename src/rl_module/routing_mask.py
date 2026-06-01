@@ -9,22 +9,24 @@ FRONTIER_RESTRICTED_EDGES_V1 = "frontier_restricted_edges.v1"
 FRONTIER_RESTRICTED_EDGES_V2 = "frontier_restricted_edges.v2"
 FRONTIER_RESTRICTED_EDGES_V3 = "frontier_restricted_edges.v3"
 FRONTIER_RESTRICTED_EDGES_V4 = "frontier_restricted_edges.v4"
+FRONTIER_RESTRICTED_EDGES_V5 = "frontier_restricted_edges.v5"
 
 LEGACY_MASK_SEMANTICS = FRONTIER_RESTRICTED_EDGES_V1
-DEFAULT_NEW_MASK_SEMANTICS = FRONTIER_RESTRICTED_EDGES_V4
+DEFAULT_NEW_MASK_SEMANTICS = FRONTIER_RESTRICTED_EDGES_V5
 SUPPORTED_MASK_SEMANTICS = frozenset(
     {
         FRONTIER_RESTRICTED_EDGES_V1,
         FRONTIER_RESTRICTED_EDGES_V2,
         FRONTIER_RESTRICTED_EDGES_V3,
         FRONTIER_RESTRICTED_EDGES_V4,
+        FRONTIER_RESTRICTED_EDGES_V5,
     }
 )
 
 
 @dataclass(frozen=True)
 class RoutingMaskConfig:
-    """Configuration for the v3 masked-routing dynamics."""
+    """Configuration for versioned masked-routing dynamics."""
 
     cycle_window: int = 8
     stagnation_patience: int | None = None
