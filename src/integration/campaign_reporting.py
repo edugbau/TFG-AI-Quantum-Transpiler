@@ -18,6 +18,10 @@ _MAIN_METRICS = (
     "trans_cnot_equivalent",
     "elapsed_time_s",
 )
+_SUMMARY_METRICS = (
+    "trans_depth",
+    "trans_cnot_equivalent",
+)
 _ALLOWED_CASE_STATUSES = frozenset({"completed", "failed", "incomplete", "cancelled"})
 _ALLOWED_CAMPAIGN_STATUSES = frozenset({"running", "completed", "failed", "cancelled", "interrupted"})
 _WINDOWS_RESERVED_CASE_DIR_NAMES = frozenset(
@@ -44,6 +48,7 @@ class CampaignCaseReport:
     rl_only_training_result: TrainingBridgeResult | None = None
     training_result: TrainingBridgeResult | None = None
     hybrid_layout_probe: dict[str, Any] | None = None
+    rl_guided_mo: dict[str, Any] | None = None
     incidents: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -214,6 +219,7 @@ def _render_config(report: CampaignReport) -> list[str]:
         f"RL Clip Range: `{config.rl_clip_range}`",
         f"RL Target KL: `{config.rl_target_kl}`",
         f"RL Eval Episodes: `{config.rl_n_eval_episodes}`",
+        f"RL Fine-Tune Timesteps: `{config.rl_finetune_timesteps}`",
         f"RL Cycle Window: `{config.rl_cycle_window}`",
         f"RL Stagnation Patience: `{config.rl_stagnation_patience}`",
         f"RL SABRE Top-k: `{config.rl_sabre_top_k}`",
@@ -275,7 +281,7 @@ def _render_aggregate_table(report: CampaignReport) -> list[str]:
         "| Metric | Baseline Mean | MO_Only Mean | RL_Only Mean | MO+RL Mean |",
         "| --- | ---: | ---: | ---: | ---: |",
     ]
-    for metric_name in _MAIN_METRICS:
+    for metric_name in _SUMMARY_METRICS:
         metric_summary = report.aggregate_metrics[metric_name]
         lines.append(
             "| "
@@ -293,9 +299,7 @@ def _render_scenario_metric_line(label: str, result: ScenarioResult | None) -> s
     metrics = result.transpilation_metrics
     return (
         f"- {label}: depth={metrics.get('trans_depth', 'n/a')}, "
-        f"two_qubit={metrics.get('trans_two_qubit_gates', 'n/a')}, "
-        f"cnot_equivalent={metrics.get('trans_cnot_equivalent', 'n/a')}, "
-        f"elapsed_time_s={metrics.get('elapsed_time_s', 'n/a')}"
+        f"cnot_equivalent={metrics.get('trans_cnot_equivalent', 'n/a')}"
     )
 
 
@@ -353,6 +357,21 @@ def _render_hybrid_layout_probe(probe: dict[str, Any] | None) -> list[str]:
     ]
 
 
+def _render_rl_guided_mo(result: dict[str, Any] | None) -> list[str]:
+    if result is None:
+        return []
+    return [
+        "### RL-Guided MO",
+        f"- Selector: `{result.get('selector')}`",
+        f"- Checkpoint Source: `{result.get('checkpoint_source')}`",
+        f"- Valid Candidates: `{result.get('valid_candidate_count')}`",
+        f"- Invalid Candidates: `{result.get('invalid_candidate_count')}`",
+        f"- Selected Layout: `{result.get('selected_layout')}`",
+        f"- Selected Score: `{result.get('selected_score')}`",
+        f"- Cache Stats: `{result.get('cache_stats')}`",
+    ]
+
+
 def _render_training_summary(training_result: TrainingBridgeResult | None, *, label: str = "RL") -> list[str]:
     if training_result is None:
         return [f"### {label} Training Summary", "- Training: unavailable"]
@@ -379,6 +398,7 @@ def _render_training_summary(training_result: TrainingBridgeResult | None, *, la
         f"- Next Frontier Penalty Weight: `{config.next_frontier_penalty_weight}`",
         f"- Routing Depth Penalty Weight: `{config.routing_depth_penalty_weight}`",
         f"- Seed: `{config.seed}`",
+        f"- Initial Model: `{training_result.initial_model_path}`",
         f"- Selected Artifact: `{artifact_path}`",
         *_render_post_routing_selection(training_result.post_routing_selection),
     ]
@@ -418,6 +438,7 @@ def _render_case_detail(report: CampaignReport) -> list[str]:
         lines.extend(_render_scenario_notes("RL_Only", case_report.rl_only_result))
         lines.extend(_render_scenario_notes("MO+RL", case_report.mo_rl_result))
         lines.extend(_render_hybrid_layout_probe(case_report.hybrid_layout_probe))
+        lines.extend(_render_rl_guided_mo(case_report.rl_guided_mo))
         lines.extend(_render_training_summary(case_report.rl_only_training_result, label="RL_Only"))
         lines.extend(_render_training_summary(case_report.training_result, label="MO+RL"))
         if case_report.incidents:
@@ -568,7 +589,38 @@ def _normalize_training_result_for_persistence(
             case_id=case_id,
             case_dir_name=case_dir_name,
         ),
+        initial_model_path=_publicize_case_training_path(
+            training_result.initial_model_path,
+            output_path=output_path,
+            public_campaign_root=public_campaign_root,
+            case_id=case_id,
+            case_dir_name=case_dir_name,
+        ),
     )
+
+
+def _normalize_rl_guided_mo_for_persistence(
+    result: dict[str, Any] | None,
+    *,
+    output_path: Path,
+    public_campaign_root: Path,
+    case_id: str,
+    case_dir_name: str,
+) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    normalized = dict(result)
+    checkpoint_source = normalized.get("checkpoint_source")
+    if checkpoint_source:
+        public_path = _publicize_case_training_path(
+            Path(checkpoint_source),
+            output_path=output_path,
+            public_campaign_root=public_campaign_root,
+            case_id=case_id,
+            case_dir_name=case_dir_name,
+        )
+        normalized["checkpoint_source"] = public_path.as_posix()
+    return normalized
 
 
 def _normalize_report_for_persistence(report: CampaignReport, *, output_path: Path) -> CampaignReport:
@@ -586,6 +638,13 @@ def _normalize_report_for_persistence(report: CampaignReport, *, output_path: Pa
             ),
             training_result=_normalize_training_result_for_persistence(
                 case_report.training_result,
+                output_path=output_path,
+                public_campaign_root=public_campaign_root,
+                case_id=case_report.case.case_id,
+                case_dir_name=case_dir_names[case_report.case.case_id],
+            ),
+            rl_guided_mo=_normalize_rl_guided_mo_for_persistence(
+                case_report.rl_guided_mo,
                 output_path=output_path,
                 public_campaign_root=public_campaign_root,
                 case_id=case_report.case.case_id,

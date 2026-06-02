@@ -189,6 +189,10 @@ def test_matrix_report_aggregates_all_comparable_seed_results_by_mo_mode(tmp_pat
 
     markdown = render_matrix_summary_markdown(report)
     assert "Aggregate Comparison by MO Mode" in markdown
+    assert "### `trans_depth`" in markdown
+    assert "### `trans_cnot_equivalent`" in markdown
+    assert "trans_two_qubit_gates" not in markdown
+    assert "elapsed_time_s" not in markdown
     assert "| compromise | 2 | 2 | 0 | 0 | 0 | 90.00 | 85.00 | 83.00 | 80.00 |" in markdown
     assert "| best_depth | 2 | 1 | 0 | 1 | 0 | 70.00 | 65.00 | 63.00 | 60.00 |" in markdown
 

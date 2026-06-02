@@ -49,12 +49,21 @@ class TrainingBridgeResult:
     effective_training_config: TrainingConfigSummary
     actual_timesteps: int | None = None
     post_routing_selection: dict | None = None
+    initial_model_path: Path | None = None
 
 
-def _build_training_config_summary(campaign_config: CampaignConfig) -> TrainingConfigSummary:
+def _build_training_config_summary(
+    campaign_config: CampaignConfig,
+    *,
+    total_timesteps: int | None = None,
+) -> TrainingConfigSummary:
     return TrainingConfigSummary(
         algorithm=campaign_config.rl_algorithm,
-        total_timesteps=campaign_config.rl_total_timesteps,
+        total_timesteps=(
+            campaign_config.rl_total_timesteps
+            if total_timesteps is None
+            else total_timesteps
+        ),
         frontier_mode=campaign_config.rl_frontier_mode,
         lookahead_window=campaign_config.rl_lookahead_window,
         max_steps=campaign_config.rl_max_steps,
@@ -113,6 +122,8 @@ def train_case(
     coupling_map: Sequence[tuple[int, int]],
     case_output_dir: Path | str,
     initial_layout: Sequence[int] | None = None,
+    initial_model_path: Path | str | None = None,
+    total_timesteps_override: int | None = None,
     backend_bundle=None,
     verbose: bool = False,
 ) -> TrainingBridgeResult:
@@ -121,7 +132,18 @@ def train_case(
     case_output_path = Path(case_output_dir)
     run_log_base_dir = case_output_path / "training" / "logs"
     run_model_base_dir = case_output_path / "training" / "models"
-    config_summary = _build_training_config_summary(campaign_config)
+    total_timesteps = (
+        campaign_config.rl_total_timesteps
+        if total_timesteps_override is None
+        else total_timesteps_override
+    )
+    if total_timesteps <= 0:
+        raise ValueError("total_timesteps_override must be greater than zero")
+    normalized_initial_model_path = _normalize_optional_path(initial_model_path)
+    config_summary = _build_training_config_summary(
+        campaign_config,
+        total_timesteps=total_timesteps,
+    )
     routing_mask_config = RoutingMaskConfig(
         cycle_window=campaign_config.rl_cycle_window,
         stagnation_patience=campaign_config.rl_stagnation_patience,
@@ -133,7 +155,7 @@ def train_case(
     )
     masked_routing = campaign_config.rl_algorithm == "MaskablePPO"
     post_routing_max_no_improvement_evals = resolve_post_routing_max_no_improvement_evals(
-        total_timesteps=campaign_config.rl_total_timesteps,
+        total_timesteps=total_timesteps,
         eval_freq=DEFAULT_EVAL_FREQ,
     )
     extra_callback_factories = []
@@ -172,7 +194,7 @@ def train_case(
             mode="routing",
             frontier_mode=campaign_config.rl_frontier_mode,
             algorithm=campaign_config.rl_algorithm,
-            total_timesteps=campaign_config.rl_total_timesteps,
+            total_timesteps=total_timesteps,
             seed=campaign_config.seed,
             log_dir=str(run_log_base_dir),
             model_save_dir=str(run_model_base_dir),
@@ -180,6 +202,11 @@ def train_case(
             max_steps=campaign_config.rl_max_steps,
             hyperparams=_build_training_hyperparams(campaign_config),
             initial_layout=list(initial_layout) if initial_layout is not None else None,
+            initial_model_path=(
+                str(normalized_initial_model_path)
+                if normalized_initial_model_path is not None
+                else None
+            ),
             routing_mask_config=routing_mask_config,
             n_eval_episodes=campaign_config.rl_n_eval_episodes,
             extra_callback_factories=extra_callback_factories,
@@ -219,6 +246,7 @@ def train_case(
             effective_training_config=config_summary,
             actual_timesteps=None,
             post_routing_selection=None,
+            initial_model_path=normalized_initial_model_path,
         )
 
     run_model_dir = _normalize_optional_path(getattr(agent, "run_model_dir", None)) or run_model_base_dir
@@ -250,4 +278,5 @@ def train_case(
         effective_training_config=config_summary,
         actual_timesteps=getattr(agent, "actual_timesteps", None),
         post_routing_selection=getattr(agent, "post_routing_selection", None),
+        initial_model_path=normalized_initial_model_path,
     )

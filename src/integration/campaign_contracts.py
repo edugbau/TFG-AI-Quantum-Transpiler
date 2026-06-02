@@ -11,7 +11,7 @@ _ALLOWED_CASE_RESULT_STATUSES = frozenset({"completed", "failed", "incomplete", 
 _ALLOWED_CAMPAIGN_MODES = frozenset({"default", "advanced"})
 _ALLOWED_MO_EFFORT_MODES = frozenset({"auto", "custom"})
 _ALLOWED_MO_SELECTION_MODES = frozenset(
-    {"compromise", "best_depth", "best_cnot_count", "best_on_objective", "hybrid_probe"}
+    {"compromise", "best_depth", "best_cnot_count", "best_on_objective", "hybrid_probe", "rl_guided"}
 )
 _ALLOWED_TOPOLOGY_SOURCES = frozenset({"backend", "synthetic"})
 _ALLOWED_CAMPAIGN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled", "interrupted"})
@@ -115,6 +115,7 @@ class CampaignConfig:
     rl_clip_range: float = 0.1
     rl_target_kl: float = 0.03
     rl_n_eval_episodes: int = 1
+    rl_finetune_timesteps: int | None = None
     rl_cycle_window: int = 8
     rl_stagnation_patience: int | None = None
     rl_sabre_top_k: int | None = None
@@ -175,6 +176,19 @@ class CampaignConfig:
         normalized_mo_selection_modes = self._normalize_mo_selection_modes()
         if "hybrid_probe" in normalized_mo_selection_modes and normalized_rl_algorithm != "MaskablePPO":
             raise ValueError("CampaignConfig hybrid_probe requires rl_algorithm='MaskablePPO'")
+        if "rl_guided" in normalized_mo_selection_modes:
+            if normalized_mo_selection_modes != ("rl_guided",):
+                raise ValueError("CampaignConfig rl_guided must be selected by itself")
+            if normalized_rl_algorithm != "MaskablePPO":
+                raise ValueError("CampaignConfig rl_guided requires rl_algorithm='MaskablePPO'")
+            if self.mode != "advanced":
+                raise ValueError("CampaignConfig rl_guided requires mode='advanced'")
+            if normalized_topology_source != "synthetic":
+                raise ValueError("CampaignConfig rl_guided requires topology_source='synthetic'")
+            if type(self.rl_finetune_timesteps) is not int or self.rl_finetune_timesteps <= 0:
+                raise ValueError("CampaignConfig rl_guided requires positive rl_finetune_timesteps")
+        elif self.rl_finetune_timesteps is not None:
+            raise ValueError("CampaignConfig rl_finetune_timesteps is only accepted for rl_guided")
         if self.parallel_workers <= 0:
             raise ValueError("CampaignConfig parallel_workers must be greater than zero")
         if not isinstance(self.mo_use_quick, bool):
@@ -260,7 +274,7 @@ class CampaignConfig:
             if normalized_mode not in _ALLOWED_MO_SELECTION_MODES:
                 raise ValueError(
                     "CampaignConfig mo_selection_modes must contain only "
-                    "compromise, best_depth, best_cnot_count, best_on_objective, or hybrid_probe"
+                    "compromise, best_depth, best_cnot_count, best_on_objective, hybrid_probe, or rl_guided"
                 )
             if normalized_mode not in normalized:
                 normalized.append(normalized_mode)

@@ -2160,3 +2160,126 @@ def test_run_campaign_seed_group_uses_hybrid_probe_layout_and_reports_diagnostic
     assert mo_rl_layouts == [selected_layout]
     assert probe_calls[0]["artifact_path"].name == "hybrid_layout_probe.json"
     assert report.case_reports[0].hybrid_layout_probe["selected_score"] == [4.0, 8, 1]
+
+
+def test_run_campaign_rl_guided_reuses_full_synthetic_graph_and_resumes_pretrained_model(tmp_path) -> None:
+    from src.integration.campaign_runner import run_campaign
+
+    synthetic_topology = SyntheticTopologySpec(shape="ring", num_qubits=3)
+    full_edges = [(0, 1), (1, 0), (1, 2), (2, 1), (2, 0), (0, 2)]
+    base_campaign = _build_campaign()
+    campaign = Campaign.from_config(
+        campaign_id="campaign-rl-guided",
+        config=replace(
+            base_campaign.config,
+            backend_names=(synthetic_topology.backend_name,),
+            topology_source="synthetic",
+            synthetic_topology=synthetic_topology,
+            mo_selection_modes=("rl_guided",),
+            rl_finetune_timesteps=750,
+        ),
+    )
+    case = campaign.build_cases()[0]
+    train_calls = []
+    rl_only_edges = []
+    mo_rl_edges = []
+    guided_calls = []
+    mo_only_layout = [2, 1, 0]
+    guided_layout = [1, 2, 0]
+
+    def fake_train_case(*, coupling_map, initial_layout, initial_model_path=None, total_timesteps_override=None, case_output_dir, **kwargs):
+        del kwargs
+        output_path = Path(case_output_dir)
+        artifact_path = output_path / "training" / "models" / "run-001" / "best_model.zip"
+        train_calls.append(
+            {
+                "edges": list(coupling_map),
+                "layout": list(initial_layout),
+                "source": initial_model_path,
+                "budget": total_timesteps_override,
+                "artifact": artifact_path,
+            }
+        )
+        return TrainingBridgeResult(
+            status="completed",
+            selected_artifact_path=artifact_path,
+            best_model_path=artifact_path,
+            final_model_path=artifact_path.parent / "final_model.zip",
+            run_model_dir=artifact_path.parent,
+            run_log_dir=output_path / "training" / "logs" / "run-001",
+            effective_training_config=TrainingConfigSummary(
+                algorithm="MaskablePPO",
+                total_timesteps=total_timesteps_override or 5000,
+                frontier_mode="dag",
+                lookahead_window=12,
+                max_steps=256,
+                seed=42,
+            ),
+            initial_model_path=initial_model_path,
+        )
+
+    def fake_optimize_rl_guided(**kwargs):
+        guided_calls.append(kwargs)
+        payload = {
+            "selector": "rl_guided",
+            "selected_layout": guided_layout,
+            "selected_score": [7.0, 8.0],
+            "checkpoint_source": str(kwargs["model_path"]),
+            "valid_candidate_count": 1,
+            "invalid_candidate_count": 0,
+            "cache_stats": {"hits": 0, "misses": 1, "size": 1},
+        }
+        return SimpleNamespace(selected_layout=guided_layout, to_dict=lambda: payload)
+
+    report = run_campaign(
+        campaign,
+        output_root=tmp_path / "campaigns",
+        load_case_circuit=lambda campaign_case: _make_case_circuit(),
+        run_baseline=lambda request, *, circuit: _build_result("Baseline", case, metrics=_build_metrics(100)),
+        run_mo_only=lambda request, *, circuit: ScenarioResult(
+            scenario_name="MO_Only",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=mo_only_layout,
+            transpilation_metrics=_build_metrics(90),
+        ),
+        train_case_fn=fake_train_case,
+        run_rl_only=lambda request, *, injected_coupling_edges, **kwargs: rl_only_edges.append(
+            list(injected_coupling_edges)
+        )
+        or _build_result("RL_Only", case, metrics=_build_metrics(85)),
+        optimize_rl_guided=fake_optimize_rl_guided,
+        run_mo_rl=lambda request, *, injected_layout, injected_coupling_edges, **kwargs: mo_rl_edges.append(
+            list(injected_coupling_edges)
+        )
+        or ScenarioResult(
+            scenario_name="MO+RL",
+            circuit_name=_case_library_name(case),
+            backend_name=case.backend_name,
+            seed=42,
+            success=True,
+            selected_layout=list(injected_layout),
+            transpilation_metrics=_build_metrics(80),
+        ),
+        resolve_backend_bundle=lambda backend_name: SimpleNamespace(
+            backend_name=backend_name,
+            backend=SimpleNamespace(num_qubits=3),
+            coupling_edges=full_edges,
+        ),
+        write_outputs=lambda **kwargs: None,
+        verbose=True,
+    )
+
+    assert train_calls[0]["edges"] == full_edges
+    assert rl_only_edges == [full_edges]
+    assert guided_calls[0]["coupling_edges"] == full_edges
+    assert guided_calls[0]["verbose"] is True
+    assert train_calls[1]["edges"] == full_edges
+    assert mo_rl_edges == [full_edges]
+    assert train_calls[0]["layout"] == [0, 1, 2]
+    assert train_calls[1]["layout"] == guided_layout
+    assert train_calls[1]["source"] == train_calls[0]["artifact"]
+    assert train_calls[1]["budget"] == 750
+    assert report.case_reports[0].rl_guided_mo["selected_layout"] == guided_layout

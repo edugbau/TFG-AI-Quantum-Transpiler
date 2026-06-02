@@ -364,8 +364,13 @@ def test_summary_markdown_includes_config_aggregate_case_detail_and_incidents() 
     assert "fake_torino" in markdown
     assert "Aggregate Comparison" in markdown
     assert "| Metric | Baseline Mean | MO_Only Mean | RL_Only Mean | MO+RL Mean |" in markdown
+    assert "| trans_depth |" in markdown
+    assert "| trans_cnot_equivalent |" in markdown
+    assert "trans_two_qubit_gates" not in markdown
+    assert "elapsed_time_s" not in markdown
     assert "Per-Case Detail" in markdown
     assert "## Case `ghz_3__fake_torino`" in markdown
+    assert "- Baseline: depth=100, cnot_equivalent=45.0" in markdown
     assert "- Effective Config: rl_algorithm=MaskablePPO" in markdown
     assert "- Selected Layout: [0, 1, 2]" in markdown
     assert "RL Training Summary" in markdown
@@ -978,3 +983,39 @@ def test_write_campaign_outputs_rewrites_absolute_training_artifact_paths_to_cam
     assert "campaigns/campaign-011/cases/ghz_bad_3__fake_torino/training/models/run-001/best_model.zip" in summary_markdown
     assert '"selected_artifact_path": "campaigns/campaign-011/cases/ghz_bad_3__fake_torino/training/models/run-001/best_model.zip"' in campaign_json
     assert '"selected_artifact_path": "campaigns/campaign-011/cases/ghz_bad_3__fake_torino/training/models/run-001/best_model.zip"' in case_result_json
+
+
+def test_write_campaign_outputs_rewrites_rl_guided_checkpoint_source_to_public_path(tmp_path) -> None:
+    config = _build_campaign_config()
+    case = _build_case("ghz_3__fake_torino", "ghz", 3, "fake_torino")
+    absolute_case_dir = tmp_path / "campaigns" / "campaign-012" / "cases" / case.case_id
+    checkpoint_path = absolute_case_dir / "rl_only" / "training" / "models" / "run-001" / "best_model.zip"
+    report = build_campaign_report(
+        campaign_id="campaign-012",
+        campaign_status="completed",
+        campaign_config=config,
+        case_reports=[
+            CampaignCaseReport(
+                case=case,
+                status="failed",
+                rl_guided_mo={
+                    "selector": "rl_guided",
+                    "checkpoint_source": str(checkpoint_path),
+                    "valid_candidate_count": 1,
+                    "invalid_candidate_count": 0,
+                    "selected_layout": [0, 1, 2],
+                    "selected_score": [4.0, 5.0],
+                    "cache_stats": {"hits": 1, "misses": 1, "size": 1},
+                },
+            )
+        ],
+    )
+
+    output_paths = write_campaign_outputs(output_dir=tmp_path / "campaigns" / report.campaign_id, report=report)
+    campaign_json = output_paths.campaign_json_path.read_text(encoding="utf-8")
+
+    assert str(tmp_path) not in campaign_json
+    assert (
+        '"checkpoint_source": '
+        '"campaigns/campaign-012/cases/ghz_3__fake_torino/rl_only/training/models/run-001/best_model.zip"'
+    ) in campaign_json
