@@ -89,7 +89,13 @@ class QuantumRLAgent:
             **kwargs
         )
 
-    def train(self, total_timesteps: int, callbacks: Optional[list] = None, progress_bar: bool = True) -> BaseAlgorithm:
+    def train(
+        self,
+        total_timesteps: int,
+        callbacks: Optional[list] = None,
+        progress_bar: bool = True,
+        reset_num_timesteps: bool = True,
+    ) -> BaseAlgorithm:
         """
         Entrena el agente en el entorno proporcionado.
         
@@ -102,7 +108,12 @@ class QuantumRLAgent:
             El modelo entrenado.
         """
         logger.info("Iniciando entrenamiento por %d timesteps...", total_timesteps)
-        self.model.learn(total_timesteps=total_timesteps, callback=callbacks, progress_bar=progress_bar)
+        self.model.learn(
+            total_timesteps=total_timesteps,
+            callback=callbacks,
+            progress_bar=progress_bar,
+            reset_num_timesteps=reset_num_timesteps,
+        )
         return self.model
 
     def predict(

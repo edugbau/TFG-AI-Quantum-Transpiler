@@ -11,6 +11,7 @@ from src.integration.campaign_contracts import Campaign, CampaignConfig
 from src.integration.campaign_reporting import (
     CampaignReport,
     _MAIN_METRICS,
+    _SUMMARY_METRICS,
     _extract_metric,
     _format_metric,
     _is_comparable,
@@ -20,7 +21,7 @@ from src.integration.contracts import LayoutSelectionPolicy
 
 
 ALL_MO_SELECTION_MODES = ("compromise", "best_depth", "best_cnot_count")
-SUPPORTED_MO_SELECTION_MODES = (*ALL_MO_SELECTION_MODES, "hybrid_probe")
+SUPPORTED_MO_SELECTION_MODES = (*ALL_MO_SELECTION_MODES, "hybrid_probe", "rl_guided")
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +257,7 @@ def render_matrix_summary_markdown(report: MatrixReport) -> str:
         "",
         "## Aggregate Comparison by MO Mode",
     ]
-    for metric_name in _MAIN_METRICS:
+    for metric_name in _SUMMARY_METRICS:
         lines.extend(
             [
                 "",
@@ -343,7 +344,7 @@ def _policy_for_selection_mode(mode: str) -> tuple[LayoutSelectionPolicy, str | 
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "depth"
     if mode == "best_cnot_count":
         return LayoutSelectionPolicy.BEST_ON_OBJECTIVE, "cnot_count"
-    if mode == "hybrid_probe":
+    if mode in {"hybrid_probe", "rl_guided"}:
         return LayoutSelectionPolicy.COMPROMISE, None
     raise ValueError(f"Unsupported MO selection mode: {mode}")
 

@@ -5,7 +5,7 @@
 ## Mapa de lectura
 
 1. `contracts.py` y `campaign_contracts.py` definen la superficie publica.
-2. `scenarios.py`, `routing_evaluator.py`, `hybrid_layout_probe.py` y `rl_model_contract.py` cubren la capa de Scenario y el handoff MO -> RL.
+2. `scenarios.py`, `routing_evaluator.py`, `hybrid_layout_probe.py`, `rl_guided_mo.py` y `rl_model_contract.py` cubren la capa de Scenario y el handoff MO -> RL.
 3. `training_bridge.py`, `campaign_runner.py` y `campaign_reporting.py` cubren la capa de Campaign.
 4. `campaign_cli.py` y `runner.py` exponen la entrada de usuario.
 
@@ -87,6 +87,17 @@ Implementa el modo Campaign opt-in `hybrid_probe`.
 - cae explicitamente a `compromise` si ninguna sonda MO completa el routing;
 - persiste `hybrid_layout_probe.json`.
 
+### `rl_guided_mo.py`
+
+Implementa el modo Campaign experimental `rl_guided`.
+
+- carga el Training Artifact congelado de `RL_Only`;
+- evalua cada layout unico con un episodio RL determinista y cacheado;
+- reconstruye los episodios completos y calcula `(trans_depth, trans_cnot_equivalent)` mediante post-routing Qiskit;
+- penaliza episodios incompletos o errores con `(1e12, 1e12)` y excluye esos candidatos del compromiso valido;
+- falla antes del fine-tuning si ningun candidato completa routing;
+- persiste `rl_guided_mo.json` con frente valido, intentos, cache, checkpoint fuente y controles para los layouts Qiskit, `MO_Only` y RL-guided.
+
 ### `scenarios.py`
 
 Contiene los cuatro Scenario publicos:
@@ -122,6 +133,7 @@ Es el seam entre Campaign e `src.rl_module.training`.
 - pasa el layout seleccionado por MO como `initial_layout`;
 - selecciona `best_model.zip` con la tupla post-routing `(cnot_equivalent, depth, swaps)` y cae a `final_model.zip` si aun no existe una solucion valida.
 - tolera episodios incompletos durante la busqueda inicial sin consumir paciencia de early stopping.
+- puede cargar `initial_model_path` sobre un entorno nuevo y continuar el checkpoint completo con un presupuesto local adicional.
 - tras la primera solucion, escala la paciencia post-routing al maximo entre 20 evaluaciones y el 20% del presupuesto solicitado para no cortar demasiado pronto campañas largas.
 
 ### `campaign_runner.py`
@@ -143,6 +155,8 @@ Tambien expone el runner interno agrupado por seed usado por Campaign matrix. Pa
 
 Cuando una hija usa `hybrid_probe`, el layout elegido por la sonda tambien se inyecta en `MO_Only`, training hibrido y `MO+RL`. El modo requiere `MaskablePPO`. El alias batch `all` conserva exclusivamente los tres modos historicos: `compromise`, `best_depth` y `best_cnot_count`.
 
+Cuando una hija aislada usa `rl_guided`, el runner conserva el flujo `MO_Only` Qiskit como control, ejecuta la segunda busqueda NSGA-II con el checkpoint congelado de `RL_Only` y continua entrenamiento desde ese artefacto. El modo solo admite topologias sinteticas y mantiene el coupling map completo identico en pretraining, busqueda, fine-tuning y evaluacion final. `rl.total_timesteps` y `rl.finetune_timesteps` son presupuestos separados.
+
 Los Scenarios aislados mantienen su fallback. Dentro del runner agrupado, `MO+RL` siempre recibe un layout inyectado y no vuelve a ejecutar MO.
 
 ### `campaign_reporting.py`
@@ -153,6 +167,7 @@ Construye la salida publica de la Campaign.
 - `campaign.json` como salida estructurada;
 - `cases/<case>/result.json` para cada case.
 - `cases/<case>/hybrid_layout_probe.json` para cases ejecutados con `hybrid_probe`.
+- `cases/<case>/rl_guided_mo.json` para cases ejecutados con `rl_guided`.
 
 En Campaign matrix, la sonda se persiste en el directorio compartido de la seed:
 `runs/<campaign_id>__seed_<seed>__shared/cases/<case>/hybrid_layout_probe.json`.
@@ -178,6 +193,8 @@ persistido junto al checkpoint versionado.
 La CLI guiada avanzada pregunta `SABRE top-k (blank to disable)` al seleccionar
 `MaskablePPO`: un entero positivo activa la poda y Enter, `none`, `null` u
 `off` la dejan desactivada.
+El modo batch `mo.selection_modes: ["rl_guided"]` requiere ademas
+`rl.finetune_timesteps`, `mode: "advanced"` y `topology_source: "synthetic"`.
 
 ### `runner.py`
 

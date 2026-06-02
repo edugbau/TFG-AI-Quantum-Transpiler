@@ -152,6 +152,48 @@ def test_train_case_forwards_initial_layout_to_setup_training_pipeline(monkeypat
     assert result.status == "completed"
 
 
+def test_train_case_forwards_resume_checkpoint_and_additional_budget(monkeypatch, tmp_path) -> None:
+    config = _build_campaign_config()
+    case = _build_campaign_case()
+    case_output_dir = tmp_path / "cases" / case.case_id
+    source_model = tmp_path / "pretraining" / "best_model.zip"
+    captured_kwargs = {}
+
+    class DummyAgent:
+        def __init__(self):
+            self.run_model_dir = case_output_dir / "training" / "models" / "run-001"
+            self.run_log_dir = case_output_dir / "training" / "logs" / "run-001"
+            self.best_model_path = self.run_model_dir / "best_model.zip"
+            self.last_model_path = self.run_model_dir / "final_model.zip"
+
+    def fake_setup_training_pipeline(**kwargs):
+        captured_kwargs.update(kwargs)
+        agent = DummyAgent()
+        agent.run_model_dir.mkdir(parents=True)
+        agent.run_log_dir.mkdir(parents=True)
+        agent.best_model_path.write_bytes(b"best")
+        agent.last_model_path.write_bytes(b"final")
+        return agent
+
+    monkeypatch.setattr("src.integration.training_bridge.setup_training_pipeline", fake_setup_training_pipeline)
+
+    result = train_case(
+        campaign_case=case,
+        campaign_config=config,
+        target_circuit=QuantumCircuit(3),
+        coupling_map=[(0, 1), (1, 2)],
+        case_output_dir=case_output_dir,
+        initial_layout=[2, 1, 0],
+        initial_model_path=source_model,
+        total_timesteps_override=750,
+    )
+
+    assert captured_kwargs["initial_model_path"] == str(source_model)
+    assert captured_kwargs["total_timesteps"] == 750
+    assert result.initial_model_path == source_model
+    assert result.effective_training_config.total_timesteps == 750
+
+
 def test_train_case_falls_back_to_final_model_when_best_model_is_missing(monkeypatch, tmp_path) -> None:
     config = _build_campaign_config()
     case = _build_campaign_case()

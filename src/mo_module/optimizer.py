@@ -590,6 +590,7 @@ def optimize_layout(
     backend=None,
     backend_name: str = "fake_torino",
     config: Optional[OptimizerConfig] = None,
+    fitness_evaluator=None,
 ) -> OptimizationResult:
     """Ejecuta la optimización multiobjetivo de layouts.
 
@@ -646,14 +647,15 @@ def optimize_layout(
     )
 
     # --- 3. Evaluador de fitness ---
-    fitness_evaluator = FitnessEvaluator.from_names(
-        objective_names=config.objectives,
-        backend_info=backend_info,
-        circuit=circuit,
-        backend=backend,
-        optimization_level=config.optimization_level,
-        seed=config.seed,
-    )
+    if fitness_evaluator is None:
+        fitness_evaluator = FitnessEvaluator.from_names(
+            objective_names=config.objectives,
+            backend_info=backend_info,
+            circuit=circuit,
+            backend=backend,
+            optimization_level=config.optimization_level,
+            seed=config.seed,
+        )
 
     # --- 4. Problema pymoo ---
     problem = LayoutOptimizationProblem(
@@ -710,8 +712,11 @@ def optimize_layout(
 
     # --- 9. Estadísticas del caché ---
     cache_stats = {}
-    if fitness_evaluator.transpilation_cache is not None:
-        cache_stats = fitness_evaluator.transpilation_cache.stats
+    transpilation_cache = getattr(fitness_evaluator, "transpilation_cache", None)
+    if transpilation_cache is not None:
+        cache_stats = transpilation_cache.stats
+    elif hasattr(fitness_evaluator, "cache_stats"):
+        cache_stats = dict(fitness_evaluator.cache_stats)
 
     # --- 10. Construir resultado ---
     opt_result = OptimizationResult(
@@ -739,6 +744,7 @@ def optimize_layout_quick(
     population_size: int = 30,
     n_generations: int = 50,
     seed: int = 42,
+    fitness_evaluator=None,
 ) -> OptimizationResult:
     """Versión simplificada de ``optimize_layout`` con configuración rápida.
 
@@ -774,6 +780,7 @@ def optimize_layout_quick(
         backend=backend,
         backend_name=backend_name,
         config=config,
+        fitness_evaluator=fitness_evaluator,
     )
 
 
