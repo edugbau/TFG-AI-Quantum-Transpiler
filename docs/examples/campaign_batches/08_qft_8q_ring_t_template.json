@@ -1,0 +1,82 @@
+{
+  "campaigns": [
+    {
+      "campaign_id": "qft-8-ring-all-mo-template",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 8
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "ring",
+        "num_qubits": 8
+      },
+      "seeds": [
+        1,2,3,4,5,6,7,8,9,10
+      ],
+      "parallel_workers": 5,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 500000,
+        "frontier_mode": "dag",
+        "lookahead_window": 15,
+        "max_steps": 150,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 1,
+        "finetune_timesteps": null,
+        "cycle_window": 8,
+        "stagnation_patience": 1000000000,
+        "sabre_top_k": 4
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 80,
+        "n_generations": 80,
+        "selection_modes": "all"
+      }
+    },
+    {
+      "campaign_id": "qft-8-t-all-mo-template",
+      "circuit": {
+        "family": "qft",
+        "num_qubits": 8
+      },
+      "mode": "advanced",
+      "topology_source": "synthetic",
+      "synthetic_topology": {
+        "shape": "t",
+        "num_qubits": 8
+      },
+      "seeds": [
+        1,2,3,4,5,6,7,8,9,10
+      ],
+      "parallel_workers": 5,
+      "rl": {
+        "algorithm": "MaskablePPO",
+        "total_timesteps": 500000,
+        "frontier_mode": "dag",
+        "lookahead_window": 15,
+        "max_steps": 150,
+        "learning_rate": 0.0001,
+        "clip_range": 0.1,
+        "target_kl": 0.03,
+        "n_eval_episodes": 1,
+        "finetune_timesteps": null,
+        "cycle_window": 8,
+        "stagnation_patience": 1000000000,
+        "sabre_top_k": 4
+      },
+      "mo": {
+        "effort_mode": "custom",
+        "use_quick": false,
+        "population_size": 80,
+        "n_generations": 80,
+        "selection_modes": "all"
+      }
+    }
+  ]
+}
