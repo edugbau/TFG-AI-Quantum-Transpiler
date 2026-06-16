@@ -1,9 +1,22 @@
 """Tests de regresion de la GUI de benchmark/tuning."""
 
+import tkinter as tk
 import types
 from queue import Queue
 
+import pytest
+
 from src.mo_module.benchmark.benchmark_gui import BenchmarkGUI
+
+
+def _require_usable_tk():
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        pytest.skip(f"Tk runtime is not available in this Python environment: {exc}")
+    else:
+        root.withdraw()
+        root.destroy()
 
 
 class _DummyWidget:
@@ -114,6 +127,7 @@ class TestBenchmarkGuiInitialization:
 
     def test_gui_initialization_sets_tuning_state_before_building_controls(self):
         """BenchmarkGUI arranca sin delegar en __getattr__ de Tk para is_tuning."""
+        _require_usable_tk()
         app = BenchmarkGUI()
         try:
             assert app.is_tuning is False
@@ -123,6 +137,7 @@ class TestBenchmarkGuiInitialization:
 
     def test_tuning_start_button_is_visible_inside_sidebar(self):
         """El boton de iniciar tuning debe quedar dentro del alto visible del sidebar."""
+        _require_usable_tk()
         app = BenchmarkGUI()
         try:
             app.master_tabview.set("Modo Tuning (Optuna)")
