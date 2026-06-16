@@ -16,3 +16,4 @@ pandas>=2.0
 tensorboard>=2.15
 optuna>=3.0
 customtkinter>=5.2.0
+pytest>=9.0
