@@ -94,7 +94,7 @@ class RoutingReward(RewardStrategy):
         Peso aplicado al incremento de profundidad critica estimada.
     """
 
-    def __init__( #TODO: REVISAR VALORES DE PENALIZACIÓN Y REWARD CON TUTORES
+    def __init__(
         self,
         swap_penalty: float = -1.0,
         gate_execution_reward: float = 10.0,
