@@ -1,6 +1,6 @@
 # TFG - Transpilacion Cuantica Hibrida
 
-**Optimizacion de layout multiobjetivo y sintesis mediante aprendizaje por refuerzo**
+**Optimizacion de layout multiobjetivo y routing mediante aprendizaje por refuerzo**
 
 Este repositorio implementa un flujo de transpilacion cuantica dividido en cuatro modulos: `qiskit_interface`, `mo_module`, `rl_module` e `integration`.
 
